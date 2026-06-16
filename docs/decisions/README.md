@@ -7,6 +7,7 @@ Summary table lives in [`../CHARTER.md`](../CHARTER.md) §3.
 | --- | --- | --- |
 | [0001](0001-web-first-tauri-later.md) | Web-first SPA, Tauri 2.0 native shell later | Accepted |
 | [0002](0002-data-layer-abstraction.md) | Isolated data-layer (`MemoryGateway`) | Accepted |
+| [0003](0003-accent-typography-clusters.md) | Teal accent, Lora content font, clusters → L2 | Accepted |
 # Decisions log
 
 ADR-style records of significant decisions for `mnemos-eyes`.
