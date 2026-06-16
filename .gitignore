@@ -21,3 +21,6 @@ coverage/
 # ── Tauri (Phase 2) ──────────────────────────────────────────────
 src-tauri/target/
 src-tauri/gen/
+
+# VS Code Local History extension
+.history/
