@@ -1,0 +1,23 @@
+# ── Node / frontend ──────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+coverage/
+
+# ── Env / secrets ────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Editors / OS ─────────────────────────────────────────────────
+.DS_Store
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ── Tauri (Phase 2) ──────────────────────────────────────────────
+src-tauri/target/
+src-tauri/gen/
