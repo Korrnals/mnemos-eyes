@@ -54,7 +54,7 @@ traces view · empty/loading/error states · layout shell + IrisLogo + theming
 | **T3** | `openapi-typescript` codegen wired to mnemos `/openapi.json` (script + generated types committed or generated in build). | `@GCW: Senior Frontend Developer` | T1; mnemos OpenAPI stable |
 | **T4** | Design system → code: tokens (teal/gold, Lora), theming, IrisLogo, breathing animation. | `@GCW: Senior Frontend Developer` | T1 |
 | **T5** | Build L1 pages/components from `component-inventory.md` against `MockAdapter`. | `@GCW: Senior Frontend Developer` | T2, T4 |
-| **T6** | Wire `HttpAdapter` to the real mnemos API once CORS+auth are available; auth/login flow. | `@GCW: Senior Frontend Developer` | T5; **backend session T-AUTH** |
+| **T6** | Wire `HttpAdapter` to the real mnemos API once CORS+auth are available; auth/login flow. **🟢 Backend gate CLEARED — unblocked (see §5).** | `@GCW: Senior Frontend Developer` | T5; **backend session T-AUTH ✓ done** |
 | **T7** | a11y pass (WCAG 2.2 AA) + perf budget check. | `@GCW: Senior Frontend Developer` (skills `a11y-audit`, `frontend-perf-budget`) | T5 |
 
 ## 5. Cross-session dependencies (the gate)
@@ -67,6 +67,24 @@ L1 can be **built end-to-end against `MockAdapter`** without the backend. But
 - (nice-to-have) `GET /tags`, `GET /clusters` (clusters only matters at L2).
 
 Track those in `../mnemos/docs/sessions/SESSION-01-backend-mvp.md`.
+
+> **🟢 GATE CLEARED (2026-06-17) — backend session complete.** The mnemos
+> backend-MVP session shipped to `main` (HEAD `4331a22`, `make verify` green):
+>
+> - **CORS** — configurable allow-list, strict default (registered outermost,
+>   so `OPTIONS` preflight is answered before auth).
+> - **Auth** — opaque `mnk_` bearer tokens (SHA-256 stored) + **TOTP 2FA** for
+>   remote/non-loopback; `POST /auth/login|verify|logout`, `GET /auth/me`;
+>   startup guard refuses non-loopback bind without auth+TOTP+TLS.
+> - **`GET /tags`** — list + counts (server-side, so client-side aggregation is
+>   now optional even for L1).
+> - Plus SSRF v2 (per-hop redirect re-validation) and session hardening.
+>
+> **T6 is therefore UNBLOCKED.** Wire `HttpAdapter` against the live API + login
+> flow. Auth contract: send `Authorization: Bearer mnk_...`; remote sessions
+> require a TOTP step via `POST /auth/verify`. See
+> `../mnemos/docs/api-reference.md` (`/auth/*`, `/tags`) and `../mnemos/docs/security.md`.
+> CORS allow-list must include the viewer's dev origin (configure on the mnemos side).
 
 ## 6. Workflow rules (per repo policy)
 
