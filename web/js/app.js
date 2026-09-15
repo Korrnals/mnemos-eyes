@@ -97,6 +97,34 @@ function renderBoard() {
   }
 }
 
+function tagClass(tag) {
+  if (tag.startsWith("project:")) return "tag-project";
+  if (tag.startsWith("agent:") || tag.startsWith("@")) return "tag-agent";
+  if (tag.startsWith("mnemos:")) return "tag-type";
+  if (tag.startsWith("domain:")) return "tag-domain";
+  return "tag-other";
+}
+
+function tagChip(tag) {
+  return `<span class="chip tagchip ${tagClass(tag)}" data-tag="${esc(tag)}">${esc(tag)}</span>`;
+}
+
+function ageOf(dateStr) {
+  if (!dateStr) return "";
+  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  if (days <= 0) return "сегодня";
+  if (days === 1) return "вчера";
+  if (days < 30) return days + " дн.";
+  return Math.floor(days / 30) + " мес.";
+}
+
+function miniAvatars(agents) {
+  return (agents || []).slice(0, 3).map((a) => {
+    const ini = a.replace(/[^a-z-]/g, "").split("-").map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+    return `<span class="mini-avatar" data-agent="${esc(a)}" title="активность агента ${esc(a)}">${esc(ini)}</span>`;
+  }).join("");
+}
+
 function taskCard(t) {
   const card = document.createElement("article");
   card.className = "task";
@@ -105,19 +133,29 @@ function taskCard(t) {
   card.style.setProperty("--i", String(Math.floor(Math.random() * 5)));
 
   const chips = [];
-  chips.push(`<span class="chip chip-agent" title="агент-исполнитель">⚒ ${esc(t.agents.join(", ") || "—")}</span>`);
   chips.push(`<span class="chip chip-env" title="среда исполнения">${esc(ENV_LABELS[t.env] || t.env)}</span>`);
-  for (const s of (t.specialists || []).slice(0, 3)) {
-    chips.push(`<span class="chip chip-spec" title="специалист">${esc(s)}</span>`);
-  }
   if ((t.memory_ids || []).length) {
     chips.push(`<span class="chip chip-mem" title="связанные памяти mnemos">◉ ${t.memory_ids.length}</span>`);
   }
 
+  const allTags = [...(t.mnemos_tags || []), ...(t.specialists || [])];
+  const cardTags = allTags.slice(0, 4);
+  const more = allTags.length - cardTags.length;
+
   card.innerHTML = `
-    <div class="task-id">${esc(t.id)}</div>
+    <div class="task-top">
+      <span class="task-id">${esc(t.id)}</span>
+      <span class="task-age" title="обновлено ${esc(t.updated_at || "")}">${esc(ageOf(t.updated_at))}</span>
+    </div>
     <h3 class="task-title">${esc(t.title)}</h3>
-    <div class="task-chips">${chips.join("")}</div>`;
+    <div class="task-chips">${chips.join("")}</div>
+    <div class="task-tagrow">${cardTags.map((tag) => tagChip(tag)).join("")}
+      ${more > 0 ? `<span class="chip tagchip tag-other" data-more="+${more}">+${more}</span>` : ""}
+    </div>
+    <div class="task-foot">
+      <span class="task-agents">${miniAvatars(t.agents)}</span>
+      <span class="chip chip-agent" title="агент-исполнитель" data-agent="${esc((t.agents || [])[0] || "")}">⚒ ${esc(t.agents.join(", ") || "—")}</span>
+    </div>`;
 
   card.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("text/task-id", t.id);
@@ -125,7 +163,22 @@ function taskCard(t) {
     card.classList.add("dragging");
   });
   card.addEventListener("dragend", () => card.classList.remove("dragging"));
-  card.addEventListener("click", () => openTask(t.id));
+  // tag clicks drill down; agent chips/avatars show agent activity; rest opens task
+  card.addEventListener("click", (e) => {
+    const tag = e.target.closest(".tagchip");
+    if (tag) {
+      e.stopPropagation();
+      openTagDrill(tag.dataset.tag);
+      return;
+    }
+    const av = e.target.closest("[data-agent]");
+    if (av && av.dataset.agent) {
+      e.stopPropagation();
+      openAgentActivity(av.dataset.agent);
+      return;
+    }
+    openTask(t.id);
+  });
   return card;
 }
 
@@ -348,13 +401,24 @@ async function openTask(taskId) {
 
   const meta = $("#modal-meta");
   meta.innerHTML = `
-    <span class="chip chip-agent">⚒ ${esc(t.agents.join(", ") || "—")}</span>
-    <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env)}</span>
-    ${(t.specialists || []).map((s) => `<span class="chip chip-spec">${esc(s)}</span>`).join("")}
-    ${(t.mnemos_tags || []).map((s) => `<span class="chip">${esc(s)}</span>`).join("")}`;
+    <div class="drawer-meta">
+      <span class="chip chip-agent" data-agent="${esc((t.agents || [])[0] || "")}" title="активность агента">⚒ ${esc(t.agents.join(", ") || "—")}</span>
+      <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env)}</span>
+    </div>
+    <div class="drawer-meta" style="margin-top:8px">
+      ${(t.specialists || []).map((s) => `<span class="chip chip-spec">${esc(s)}</span>`).join("")}
+    </div>
+    <div class="task-tagrow" style="margin-top:8px">
+      ${(t.mnemos_tags || []).map((tag) => tagChip(tag)).join("")}
+    </div>`;
+
+  // wire cross-navigation inside the modal
+  wireCrossLinks(meta, t);
 
   const memEl = $("#modal-memories");
   memEl.innerHTML = `<div class="column-empty">загрузка памяти…</div>`;
+  // reset tabs to Overview
+  setTaskTab("overview");
   showTaskModal();
   try {
     const scope = scopeParam();
@@ -380,6 +444,70 @@ async function openTask(taskId) {
   } catch (err) {
     memEl.innerHTML = `<div class="column-empty">память недоступна: ${esc(err.message)}</div>`;
   }
+  loadTaskHistory(t);
+}
+
+function setTaskTab(name) {
+  for (const t of document.querySelectorAll(".mtab")) {
+    t.classList.toggle("active", t.dataset.tab === name);
+  }
+  for (const sec of document.querySelectorAll(".tsec")) {
+    sec.classList.toggle("active", sec.dataset.sec === name);
+  }
+}
+
+async function loadTaskHistory(t) {
+  const holder = $("#modal-history");
+  holder.innerHTML = `<div class="column-empty">загрузка истории…</div>`;
+  try {
+    const h = await api(`/api/tasks/${encodeURIComponent(t.id)}/history`);
+    if (state.activeTask !== t) return;
+    const items = [
+      ...h.events.map((e) => ({ ...e, kind: "board" })),
+      ...h.memories.map((m) => ({ ...m, kind: "memory" })),
+    ].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+    if (!h.events.length && !h.memories.length) {
+      holder.innerHTML = `<div class="column-empty">событий и чекпоинтов пока нет — история появится по мере работы над задачей</div>`;
+      return;
+    }
+    holder.innerHTML = `<div class="timeline">${items.map(tlItem).join("")}</div>`;
+  } catch (err) {
+    holder.innerHTML = `<div class="column-empty">история недоступна: ${esc(err.message)}</div>`;
+  }
+}
+
+const KIND_LABEL = {
+  "task.created": "создана",
+  "task.moved": "перемещена",
+  "task.updated": "обновлена",
+  "task.deleted": "удалена",
+  "server.added": "хранилище подключено",
+};
+
+function tlItem(x) {
+  const cls = x.kind === "memory" ? "memory" : "board";
+  const badge = x.kind === "memory"
+    ? `<span class="tl-badge memory">${esc((x.source || "memory").split(" · ")[0])}</span>`
+    : `<span class="tl-badge board">${esc(KIND_LABEL[x.title] || "борд")}</span>`;
+  const title = x.kind === "memory" ? x.title : (KIND_LABEL[x.title] || x.title);
+  return `
+    <div class="tl-item ${cls}">
+      <div class="tl-head">
+        <span class="tl-ts">${esc((x.ts || "").replace("T", " ").slice(0, 16))}</span>
+        <span class="tl-title">${esc(title)}</span>
+        ${badge}
+      </div>
+      ${x.detail ? `<div class="tl-detail">${esc(x.detail)}</div>` : ""}
+    </div>`;
+}
+
+function wireCrossLinks(root, t) {
+  root.addEventListener("click", (e) => {
+    const tag = e.target.closest(".tagchip");
+    if (tag && tag.dataset.tag) { openTagDrill(tag.dataset.tag); return; }
+    const ag = e.target.closest("[data-agent]");
+    if (ag && ag.dataset.agent) { openAgentActivity(ag.dataset.agent); }
+  });
 }
 
 function memoryCard(m) {
@@ -684,6 +812,141 @@ function renderGroups() {
     });
     el.appendChild(row);
   }
+}
+
+// --------------------------------------------------- cross-links: drilldown
+function showDdModal(kindLabel, title, sub) {
+  $("#dd-kind").textContent = kindLabel;
+  $("#dd-title").textContent = title;
+  $("#dd-sub").textContent = sub || "";
+  $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  b.hidden = false;
+  d.hidden = false;
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+}
+function closeDdModal() {
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  b.classList.remove("open"); d.classList.remove("open");
+  setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
+}
+$("#dd-close").addEventListener("click", closeDdModal);
+$("#dd-backdrop").addEventListener("click", closeDdModal);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#dd-modal").hidden) closeDdModal();
+});
+
+function ddItem({ title, meta, excerpt, onClick }) {
+  const div = document.createElement("div");
+  div.className = "dd-item";
+  div.innerHTML = `
+    <div class="dd-item-title">${esc(title)}</div>
+    <div class="dd-item-meta">${meta}</div>
+    ${excerpt ? `<div class="dd-item-excerpt">${esc(excerpt)}</div>` : ""}`;
+  div.addEventListener("click", onClick);
+  return div;
+}
+
+async function openTagDrill(tag) {
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  $("#dd-kind").textContent = "тег";
+  $("#dd-title").textContent = "#" + tag;
+  $("#dd-sub").textContent = "все задачи и знания, связанные с этим тегом (по всем серверам памяти)";
+  $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
+  b.hidden = false; d.hidden = false;
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+  try {
+    const data = await api(`/api/tags/${encodeURIComponent(tag)}/drill?limit=12`);
+    const body = $("#dd-body");
+    body.innerHTML = "";
+    const sec = (title, count) => `<h2 class="dd-section" style="margin:0 0 8px">${title}<span class="dd-count">${count}</span></h2>`;
+    if (data.tasks.length) {
+      body.insertAdjacentHTML("beforeend", sec("Задачи борда", data.tasks.length));
+      const list = document.createElement("div");
+      list.className = "dd-list";
+      for (const t of data.tasks) {
+        list.appendChild(ddItem({
+          title: `${t.id} · ${t.title}`,
+          meta: `<span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env)}</span>`,
+          onClick: () => { closeDdModal(); openTask(t.id); },
+        }));
+      }
+      body.appendChild(list);
+    }
+    if (data.memories.length) {
+      body.insertAdjacentHTML("beforeend", sec("Знания mnemos", data.memories.length));
+      const list = document.createElement("div");
+      list.className = "dd-list";
+      for (const m of data.memories) {
+        list.appendChild(ddItem({
+          title: m.title || m.id,
+          meta: `<span class="pulse-server">${esc(m.server || "")}</span>
+                 <span class="chip">${esc((m.created_at || "").slice(0, 10))}</span>
+                 ${(m.tags || []).slice(0, 3).map((t) => tagChip(t)).join("")}`,
+          excerpt: m.excerpt,
+          onClick: () => { closeDdModal(); window.open(`/api/mnemos/memory/${encodeURIComponent(m.id)}`, "_blank"); },
+        }));
+      }
+      body.appendChild(list);
+    }
+    if (!data.tasks.length && !data.memories.length) {
+      body.innerHTML = `<div class="column-empty">по тегу пока ничего не найдено${data.errors.length ? " · " + esc(data.errors.map((e) => e.server + ":" + e.status).join(", ")) : ""}</div>`;
+    }
+  } catch (err) {
+    $("#dd-body").innerHTML = `<div class="column-empty">${esc(err.message)}</div>`;
+  }
+}
+
+async function openAgentActivity(agent) {
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  $("#dd-kind").textContent = "агент";
+  $("#dd-title").textContent = "⚒ " + agent;
+  $("#dd-sub").textContent = "задачи агента на борде + последние знания из памяти (по всем серверам)";
+  $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
+  b.hidden = false; d.hidden = false;
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agent)}/activity?limit=8`);
+    const body = $("#dd-body");
+    body.innerHTML = "";
+    if (data.tasks.length) {
+      body.insertAdjacentHTML("beforeend", `<h2 class="dd-section" style="margin:0 0 8px">Задачи борда<span class="dd-count">${data.tasks.length}</span></h2>`);
+      const list = document.createElement("div");
+      list.className = "dd-list";
+      for (const t of data.tasks) {
+        list.appendChild(ddItem({
+          title: `${t.id} · ${t.title}`,
+          meta: `<span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env)}</span>`,
+          onClick: () => { closeDdModal(); openTask(t.id); },
+        }));
+      }
+      body.appendChild(list);
+    }
+    if (data.memories.length) {
+      body.insertAdjacentHTML("beforeend", `<h2 class="dd-section" style="margin:16px 0 8px">Последние знания</h2>`);
+      const list = document.createElement("div");
+      list.className = "dd-list";
+      for (const m of data.memories) {
+        list.appendChild(ddItem({
+          title: m.title || m.id,
+          meta: `<span class="pulse-server">${esc(m.server || "")}</span>
+                 <span class="chip">${esc((m.created_at || "").slice(0, 10))}</span>`,
+          excerpt: m.excerpt,
+          onClick: () => { closeDdModal(); window.open(`/api/mnemos/memory/${encodeURIComponent(m.id)}`, "_blank"); },
+        }));
+      }
+      body.appendChild(list);
+    }
+    if (!data.tasks.length && !data.memories.length) {
+      body.innerHTML = `<div class="column-empty">активность агента не найдена${data.errors.length ? " · " + esc(data.errors.map((e) => e.server + ":" + e.status).join(", ")) : ""}</div>`;
+    }
+  } catch (err) {
+    $("#dd-body").innerHTML = `<div class="column-empty">${esc(err.message)}</div>`;
+  }
+}
+
+// task modal tabs
+for (const btn of document.querySelectorAll(".mtab")) {
+  btn.addEventListener("click", () => setTaskTab(btn.dataset.tab));
 }
 
 // ------------------------------------------------------------------ live

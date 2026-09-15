@@ -422,3 +422,76 @@ body {
 .group-name { color: var(--color-text-primary); font-weight: var(--weight-medium); }
 .group-servers { color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-glyph { color: var(--color-iris-bright); }
+
+/* ── Tag system: colored chips by prefix + drill-down ────────────── */
+.tagchip { cursor: pointer; transition: transform var(--duration-instant), border-color var(--duration-fast); }
+.tagchip:hover { transform: translateY(-1px); border-color: var(--color-iris); }
+.tag-project { color: #7fd4e0; border-color: #1a8a9660; background: #0e4a5230; }
+.tag-agent   { color: #c9b45a; border-color: #c9933a50; }
+.tag-type    { color: #b89ae0; border-color: #8a5cc950; }
+.tag-domain  { color: #8fd0a0; border-color: #2a8a5c50; }
+.tag-other   { color: var(--color-text-secondary); }
+
+/* ── Drilldown / agent activity modal ────────────────────────────── */
+.dd-section { margin-bottom: var(--space-5); }
+.dd-count { font-size: var(--text-xs); color: var(--color-text-muted); margin-left: var(--space-2); }
+.dd-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.dd-item {
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  background: var(--color-bg-elevated); padding: var(--space-3);
+  cursor: pointer; transition: border-color var(--duration-fast);
+}
+.dd-item:hover { border-color: var(--color-border-iris); }
+.dd-item-title { font-size: var(--text-sm); color: var(--color-text-primary); font-weight: var(--weight-medium); margin-bottom: 4px; }
+.dd-item-meta { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.dd-item-excerpt { font-size: var(--text-xs); color: var(--color-text-secondary); margin-top: 4px; line-height: 1.5; }
+
+/* ── Task card: richer, grouped ──────────────────────────────────── */
+.task-top { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 2px; }
+.task-age { margin-left: auto; font-size: 10px; color: var(--color-text-muted); }
+.task-title { cursor: pointer; }
+.task-title:hover { color: var(--color-iris-bright); }
+.task-tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--space-2); }
+.task-foot { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.task-agents { display: flex; gap: 3px; }
+.mini-avatar {
+  width: 18px; height: 18px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: var(--weight-semibold);
+  color: var(--color-text-inverse); background: var(--color-iris-dim);
+  border: 1px solid var(--color-border);
+  cursor: pointer; transition: border-color var(--duration-fast);
+}
+.mini-avatar:hover { border-color: var(--color-iris-bright); }
+
+/* ── Task modal tabs (История/Чекпоинты) ─────────────────────────── */
+.modal-tabs { display: flex; gap: var(--space-2); margin-bottom: var(--space-4); border-bottom: 1px solid var(--color-border-subtle); padding-bottom: var(--space-2); }
+.mtab {
+  background: none; border: 1px solid transparent; border-radius: var(--radius-md);
+  color: var(--color-text-secondary); font-size: var(--text-xs);
+  letter-spacing: .05em; text-transform: uppercase; cursor: pointer;
+  padding: var(--space-1) var(--space-3);
+}
+.mtab:hover { color: var(--color-text-primary); }
+.mtab.active { color: var(--color-iris-bright); border-color: var(--color-border-iris); background: var(--color-bg-base); }
+
+.timeline { display: flex; flex-direction: column; gap: 0; padding-left: var(--space-4); border-left: 1px solid var(--color-border-subtle); margin-left: var(--space-2); }
+.tl-item { position: relative; padding: var(--space-2) 0 var(--space-2) var(--space-3); }
+.tl-item::before {
+  content: ""; position: absolute; left: calc(-1 * var(--space-4) - 4px); top: 14px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--color-iris); box-shadow: 0 0 6px var(--color-iris-glow);
+}
+.tl-item.memory::before { background: var(--color-confidence); box-shadow: none; }
+.tl-item.board::before { background: var(--color-iris-dim); }
+.tl-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.tl-ts { font-size: 10px; color: var(--color-text-muted); flex: none; }
+.tl-title { font-size: var(--text-sm); color: var(--color-text-primary); font-weight: var(--weight-medium); }
+.tl-badge { font-size: 9px; border-radius: var(--radius-full); padding: 1px 7px; border: 1px solid var(--color-border-subtle); color: var(--color-text-secondary); white-space: nowrap; }
+.tl-badge.memory { color: var(--color-confidence); border-color: var(--color-confidence-dim); }
+.tl-badge.board { color: var(--color-iris-bright); border-color: var(--color-border-iris); }
+.tl-detail { font-size: var(--text-xs); color: var(--color-text-secondary); margin-top: 2px; line-height: 1.5; white-space: pre-wrap; }
+
+/* Section tabs inside task modal */
+.tsec { display: none; }
+.tsec.active { display: block; }

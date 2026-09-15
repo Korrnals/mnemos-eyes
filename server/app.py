@@ -478,6 +478,160 @@ async def mnemos_search(q: str, limit: int = 10, project: str = "", scope: str =
     return {"ok": not errors or bool(merged), "results": merged[:limit], "errors": errors}
 
 
+@app.get("/api/tasks/{task_id}/history")
+async def task_history(task_id: str) -> dict[str, Any]:
+    """Unified timeline for a task: board events + linked-memories timeline.
+
+    Board events come from the store audit log; memory entries (checkpoints,
+    decisions, learnings from mnemos) are pulled from all active servers for
+    the task's linked memory ids. Single uniform shape for the UI timeline:
+    {ts, kind, title, detail, source}.
+    """
+    task = store.task(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+
+    events: list[dict[str, Any]] = [
+        {
+            "ts": e["ts"],
+            "kind": "board",
+            "title": e["kind"],
+            "detail": _human_event(e),
+            "source": "board",
+        }
+        for e in store.task_events(task_id)
+    ]
+
+    # memory timeline for linked ids
+    mem_items: list[dict[str, Any]] = []
+    ids: list[str] = task.get("memory_ids") or []
+    if ids:
+        servers = registry.active_servers()
+        results = await asyncio.gather(
+            *(mnemos_client.resolve_memories(s, ids) for s in servers)
+        )
+        for s, r in zip(servers, results):
+            for mid, card in r["items"].items():
+                mem_items.append({
+                    "ts": card.get("created_at") or "",
+                    "kind": "memory",
+                    "title": card.get("title") or mid[:8],
+                    "detail": (card.get("excerpt") or "")[:200],
+                    "source": f"{s['name']} · {card.get('status') or ''}".strip(" ·"),
+                })
+    mem_items.sort(key=lambda x: x["ts"] or "", reverse=True)
+
+    return {"ok": True, "task": task_id, "events": events, "memories": mem_items}
+
+
+def _human_event(e: dict[str, Any]) -> str:
+    p = e.get("payload") or {}
+    kind = e["kind"]
+    if kind == "task.moved":
+        return f"{p.get('from', '?')} → {p.get('to', '?')}"
+    if kind == "task.updated":
+        return "поля: " + ", ".join(p.get("fields", []))
+    if kind == "task.created":
+        return "создана в колонке " + str(p.get("col", "?"))
+    if kind == "task.deleted":
+        return "удалена"
+    return str(p)[:200]
+
+
+@app.get("/api/tags/{tag}/drill")
+async def tag_drill(tag: str, limit: int = 12) -> dict[str, Any]:
+    """Cross-cutting drill-down: everything tied to one tag.
+
+    Returns: board tasks carrying this tag + memories matching the tag
+    across all active memory servers (tags filter, recency order).
+    """
+    servers = registry.active_servers()
+    results = await asyncio.gather(*(
+        mnemos_client.post_json_async(
+            s, "/search", {"query": "", "tags": [tag], "limit": min(limit, 25)},
+            timeout=15.0,
+        ) for s in servers
+    ))
+    memories: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for s, (code, data) in zip(servers, results):
+        if code != 200:
+            errors.append({"server": s["name"], "status": code})
+            continue
+        for it in (data if isinstance(data, list) else []):
+            if isinstance(it, dict):
+                it["server"] = s["name"]
+                memories.append(it)
+    memories.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+
+    board_tasks = [
+        {
+            "id": t["id"], "title": t["title"], "col": t["col"],
+            "agents": t["agents"], "env": t["env"],
+        }
+        for t in store.board()["tasks"]
+        if tag in (t.get("mnemos_tags") or []) or tag in (t.get("specialists") or [])
+        or tag in (t.get("agents") or [])
+    ]
+    return {
+        "ok": not errors or bool(memories),
+        "tag": tag,
+        "tasks": board_tasks,
+        "memories": [
+            {
+                "id": m["id"], "title": m.get("title") or "",
+                "tags": m.get("tags", []), "server": m.get("server"),
+                "created_at": m.get("created_at"), "status": m.get("status"),
+                "excerpt": (m.get("content") or "")[:180],
+            }
+            for m in memories[:limit]
+        ],
+        "errors": errors,
+    }
+
+
+@app.get("/api/agents/{name}/activity")
+async def agent_activity(name: str, project: str = "", limit: int = 10) -> dict[str, Any]:
+    """Cross-store agent activity: recent memories per agent (mnemos /recall)."""
+    servers = registry.active_servers()
+    results = await asyncio.gather(*(
+        mnemos_client.fetch_json(
+            s, f"/recall/agent/{name}",
+            {"limit": min(limit, 25), **({"project": project} if project else {})},
+        ) for s in servers
+    ))
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for s, (code, body) in zip(servers, results):
+        if code != 200 or not isinstance(body, list):
+            errors.append({"server": s["name"], "status": code})
+            continue
+        for it in body:
+            if isinstance(it, dict):
+                it["server"] = s["name"]
+                items.append(it)
+    items.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+    board_tasks = [
+        {"id": t["id"], "title": t["title"], "col": t["col"], "env": t["env"]}
+        for t in store.board()["tasks"] if name in (t.get("agents") or [])
+    ]
+    return {
+        "ok": not errors or bool(items),
+        "agent": name,
+        "tasks": board_tasks,
+        "memories": [
+            {
+                "id": i["id"], "title": i.get("title") or "",
+                "tags": i.get("tags", []), "server": i.get("server"),
+                "created_at": i.get("created_at"),
+                "excerpt": (i.get("content") or "")[:180],
+            }
+            for i in items[:limit]
+        ],
+        "errors": errors,
+    }
+
+
 def _guard_write(request: Request) -> None:
     if not BOARD_WRITE_TOKEN:
         return
@@ -521,7 +675,10 @@ def _sse(event: dict[str, Any]) -> bytes:
 # ----------------------------------------------------------------- static SPA
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-cache"},  # entry point always fresh
+    )
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="web")

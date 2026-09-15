@@ -309,6 +309,21 @@ class Store:
             out.append(e)
         return out
 
+    def task_events(self, task_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Audit events for one task, newest first."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT ts, kind, task_id, payload FROM events "
+                "WHERE task_id=? ORDER BY id DESC LIMIT ?",
+                (task_id, limit),
+            ).fetchall()
+        out = []
+        for r in rows:
+            e = dict(r)
+            e["payload"] = _loads(e["payload"])
+            out.append(e)
+        return out
+
     def last_event_id(self) -> int:
         with self._lock, self._conn() as db:
             row = db.execute(
