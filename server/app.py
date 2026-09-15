@@ -2,10 +2,11 @@
 
 Serves the vanilla-JS SPA from ``../web`` and a small JSON API over the
 board store, plus a narrow authenticated proxy to **one or more live
-mnemos engines** (multi-server, groups = "memory clusters").
+mnemos engines** (multi-server, groups = "memory clusters"), with full
+UI management: add/edit/enable/disable/pause/remove servers and groups.
 
 Run:    uvicorn server.app:app --host 0.0.0.0 --port 8080
-Volume: /data (board.db + memories.yaml)
+Volume: /data (board.db)
 """
 
 from __future__ import annotations
@@ -22,12 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import mnemos_client
-from .memory_registry import (
-    DEFAULT_CONFIG_PATH,
-    groups_of,
-    load_servers,
-    write_config_template,
-)
+from .memory_registry import ServerRegistry, write_config_template
 from .store import Store, VALID_STATUSES
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
@@ -39,9 +35,10 @@ STATIC_DIR = Path(os.environ.get("VESMARO_WEB", Path(__file__).resolve().parents
 # bearer for mutations if the board ever leaves the trust zone.
 BOARD_WRITE_TOKEN = os.environ.get("VESMARO_BOARD_TOKEN", "")
 
-write_config_template(DEFAULT_CONFIG_PATH)
+write_config_template(DATA_DIR / "memories.yaml")
 
 store = Store(DB_PATH)
+registry = ServerRegistry(store)
 
 # SSE fan-out: subscribers get every board event as it is logged.
 _subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -55,22 +52,17 @@ def _broadcast(event: dict[str, Any]) -> None:
             pass
 
 
-def get_server(name: str) -> dict[str, Any]:
-    for s in load_servers():
-        if s["name"] == name:
-            return s
-    raise HTTPException(404, f"memory server '{name}' not declared")
-
-
-def get_scope(scope: str) -> tuple[str, list[dict[str, Any]]]:
-    """Resolve a scope: a single server name or a group name."""
-    servers = load_servers()
+def get_scope_servers(scope: str, active_only: bool = False) -> tuple[str, list[dict[str, Any]]]:
+    """Resolve scope: 'all' | group name | server name → server list."""
+    servers = registry.active_servers() if active_only else registry.servers()
     matched = [s for s in servers if s["name"] == scope]
     if matched:
         return "server", matched
-    grouped = [s for s in servers if s["group"] == scope]
+    grouped = [s for s in servers if s["group_name"] == scope]
     if grouped:
         return "group", grouped
+    if scope == "all":
+        return "all", [s for s in servers if s.get("enabled")]
     raise HTTPException(404, f"no memory server or group named '{scope}'")
 
 
@@ -79,7 +71,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="vesmaro-eyes", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="0.3.0", lifespan=lifespan)
 
 
 # --------------------------------------------------------------------- models
@@ -113,17 +105,39 @@ class MoveBody(BaseModel):
     position: int | None = None
 
 
+class ServerSpec(BaseModel):
+    """Create/update a memory server connection. token: never returned."""
+    name: str = Field(min_length=1, max_length=60, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    url: str = Field(min_length=1)
+    group_name: str = "default"
+    description: str = ""
+    token_ref: str = ""          # env:VAR | file:/path | plain:token
+    enabled: bool = True
+
+
+class ServerAction(BaseModel):
+    action: str  # enable | disable | pause | resume | reload | sync | test
+
+
+class GroupSpec(BaseModel):
+    name: str = Field(min_length=1, max_length=60, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    title: str = ""
+    description: str = ""
+
+
 # ------------------------------------------------------------------ board API
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    servers = load_servers()
+    servers = registry.servers()
     probes = await asyncio.gather(*(mnemos_client.health(s) for s in servers))
     stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
     per_server = []
     for s, p, st in zip(servers, probes, stats):
         per_server.append({
             "name": s["name"],
-            "group": s["group"],
+            "group_name": s["group_name"],
+            "enabled": bool(s["enabled"]),
+            "state": s["state"],
             "description": s["description"],
             "ok": p["ok"],
             "latency_ms": p["latency_ms"],
@@ -135,7 +149,7 @@ async def health() -> dict[str, Any]:
         "service": "vesmaro-eyes",
         "board_tasks": sum(store.board()["counts"].values()),
         "servers": per_server,
-        "groups": groups_of(servers),
+        "groups": store.list_groups(),
     }
 
 
@@ -188,11 +202,7 @@ async def delete_task(task_id: str, request: Request) -> dict[str, Any]:
 
 @app.get("/api/tasks/{task_id}/memories")
 async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
-    """Resolve task memory links against a server, a group, or all servers.
-
-    Multi-server: ids are attempted on every server in scope; a hit is
-    attributed to the resolving server so the UI can show provenance.
-    """
+    """Resolve task memory links against a server, a group, or all servers."""
     task = store.task(task_id)
     if task is None:
         raise HTTPException(404, "task not found")
@@ -200,10 +210,10 @@ async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
     if not ids:
         return {"items": {}, "unresolved": [], "sources": {}}
 
-    if scope:
-        _, servers = get_scope(scope)
+    if scope and scope != "all":
+        _, servers = get_scope_servers(scope)
     else:
-        servers = load_servers()
+        servers = registry.active_servers()
 
     results = await asyncio.gather(
         *(mnemos_client.resolve_memories(s, ids) for s in servers)
@@ -220,43 +230,177 @@ async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
             if u["id"] not in items and all(u["id"] != x["id"] for x in unresolved):
                 unresolved.append({"id": u["id"], "status": u["status"],
                                    "server": s["name"]})
-    # an id unresolved everywhere lists once per server; trim to first
     seen: set[str] = set()
     unresolved = [u for u in unresolved if not (u["id"] in seen or seen.add(u["id"]))]
     return {"items": items, "unresolved": unresolved, "sources": sources}
 
 
+# ------------------------------------------------------- memory servers CRUD
+def _server_public(s: dict[str, Any]) -> dict[str, Any]:
+    """Public shape — never includes the token itself."""
+    return {
+        "name": s["name"],
+        "url": s["url"],
+        "group_name": s["group_name"],
+        "description": s["description"],
+        "enabled": bool(s["enabled"]),
+        "state": s["state"],
+        "token_ref": s.get("token_ref", ""),
+        "has_token": bool(s.get("token")),
+    }
+
+
 @app.get("/api/memories/servers")
 async def memory_servers() -> dict[str, Any]:
-    """Declared memory servers + groups (no tokens ever leave the server)."""
-    servers = load_servers()
-    probes = await asyncio.gather(*(mnemos_client.health(s) for s in servers))
+    rows = registry.servers()
+    probes = await asyncio.gather(*(mnemos_client.health(s) for s in rows))
     by_name = {p["server"]: p for p in probes}
     return {
         "ok": True,
         "servers": [
-            {
-                "name": s["name"],
-                "group": s["group"],
-                "description": s["description"],
-                "url": s["url"],
-                "ok": by_name.get(s["name"], {}).get("ok", False),
-                "latency_ms": by_name.get(s["name"], {}).get("latency_ms"),
-            }
-            for s in servers
+            {**_server_public(s),
+             "ok": by_name.get(s["name"], {}).get("ok", False),
+             "latency_ms": by_name.get(s["name"], {}).get("latency_ms")}
+            for s in rows
         ],
-        "groups": groups_of(servers),
+        "groups": registry.groups(),
     }
 
 
+@app.post("/api/memories/servers", status_code=201)
+async def add_memory_server(body: ServerSpec, request: Request) -> dict[str, Any]:
+    _guard_write(request)
+    url = body.url.rstrip("/")
+    existing = store.get_server(body.name)
+    if existing is None:
+        # verify reachability before first save (honest, non-blocking)
+        probe_spec = {"name": body.name, "url": url, "token": _token_for(body.token_ref)}
+        code, _ = await mnemos_client.post_json_async(probe_spec, "/search",
+                                                      {"query": "ping", "limit": 1}, timeout=6.0)
+        row = registry.add_or_update({
+            "name": body.name, "url": url, "group_name": body.group_name,
+            "description": body.description, "token_ref": body.token_ref,
+        })
+        store.log_server_action(body.name, "added", f"probe http {code}")
+        if code == 503:
+            row = registry.set_state(body.name, "error") or row
+        _broadcast({"kind": "server.changed"})
+        return {**_server_public(row), "probe_status": code}
+    raise HTTPException(409, f"server '{body.name}' already exists")
+
+
+def _token_for(token_ref: str) -> str:
+    from .memory_registry import resolve_token
+    return resolve_token(token_ref)
+
+
+@app.patch("/api/memories/servers/{name}")
+async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> dict[str, Any]:
+    _guard_write(request)
+    if store.get_server(name) is None:
+        raise HTTPException(404, f"server '{name}' not found")
+    row = registry.add_or_update({
+        "name": name, "url": body.url.rstrip("/"), "group_name": body.group_name,
+        "description": body.description, "token_ref": body.token_ref,
+    })
+    _broadcast({"kind": "server.changed", "server": name})
+    return _server_public(row)
+
+
+@app.post("/api/memories/servers/{name}/action")
+async def memory_server_action(name: str, body: ServerAction, request: Request) -> dict[str, Any]:
+    _guard_write(request)
+    row = store.get_server(name)
+    if row is None:
+        raise HTTPException(404, f"server '{name}' not found")
+    act = body.action
+    if act == "enable":
+        out = registry.set_enabled(name, True)
+    elif act == "disable":
+        out = registry.set_enabled(name, False)
+    elif act == "pause":
+        out = registry.set_state(name, "paused")
+    elif act == "resume":
+        out = registry.set_state(name, "idle")
+    elif act == "reload":
+        # re-read connection data and probe
+        s = next(x for x in registry.servers() if x["name"] == name)
+        code, _ = await mnemos_client.post_json_async(s, "/search", {"query": "ping", "limit": 1}, timeout=6.0)
+        out = registry.set_state(name, "idle" if code != 503 else "error")
+        store.log_server_action(name, "reloaded", f"probe http {code}")
+        _broadcast({"kind": "server.changed", "server": name})
+        return {"ok": True, "server": _server_public(out) if out else None, "probe_status": code}
+    elif act == "sync":
+        # mark syncing, probe, then settle back to idle (a real store-level
+        # sync lands with mnemos-mesh; for now it validates connectivity)
+        registry.set_state(name, "syncing")
+        s = next(x for x in registry.servers() if x["name"] == name)
+        code, _ = await mnemos_client.post_json_async(s, "/search", {"query": "sync-check", "limit": 1}, timeout=8.0)
+        st = await mnemos_client.store_stats(s)
+        out = registry.set_state(name, "idle" if code == 200 else "error")
+        store.log_server_action(name, "synced", f"probe http {code}, memories={(st or {}).get('memories_total')}")
+        _broadcast({"kind": "server.changed", "server": name})
+        return {"ok": code == 200, "server": _server_public(out) if out else None,
+                "probe_status": code, "stats": st}
+    elif act == "test":
+        s = next(x for x in registry.servers() if x["name"] == name)
+        p = await mnemos_client.health(s)
+        return {"ok": p["ok"], "probe": p}
+    else:
+        raise HTTPException(422, f"unknown action: {act}")
+    store.log_server_action(name, act)
+    _broadcast({"kind": "server.changed", "server": name})
+    return {"ok": True, "server": _server_public(out) if out else None}
+
+
+@app.delete("/api/memories/servers/{name}")
+async def delete_memory_server(name: str, request: Request) -> dict[str, Any]:
+    """Remove from the board registry. The memory store itself is untouched."""
+    _guard_write(request)
+    if not registry.delete(name):
+        raise HTTPException(404, f"server '{name}' not found")
+    _broadcast({"kind": "server.changed", "server": name})
+    return {"ok": True, "note": "removed from board; the store itself is untouched"}
+
+
+@app.get("/api/memories/servers/{name}/history")
+async def memory_server_history(name: str) -> dict[str, Any]:
+    return {"ok": True, "server": name, "history": store.server_history(name)}
+
+
+@app.get("/api/memories/groups")
+async def memory_groups() -> dict[str, Any]:
+    return {"ok": True, "groups": registry.groups()}
+
+
+@app.post("/api/memories/groups")
+async def save_memory_group(body: GroupSpec, request: Request) -> dict[str, Any]:
+    _guard_write(request)
+    g = registry.save_group(body.name, body.title, body.description)
+    _broadcast({"kind": "server.changed", "server": f"group:{body.name}"})
+    return {"ok": True, "group": g}
+
+
+@app.delete("/api/memories/groups/{name}")
+async def delete_memory_group(name: str, request: Request) -> dict[str, Any]:
+    _guard_write(request)
+    if name == "default":
+        raise HTTPException(422, "cannot delete the default group")
+    if not registry.delete_group(name):
+        raise HTTPException(404, f"group '{name}' not found")
+    _broadcast({"kind": "server.changed", "server": f"group:{name}"})
+    return {"ok": True, "note": "servers moved to group 'default'"}
+
+
+# ------------------------------------------------------------- merged views
 @app.get("/api/memories/pulse")
 async def memory_pulse_all(project: str = "mnemos-eyes", limit: int = 8,
                            scope: str = "") -> dict[str, Any]:
     """Merged pulse across scope (all servers | group | one server)."""
-    if scope:
-        kind, servers = get_scope(scope)
+    if scope and scope != "all":
+        kind, servers = get_scope_servers(scope)
     else:
-        kind, servers = "all", load_servers()
+        kind, servers = "all", registry.active_servers()
     limit = min(limit, 20)
     results = await asyncio.gather(
         *(mnemos_client.memory_pulse(s, project=project, limit=limit) for s in servers)
@@ -273,7 +417,6 @@ async def memory_pulse_all(project: str = "mnemos-eyes", limit: int = 8,
             merged_items.append(item)
     merged_items.sort(key=lambda i: i.get("created_at") or "", reverse=True)
     if not merged_items:
-        # honest store stats per server when the project is empty everywhere
         stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
         store_stats = [
             {"server": s["name"], "stats": st}
@@ -292,49 +435,17 @@ async def memory_pulse_all(project: str = "mnemos-eyes", limit: int = 8,
 
 @app.get("/api/memories/servers/{scope}/pulse")
 async def memory_pulse(scope: str, project: str = "mnemos-eyes", limit: int = 8) -> dict[str, Any]:
-    """Pulse for one server OR a merged group pulse (items tagged by server)."""
-    kind, servers = get_scope(scope)
-    limit = min(limit, 20)
-    results = await asyncio.gather(
-        *(mnemos_client.memory_pulse(s, project=project, limit=limit) for s in servers)
-    )
-    merged_items: list[dict[str, Any]] = []
-    per_server: list[dict[str, Any]] = []
-    for s, r in zip(servers, results):
-        per_server.append({
-            "server": s["name"], "ok": r["ok"],
-            "items": len(r.get("items", [])), "detail": r.get("detail"),
-        })
-        for item in r.get("items", []):
-            item["server"] = s["name"]
-            merged_items.append(item)
-    merged_items.sort(key=lambda i: i.get("created_at") or "", reverse=True)
-    if not merged_items:
-        # honest store stats per server when the project is empty everywhere
-        stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
-        store_stats = [
-            {"server": s["name"], "stats": st}
-            for s, st in zip(servers, stats)
-        ]
-        return {
-            "ok": all(p["ok"] for p in per_server),
-            "scope": scope, "kind": kind, "items": [],
-            "per_server": per_server, "store_stats": store_stats,
-        }
-    return {
-        "ok": True, "scope": scope, "kind": kind,
-        "items": merged_items[:limit], "per_server": per_server,
-    }
+    return await memory_pulse_all(project=project, limit=limit, scope=scope)
 
 
 @app.get("/api/memories/servers/{scope}/stats")
 async def memory_stats(scope: str) -> dict[str, Any]:
-    kind, servers = get_scope(scope)
+    kind, servers = get_scope_servers(scope)
     stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
     return {
         "ok": True, "scope": scope, "kind": kind,
         "stores": [
-            {"server": s["name"], "group": s["group"], "stats": st or None}
+            {"server": s["name"], "group": s["group_name"], "stats": st or None}
             for s, st in zip(servers, stats)
         ],
     }
@@ -342,12 +453,11 @@ async def memory_stats(scope: str) -> dict[str, Any]:
 
 @app.get("/api/mnemos/search")
 async def mnemos_search(q: str, limit: int = 10, project: str = "", scope: str = "") -> dict[str, Any]:
-    """Search one server (scope=server name), a group, or the primary server."""
-    servers = load_servers()
-    if scope:
-        _, scoped = get_scope(scope)
+    """Search one server (scope=server name), a group, or all active servers."""
+    if scope and scope != "all":
+        _, scoped = get_scope_servers(scope)
     else:
-        scoped = [servers[0]]
+        scoped = registry.active_servers()
     limit = min(limit, 25)
     results = await asyncio.gather(
         *(mnemos_client.search(s, q, limit=limit, project=project) for s in scoped)

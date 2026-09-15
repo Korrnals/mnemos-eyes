@@ -53,8 +53,12 @@
           <div id="pulse" class="pulse"><!-- pulse items --></div>
         </section>
         <section class="rail-block">
-          <h2 class="rail-title">Хранилища</h2>
+          <h2 class="rail-title">Хранилища <button class="rail-add" id="srv-add" title="Подключить хранилище">+</button></h2>
           <div id="stores" class="stores"><!-- per-store stats --></div>
+        </section>
+        <section class="rail-block">
+          <h2 class="rail-title">Кластеры памяти <button class="rail-add" id="grp-add" title="Создать кластер">+</button></h2>
+          <div id="groups" class="groups"><!-- group chips --></div>
         </section>
         <section class="rail-block">
           <h2 class="rail-title">Специалисты</h2>
@@ -68,32 +72,75 @@
     </main>
   </div>
 
-  <!-- ── Task drawer ───────────────────────────────────────────── -->
-  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
-  <aside class="drawer" id="drawer" hidden aria-role="dialog" aria-label="Задача">
-    <div class="drawer-head">
-      <span class="drawer-col" id="drawer-col">open</span>
-      <button class="drawer-close" id="drawer-close" aria-label="Закрыть">×</button>
+  <!-- ── Task modal (centered) ─────────────────────────────────── -->
+  <div class="modal-backdrop" id="modal-backdrop" hidden></div>
+  <div class="modal" id="task-modal" hidden role="dialog" aria-label="Задача">
+    <div class="modal-head">
+      <span class="drawer-col" id="modal-col">open</span>
+      <span class="modal-id" id="modal-id"></span>
+      <button class="drawer-close" id="modal-close" aria-label="Закрыть">×</button>
     </div>
-    <h1 class="drawer-title" id="drawer-title"></h1>
-    <p class="drawer-summary" id="drawer-summary"></p>
+    <h1 class="drawer-title" id="modal-title"></h1>
+    <p class="drawer-summary" id="modal-summary"></p>
+
+    <div class="modal-grid">
+      <section class="drawer-section modal-main">
+        <h2>Память mnemos</h2>
+        <div id="modal-memories" class="drawer-memories"></div>
+      </section>
+      <aside class="modal-side">
+        <section class="drawer-section">
+          <h2>Исполнение</h2>
+          <div class="drawer-meta" id="modal-meta"></div>
+        </section>
+        <section class="drawer-section" id="modal-spec-section">
+          <h2>Спецификация</h2>
+          <pre class="drawer-spec" id="modal-spec"></pre>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ── Memory server modal ───────────────────────────────────── -->
+  <div class="modal-backdrop" id="srv-backdrop" hidden></div>
+  <div class="modal" id="srv-modal" hidden role="dialog" aria-label="Хранилище памяти">
+    <div class="modal-head">
+      <span class="drawer-col" id="srv-state">idle</span>
+      <button class="drawer-close" id="srv-close" aria-label="Закрыть">×</button>
+    </div>
+    <h1 class="drawer-title" id="srv-title"></h1>
+    <p class="drawer-summary" id="srv-desc"></p>
 
     <section class="drawer-section">
-      <h2>Память mnemos</h2>
-      <div id="drawer-memories" class="drawer-memories"></div>
+      <h2>Состояние</h2>
+      <div class="srv-stats" id="srv-stats"></div>
     </section>
 
     <section class="drawer-section">
-      <h2>Исполнение</h2>
-      <div class="drawer-meta" id="drawer-meta"></div>
+      <h2>Подключение</h2>
+      <div class="srv-form">
+        <label>Название <input id="srv-name" type="text" pattern="[a-z0-9][a-z0-9_-]*" /></label>
+        <label>URL <input id="srv-url" type="text" placeholder="http://host:8787" /></label>
+        <label>Токен (env:VAR / file:/path / plain:…) <input id="srv-token" type="password" placeholder="оставить пустым — без изменения" autocomplete="off" /></label>
+        <label>Описание <input id="srv-desc-input" type="text" /></label>
+      </div>
+      <div class="srv-actions">
+        <button class="btn" id="srv-save">Сохранить</button>
+        <button class="btn" id="srv-test">Проверить</button>
+        <button class="btn" id="srv-reload">Перезагрузить</button>
+        <button class="btn" id="srv-sync">Синк</button>
+        <button class="btn btn-warn" id="srv-toggle">Отключить</button>
+        <button class="btn btn-danger" id="srv-delete">Удалить из борда</button>
+      </div>
+      <p class="srv-note" id="srv-note"></p>
     </section>
 
-    <section class="drawer-section" id="spec-section">
-      <h2>Спецификация</h2>
-      <pre class="drawer-spec" id="drawer-spec"></pre>
+    <section class="drawer-section">
+      <h2>История</h2>
+      <div class="srv-history" id="srv-history"></div>
     </section>
-  </aside>
+  </div>
 
-  <script type="module" src="/js/app.js?v=0.2.1"></script>
+  <script type="module" src="/js/app.js?v=0.3.2"></script>
 </body>
 </html>

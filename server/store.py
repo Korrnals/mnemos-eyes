@@ -55,12 +55,38 @@ CREATE TABLE IF NOT EXISTS events (
     task_id  TEXT,
     payload  TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS memory_groups (
+    name        TEXT PRIMARY KEY,
+    title       TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_servers (
+    name         TEXT PRIMARY KEY,
+    url          TEXT NOT NULL,
+    group_name   TEXT NOT NULL DEFAULT 'default',
+    description  TEXT NOT NULL DEFAULT '',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    state        TEXT NOT NULL DEFAULT 'idle' CHECK (state IN ('idle','paused','syncing','error')),
+    token_ref    TEXT NOT NULL DEFAULT '',
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS server_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT NOT NULL,
+    server     TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT ''
+);
 CREATE INDEX IF NOT EXISTS idx_tasks_col ON tasks (col, position);
 CREATE INDEX IF NOT EXISTS idx_events_id ON events (id);
+CREATE INDEX IF NOT EXISTS idx_server_log ON server_log (server, id);
 """
 
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
-SEED_VERSION = "1"
+SEED_VERSION = "2"
 
 
 def _now() -> str:
@@ -289,3 +315,160 @@ class Store:
                 "SELECT COALESCE(MAX(id), 0) AS m FROM events"
             ).fetchone()
         return int(row["m"])
+
+    # ------------------------------------------------------ memory servers
+    def list_servers(self, include_disabled: bool = True) -> list[dict[str, Any]]:
+        q = "SELECT * FROM memory_servers" + ("" if include_disabled else " WHERE enabled=1")
+        with self._lock, self._conn() as db:
+            rows = [dict(r) for r in db.execute(
+                f"{q} ORDER BY sort_order, name").fetchall()]
+        return rows
+
+    def get_server(self, name: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM memory_servers WHERE name=?", (name,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_server(self, spec: dict[str, Any]) -> dict[str, Any]:
+        name = spec["name"]
+        now = _now()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT name FROM memory_servers WHERE name=?", (name,)
+            ).fetchone()
+            if row is None:
+                pos = db.execute(
+                    "SELECT COALESCE(MAX(sort_order)+1, 0) AS p FROM memory_servers"
+                ).fetchone()["p"]
+                db.execute(
+                    """INSERT INTO memory_servers
+                           (name, url, group_name, description, enabled, state,
+                            token_ref, sort_order, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (name, spec["url"], spec.get("group_name", "default"),
+                     spec.get("description", ""), 1 if spec.get("enabled", True) else 0,
+                     spec.get("state", "idle"), spec.get("token_ref", ""), pos, now, now),
+                )
+                self._log(db, "server.created", None, {"server": name})
+            else:
+                db.execute(
+                    """UPDATE memory_servers SET url=?, group_name=?, description=?,
+                           token_ref=COALESCE(NULLIF(?, ''), token_ref), updated_at=?
+                       WHERE name=?""",
+                    (spec["url"], spec.get("group_name", "default"),
+                     spec.get("description", ""), spec.get("token_ref", ""), now, name),
+                )
+                self._log(db, "server.updated", None, {"server": name})
+        return self.get_server(name)  # type: ignore[return-value]
+
+    def set_server_enabled(self, name: str, enabled: bool) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT name FROM memory_servers WHERE name=?", (name,)
+            ).fetchone()
+            if row is None:
+                return None
+            db.execute(
+                "UPDATE memory_servers SET enabled=?, state=?, updated_at=? WHERE name=?",
+                (1 if enabled else 0, "idle" if enabled else "paused", _now(), name),
+            )
+            self._log(db, "server." + ("enabled" if enabled else "disabled"),
+                      None, {"server": name})
+        return self.get_server(name)
+
+    def set_server_state(self, name: str, state: str) -> dict[str, Any] | None:
+        if state not in ("idle", "paused", "syncing", "error"):
+            raise ValueError(f"invalid state: {state}")
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT name FROM memory_servers WHERE name=?", (name,)
+            ).fetchone()
+            if row is None:
+                return None
+            db.execute(
+                "UPDATE memory_servers SET state=?, updated_at=? WHERE name=?",
+                (state, _now(), name),
+            )
+        return self.get_server(name)
+
+    def delete_server(self, name: str) -> bool:
+        """Remove a server from the board registry (NOT the store itself)."""
+        with self._lock, self._conn() as db:
+            cur = db.execute("DELETE FROM memory_servers WHERE name=?", (name,))
+            deleted = cur.rowcount > 0
+            if deleted:
+                self._log(db, "server.deleted", None, {"server": name})
+        return deleted
+
+    def log_server_action(self, server: str, action: str, detail: str = "") -> None:
+        with self._lock, self._conn() as db:
+            self._log(db, "server." + action, None, {"server": server})
+            db.execute(
+                "INSERT INTO server_log (ts, server, action, detail) VALUES (?,?,?,?)",
+                (_now(), server, action, detail[:500]),
+            )
+
+    def server_history(self, server: str, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT ts, action, detail FROM server_log WHERE server=? "
+                "ORDER BY id DESC LIMIT ?",
+                (server, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------- memory groups
+    def list_groups(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as db:
+            rows = [dict(r) for r in db.execute(
+                "SELECT * FROM memory_groups ORDER BY name").fetchall()]
+            for r in rows:
+                r["servers"] = [
+                    x["name"] for x in db.execute(
+                        "SELECT name FROM memory_servers WHERE group_name=? "
+                        "ORDER BY sort_order, name", (r["name"],)
+                    ).fetchall()
+                ]
+        return rows
+
+    def upsert_group(self, name: str, title: str = "", description: str = "") -> dict[str, Any]:
+        now = _now()
+        with self._lock, self._conn() as db:
+            db.execute(
+                """INSERT INTO memory_groups (name, title, description, created_at)
+                       VALUES (?,?,?,?)
+                   ON CONFLICT(name) DO UPDATE SET
+                       title=excluded.title, description=excluded.description""",
+                (name, title or name, description, now),
+            )
+            self._log(db, "group.saved", None, {"group": name})
+        return next((g for g in self.list_groups() if g["name"] == name), None)  # type: ignore[return-value]
+
+    def delete_group(self, name: str) -> bool:
+        """Delete a group; its servers fall back to group 'default'."""
+        with self._lock, self._conn() as db:
+            cur = db.execute("DELETE FROM memory_groups WHERE name=?", (name,))
+            deleted = cur.rowcount > 0
+            if deleted:
+                db.execute(
+                    "UPDATE memory_servers SET group_name='default' WHERE group_name=?",
+                    (name,),
+                )
+                self._log(db, "group.deleted", None, {"group": name})
+        return deleted
+
+    def set_server_group(self, name: str, group: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT name FROM memory_servers WHERE name=?", (name,)
+            ).fetchone()
+            if row is None:
+                return None
+            db.execute(
+                "UPDATE memory_servers SET group_name=?, updated_at=? WHERE name=?",
+                (group, _now(), name),
+            )
+            self._log(db, "server.moved", None, {"server": name, "group": group})
+        return self.get_server(name)

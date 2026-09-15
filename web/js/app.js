@@ -125,7 +125,7 @@ function taskCard(t) {
     card.classList.add("dragging");
   });
   card.addEventListener("dragend", () => card.classList.remove("dragging"));
-  card.addEventListener("click", () => openDrawer(t));
+  card.addEventListener("click", () => openTask(t.id));
   return card;
 }
 
@@ -167,7 +167,7 @@ async function loadMemServers() {
     updateScopeLabels();
     refreshPulse();
     refreshStores();
-    if (drawerTask) openDrawer(drawerTask);
+    if (state.activeTask) openTask(state.activeTask.id);
   };
   updateScopeLabels();
 }
@@ -314,44 +314,54 @@ async function refreshStores() {
       <span class="store-total">${h.memories_total != null ? h.memories_total + " памятей" : (h.error ? "недоступен" : "…")}</span>
       <span class="store-group">${esc(s.group)}</span>`;
     row.title = `${s.url}${s.description ? " — " + s.description : ""}`;
-    row.addEventListener("click", () => {
-      state.memScope = s.name;
-      localStorage.setItem(SCOPE_KEY, s.name);
-      $("#mem-scope").value = s.name;
-      updateScopeLabels();
-      refreshPulse();
+    row.addEventListener("click", (e) => {
+      if (e.altKey) {
+        // alt-click = switch scope quickly
+        state.memScope = s.name;
+        localStorage.setItem(SCOPE_KEY, s.name);
+        $("#mem-scope").value = s.name;
+        updateScopeLabels();
+        refreshPulse();
+      } else {
+        openServerModal(s.name);
+      }
     });
     el.appendChild(row);
   }
 }
 
-// ------------------------------------------------------------------ drawer
-let drawerTask = null;
+// ------------------------------------------------------------------ task modal
+// (see openTask / closeTask)
 
-async function openDrawer(t) {
-  drawerTask = t;
-  $("#drawer-col").textContent = COLUMN_TITLES[t.col] || t.col;
-  $("#drawer-title").textContent = t.title;
-  $("#drawer-summary").textContent = t.summary || "";
-  $("#drawer-spec").textContent = t.spec || "";
-  $("#spec-section").hidden = !t.spec;
+let state_active = null;
 
-  const meta = $("#drawer-meta");
+async function openTask(taskId) {
+  const t = (state.board?.tasks || []).find((x) => x.id === taskId);
+  if (!t) return;
+  state.activeTask = t;
+  $("#modal-col").textContent = COLUMN_TITLES[t.col] || t.col;
+  $("#modal-id").textContent = t.id;
+  $("#modal-title").textContent = t.title;
+  $("#modal-summary").textContent = t.summary || "";
+  $("#modal-spec").textContent = t.spec || "";
+  $("#modal-spec-section").hidden = !t.spec;
+
+  const meta = $("#modal-meta");
   meta.innerHTML = `
     <span class="chip chip-agent">⚒ ${esc(t.agents.join(", ") || "—")}</span>
     <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env)}</span>
     ${(t.specialists || []).map((s) => `<span class="chip chip-spec">${esc(s)}</span>`).join("")}
     ${(t.mnemos_tags || []).map((s) => `<span class="chip">${esc(s)}</span>`).join("")}`;
 
-  const memEl = $("#drawer-memories");
+  const memEl = $("#modal-memories");
   memEl.innerHTML = `<div class="column-empty">загрузка памяти…</div>`;
-  showDrawer();
+  showTaskModal();
   try {
     const scope = scopeParam();
     const url = `/api/tasks/${encodeURIComponent(t.id)}/memories${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`;
     const resolved = (t.memory_ids || []).length ? await api(url) : { items: {}, unresolved: [], sources: {} };
     const searchHtml = await memorySearchWidget(t);
-    if (drawerTask !== t) return;
+    if (state.activeTask !== t) return;
     memEl.innerHTML = "";
     for (const mid of t.memory_ids || []) {
       const m = resolved.items[mid];
@@ -457,22 +467,224 @@ function wireMemSearch(memEl, t) {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
 }
 
-function showDrawer() {
-  const d = $("#drawer"), b = $("#drawer-backdrop");
+function showTaskModal() {
+  const d = $("#task-modal"), b = $("#modal-backdrop");
   b.hidden = false;
   d.hidden = false;
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
 }
-function closeDrawer() {
-  const d = $("#drawer"), b = $("#drawer-backdrop");
+function closeTaskModal() {
+  const d = $("#task-modal"), b = $("#modal-backdrop");
   b.classList.remove("open");
   d.classList.remove("open");
-  drawerTask = null;
-  setTimeout(() => { b.hidden = true; d.hidden = true; }, 260);
+  state.activeTask = null;
+  setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
 }
-$("#drawer-close").addEventListener("click", closeDrawer);
-$("#drawer-backdrop").addEventListener("click", closeDrawer);
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+$("#modal-close").addEventListener("click", closeTaskModal);
+$("#modal-backdrop").addEventListener("click", closeTaskModal);
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#srv-modal").hidden) closeSrvModal();
+  else closeTaskModal();
+});
+
+// --------------------------------------------------------- server management
+let srvMode = "view"; // view | add
+let srvName = "";
+
+async function openServerModal(name) {
+  srvMode = name ? "view" : "add";
+  srvName = name || "";
+  const d = $("#srv-modal"), b = $("#srv-backdrop");
+  $("#srv-name").value = name;
+  $("#srv-name").disabled = !!name;
+  $("#srv-url").value = "";
+  $("#srv-token").value = "";
+  $("#srv-token").placeholder = name ? "оставить пустым — без изменения" : "env:VAR / file:/path / plain:token";
+  $("#srv-desc-input").value = "";
+  $("#srv-note").textContent = "";
+  $("#srv-history").innerHTML = "";
+  if (name) {
+    const s = (state.memServers?.servers || []).find((x) => x.name === name);
+    if (s) {
+      $("#srv-url").value = s.url;
+      $("#srv-desc-input").value = s.description || "";
+    }
+    $("#srv-title").textContent = `Хранилище «${name}»`;
+    $("#srv-desc").textContent = s?.description || "";
+    $("#srv-state").textContent = s?.state || "?";
+    $("#srv-toggle").textContent = s?.enabled ? "Отключить" : "Включить";
+    // live stats + history
+    try {
+      const st = await api(`/api/memories/servers/${encodeURIComponent(name)}/stats`);
+      const row = (st.stores || [])[0]?.stats;
+      $("#srv-stats").innerHTML = row ? `
+        <span class="srv-stat-chip">памятей: <b>${row.memories_total ?? "—"}</b></span>
+        <span class="srv-stat-chip">версия: <b>${esc(row.version || "—")}</b></span>
+        <span class="srv-stat-chip">проекты: <b>${Object.keys(row.by_project || {}).length}</b></span>
+        <span class="srv-stat-chip">latency: <b>${s?.latency_ms ?? "—"} ms</b></span>`
+        : `<span class="srv-stat-chip">статистика недоступна</span>`;
+    } catch {
+      $("#srv-stats").innerHTML = `<span class="srv-stat-chip">статистика недоступна</span>`;
+    }
+    try {
+      const h = await api(`/api/memories/servers/${encodeURIComponent(name)}/history`);
+      $("#srv-history").innerHTML = (h.history || []).map((x) =>
+        `<div class="srv-history-item"><ts>${esc((x.ts || "").slice(5, 16))}</ts><span>${esc(x.action)}</span><span>${esc(x.detail || "")}</span></div>`
+      ).join("") || `<div class="column-empty">событий пока нет</div>`;
+    } catch { /* ignore */ }
+  } else {
+    $("#srv-title").textContent = "Подключить хранилище";
+    $("#srv-desc").textContent = "Новый сервер памяти mnemos (в борде; сам стор не создаётся).";
+    $("#srv-state").textContent = "new";
+    $("#srv-stats").innerHTML = "";
+  }
+  b.hidden = false;
+  d.hidden = false;
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+}
+
+function closeSrvModal() {
+  const d = $("#srv-modal"), b = $("#srv-backdrop");
+  b.classList.remove("open");
+  d.classList.remove("open");
+  srvName = "";
+  setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
+}
+$("#srv-close").addEventListener("click", closeSrvModal);
+$("#srv-backdrop").addEventListener("click", closeSrvModal);
+
+function srvAction(action) {
+  return api(`/api/memories/servers/${encodeURIComponent(srvName)}/action`, {
+    method: "POST", body: JSON.stringify({ action }),
+  });
+}
+
+$("#srv-save").addEventListener("click", async () => {
+  const body = {
+    name: $("#srv-name").value.trim(),
+    url: $("#srv-url").value.trim(),
+    group_name: currentGroupName(),
+    description: $("#srv-desc-input").value.trim(),
+    token_ref: $("#srv-token").value.trim(),
+  };
+  try {
+    if (srvMode === "add") {
+      await api("/api/memories/servers", { method: "POST", body: JSON.stringify(body) });
+      $("#srv-note").textContent = "Хранилище подключено.";
+    } else {
+      const patch = { ...body, name: srvName };
+      await api(`/api/memories/servers/${encodeURIComponent(srvName)}`, { method: "PATCH", body: JSON.stringify(patch) });
+      $("#srv-note").textContent = "Сохранено.";
+    }
+    await loadMemServers();
+    refreshStores();
+    renderGroups();
+  } catch (err) {
+    $("#srv-note").textContent = "Ошибка: " + err.message;
+  }
+});
+
+$("#srv-test").addEventListener("click", async () => {
+  $("#srv-note").textContent = "проверка…";
+  try {
+    const r = await srvAction("test");
+    $("#srv-note").textContent = r.ok
+      ? `ok · ${r.probe.latency_ms} ms${r.probe.auth ? "" : " (без токена)"}`
+      : `ошибка: ${r.probe.error || ("HTTP " + r.probe.http_status)}`;
+  } catch (err) { $("#srv-note").textContent = "Ошибка: " + err.message; }
+});
+
+$("#srv-reload").addEventListener("click", async () => {
+  $("#srv-note").textContent = "перезагрузка…";
+  try {
+    const r = await srvAction("reload");
+    $("#srv-note").textContent = r.ok ? "Перезагружено, связь в порядке." : "Связь не восстановилась.";
+    await loadMemServers(); refreshStores();
+  } catch (err) { $("#srv-note").textContent = "Ошибка: " + err.message; }
+});
+
+$("#srv-sync").addEventListener("click", async () => {
+  $("#srv-note").textContent = "синхронизация…";
+  try {
+    const r = await srvAction("sync");
+    $("#srv-note").textContent = r.ok
+      ? `Синк ok: ${r.stats?.memories_total ?? "?"} памятей.`
+      : "Синк не прошёл — хранилище недоступно.";
+    await loadMemServers(); refreshStores();
+  } catch (err) { $("#srv-note").textContent = "Ошибка: " + err.message; }
+});
+
+$("#srv-toggle").addEventListener("click", async () => {
+  const s = (state.memServers?.servers || []).find((x) => x.name === srvName);
+  try {
+    await srvAction(s?.enabled ? "disable" : "enable");
+    await loadMemServers(); refreshStores();
+    closeSrvModal();
+  } catch (err) { $("#srv-note").textContent = "Ошибка: " + err.message; }
+});
+
+$("#srv-delete").addEventListener("click", async () => {
+  // из борда, не физически
+  try {
+    await api(`/api/memories/servers/${encodeURIComponent(srvName)}`, { method: "DELETE" });
+    closeSrvModal();
+    await loadMemServers(); refreshStores(); renderGroups();
+  } catch (err) { $("#srv-note").textContent = "Ошибка: " + err.message; }
+});
+
+$("#srv-add").addEventListener("click", () => openServerModal(null));
+$("#grp-add").addEventListener("click", async () => {
+  const name = prompt("Имя кластера памяти (латиницей, цифры, -):");
+  if (!name) return;
+  const title = prompt("Название кластера (отображаемое):", name) || name;
+  try {
+    await api("/api/memories/groups", {
+      method: "POST",
+      body: JSON.stringify({ name: name.toLowerCase(), title }),
+    });
+    await loadMemServers(); renderGroups();
+  } catch (err) { alert("Ошибка: " + err.message); }
+});
+
+function currentGroupName() {
+  // new servers join the currently viewed group, else 'default'
+  if (state.memScope !== "all") {
+    const groups = state.memServers?.groups || {};
+    if (groups[state.memScope]) return state.memScope;
+  }
+  return "default";
+}
+
+function renderGroups() {
+  const el = $("#groups");
+  if (!el) return;
+  el.innerHTML = "";
+  const raw = state.memServers?.groups || {};
+  // groups may be an array of {name, servers} or a name->[members] map
+  const entries = Array.isArray(raw)
+    ? raw.map((g) => [g.name, g.servers || []])
+    : Object.entries(raw);
+  const servers = state.memServers?.servers || [];
+  for (const [name, members] of entries) {
+    if (!members.length && name === "default") continue;
+    const row = document.createElement("div");
+    row.className = "group-row" + (state.memScope === name ? " active" : "");
+    row.innerHTML = `
+      <span class="group-glyph">⬡</span>
+      <span class="group-name">${esc(name)}</span>
+      <span class="group-servers">${members.length} хранилищ: ${esc(members.join(", "))}</span>`;
+    row.title = `кластер: ${members.join(", ")}`;
+    row.addEventListener("click", () => {
+      state.memScope = name;
+      localStorage.setItem(SCOPE_KEY, name);
+      $("#mem-scope").value = name;
+      updateScopeLabels();
+      refreshPulse();
+    });
+    el.appendChild(row);
+  }
+}
 
 // ------------------------------------------------------------------ live
 function setConn(kind, label) {
@@ -511,6 +723,9 @@ function connectSSE() {
         || ev.kind === "task.updated" || ev.kind === "task.deleted") {
       refreshBoard();
     }
+    if (ev.kind === "server.changed") {
+      loadMemServers().then(() => { refreshStores(); renderGroups(); }).catch(() => {});
+    }
   };
 }
 
@@ -534,6 +749,7 @@ applyTheme(localStorage.getItem(THEME_KEY)
   await loadMemServers().catch(() => {});
   refreshPulse();
   refreshStores();
+  renderGroups();
   healthLoop();
   setInterval(healthLoop, 30000);
   setInterval(refreshPulse, 60000);
