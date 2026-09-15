@@ -29,3 +29,7 @@ data/
 # Python
 __pycache__/
 *.pyc
+
+# Backups (local snapshots, never in git)
+../backups/
+
