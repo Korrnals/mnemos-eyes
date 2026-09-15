@@ -1,0 +1,16 @@
+# vesmaro-eyes — memory servers registry (ai-agent cluster)
+#
+# Mounted into the pod at /data/memories.yaml (configMap, read-only).
+# Token resolution per server: token_file > token_env > token.
+servers:
+  - name: cluster
+    url: http://agentsnode-mnemos:8787
+    token_env: MNEMOS_TOKEN
+    group: abyss
+    description: mnemos в ai-agent кластере (k3s)
+    primary: true
+  - name: laptop
+    url: http://192.168.1.86:8788
+    token_env: MNEMOS_LAPTOP_TOKEN
+    group: abyss
+    description: mnemos ноутбука (LAN-бинд 8788, auth on)

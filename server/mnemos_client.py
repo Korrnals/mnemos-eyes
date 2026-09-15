@@ -1,82 +1,60 @@
-"""HTTP client to the live mnemos memory engine.
+"""HTTP client(s) to live mnemos memory engines.
 
-The board server is the only component that talks to mnemos — the browser
-SPA never sees mnemos credentials. In the ai-agent cluster we reach mnemos
-via the in-cluster service ``agentsnode-mnemos:8787``; in local compose we
-use a loopback URL from the environment.
+Multi-server: the board watches several mnemos instances (see
+``memory_registry``) — individually or merged into a group ("memory
+cluster"). Every function takes a *server dict* ``{name,url,token,...}``
+so callers address a specific engine; the browser never sees tokens.
 """
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 
 import httpx
 
-# A mnk_ API token with TOTP not required. Read from the environment; in the
-# cluster it is injected from the existing ``mnemos-m2m-token`` secret.
-MNEMOS_URL = os.environ.get("MNEMOS_URL", "http://agentsnode-mnemos:8787")
-MNEMOS_TOKEN = os.environ.get("MNEMOS_TOKEN", "")
-
+# mnemos hybrid search vectorizes on CPU and can take ~5 s per query.
 _TIMEOUT = httpx.Timeout(15.0, connect=2.0)
 
 
-def _headers() -> dict[str, str]:
+def _headers(server: dict[str, Any]) -> dict[str, str]:
     h = {"Accept": "application/json"}
-    if MNEMOS_TOKEN:
-        h["Authorization"] = f"Bearer {MNEMOS_TOKEN}"
+    token = server.get("token") or ""
+    if token:
+        h["Authorization"] = f"Bearer {token}"
     return h
 
 
-async def fetch_json(path: str, params: dict[str, Any] | None = None) -> tuple[int, Any]:
-    """GET a path from mnemos. Returns (status_code, body)."""
-    url = f"{MNEMOS_URL.rstrip('/')}{path}"
-    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_headers()) as client:
-        try:
-            resp = await client.get(url, params=params)
-        except httpx.HTTPError as exc:
-            return 503, {"detail": f"mnemos unreachable: {exc.__class__.__name__}"}
-        if resp.status_code >= 400:
-            try:
-                body: Any = resp.json()
-            except ValueError:
-                body = {"detail": resp.text[:300]}
-            return resp.status_code, body
-        try:
-            return resp.status_code, resp.json()
-        except ValueError:
-            return resp.status_code, {"detail": "mnemos returned non-JSON"}
-
-
-async def post_json_async(path: str, body: dict[str, Any], timeout: float = 6.0) -> tuple[int, Any]:
-    """POST JSON to mnemos asynchronously (usable inside async routes)."""
-    url = f"{MNEMOS_URL.rstrip('/')}{path}"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), headers=_headers()) as client:
-        try:
-            resp = await client.post(url, json=body)
-        except httpx.HTTPError as exc:
-            return 503, {"detail": f"mnemos unreachable: {exc.__class__.__name__}"}
-        if resp.status_code >= 400:
-            try:
-                data: Any = resp.json()
-            except ValueError:
-                data = {"detail": resp.text[:300]}
-            return resp.status_code, data
-        try:
-            return resp.status_code, resp.json()
-        except ValueError:
-            return resp.status_code, {"detail": "mnemos returned non-JSON"}
-
-
-def post_json(path: str, body: dict[str, Any], timeout: float = 15.0) -> tuple[int, Any]:
-    """POST JSON to mnemos (synchronous helper, used sparingly)."""
-    url = f"{MNEMOS_URL.rstrip('/')}{path}"
+async def fetch_json(server: dict[str, Any], path: str,
+                     params: dict[str, Any] | None = None) -> tuple[int, Any]:
+    """GET a path from one mnemos server. Returns (status_code, body)."""
+    url = f"{server['url']}{path}"
     try:
-        with httpx.Client(timeout=timeout, headers=_headers()) as client:
-            resp = client.post(url, json=body)
+        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_headers(server)) as client:
+            resp = await client.get(url, params=params)
     except httpx.HTTPError as exc:
-        return 503, {"detail": f"mnemos unreachable: {exc.__class__.__name__}"}
+        return 503, {"detail": f"{server['name']}: unreachable ({exc.__class__.__name__})"}
+    if resp.status_code >= 400:
+        try:
+            body: Any = resp.json()
+        except ValueError:
+            body = {"detail": resp.text[:300]}
+        return resp.status_code, body
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, {"detail": "mnemos returned non-JSON"}
+
+
+async def post_json_async(server: dict[str, Any], path: str, body: dict[str, Any],
+                          timeout: float = 8.0) -> tuple[int, Any]:
+    """POST JSON to one mnemos server (async — usable inside async routes)."""
+    url = f"{server['url']}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), headers=_headers(server)) as client:
+            resp = await client.post(url, json=body)
+    except httpx.HTTPError as exc:
+        return 503, {"detail": f"{server['name']}: unreachable ({exc.__class__.__name__})"}
     if resp.status_code >= 400:
         try:
             data: Any = resp.json()
@@ -89,22 +67,49 @@ def post_json(path: str, body: dict[str, Any], timeout: float = 15.0) -> tuple[i
         return resp.status_code, {"detail": "mnemos returned non-JSON"}
 
 
-async def health() -> dict[str, Any]:
-    """Cheap async health probe used by /api/health aggregation.
+def post_json(server: dict[str, Any], path: str, body: dict[str, Any],
+              timeout: float = 15.0) -> tuple[int, Any]:
+    """POST JSON to one mnemos server (sync helper, used sparingly)."""
+    url = f"{server['url']}{path}"
+    try:
+        with httpx.Client(timeout=timeout, headers=_headers(server)) as client:
+            resp = client.post(url, json=body)
+    except httpx.HTTPError as exc:
+        return 503, {"detail": f"{server['name']}: unreachable ({exc.__class__.__name__})"}
+    if resp.status_code >= 400:
+        try:
+            data: Any = resp.json()
+        except ValueError:
+            data = {"detail": resp.text[:300]}
+        return resp.status_code, data
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, {"detail": "mnemos returned non-JSON"}
 
-    mnemos hybrid search vectorizes on CPU and can take ~5 s per query, so
-    this probe uses a generous read timeout and reports honest latency.
+
+# ------------------------------------------------------------------ probes
+async def health(server: dict[str, Any]) -> dict[str, Any]:
+    """Cheap async probe of one memory server. Honest latency, honest errors.
+
+    Uses a HEAD /health-style short POST probe: hybrid search on a cold CPU
+    store can take >10 s, so the probe uses the cheapest query with a
+    generous 12 s budget; slow-but-alive stores still report ok.
     """
     started = time.monotonic()
-    code, body = await post_json_async("/search", {"query": "vesmaro", "limit": 1}, timeout=8.0)
+    code, body = await post_json_async(
+        server, "/search", {"query": "vesmaro", "limit": 1}, timeout=12.0
+    )
     latency_ms = round((time.monotonic() - started) * 1000, 1)
     ok = code == 200
     summary: dict[str, Any] = {
+        "server": server["name"],
+        "group": server.get("group", "default"),
         "ok": ok,
         "http_status": code,
         "latency_ms": latency_ms,
-        "url": MNEMOS_URL,
-        "auth": bool(MNEMOS_TOKEN),
+        "url": server["url"],
+        "auth": bool(server.get("token")),
     }
     # mnemos POST /search returns a bare list of results.
     results = body if isinstance(body, list) else (body or {}).get("results", [])
@@ -116,50 +121,64 @@ async def health() -> dict[str, Any]:
     return summary
 
 
-async def memory_pulse(project: str = "mnemos-eyes", limit: int = 8) -> dict[str, Any]:
-    """Recent memories for the live 'memory pulse' rail on the board."""
-    code, body = await fetch_json("/memories", {"project": project, "limit": limit})
-    if code != 200 or not isinstance(body, list):
-        # Fall back to search — some deployments restrict listing.
-        code2, body2 = await fetch_json("/search", {"query": project, "limit": limit})
-        if code2 != 200 or not isinstance(body2, dict):
-            return {"ok": False, "status": code, "detail": body}
-        items = body2.get("results") or []
-        return {
-            "ok": True,
-            "source": "search",
-            "items": [
-                {
-                    "id": i.get("id"),
-                    "title": i.get("title") or (i.get("content", "")[:80]),
-                    "tags": i.get("tags", []),
-                    "score": i.get("score"),
-                    "status": i.get("status"),
-                }
-                for i in items
-            ],
-        }
+async def store_stats(server: dict[str, Any]) -> dict[str, Any] | None:
+    """Volume stats of one store (None when unreachable)."""
+    code, body = await fetch_json(server, "/api/v1/stats")
+    if code != 200 or not isinstance(body, dict):
+        return None
+    vol = body.get("volume", {})
     return {
+        "memories_total": vol.get("memories_total"),
+        "by_project": vol.get("by_project", {}),
+        "by_agent": vol.get("by_agent", {}),
+        "by_status": vol.get("by_status", {}),
+        "version": body.get("version"),
+    }
+
+
+async def memory_pulse(server: dict[str, Any], project: str = "mnemos-eyes",
+                       limit: int = 8) -> dict[str, Any]:
+    """Recent memories of a project from ONE store; enriched with stats."""
+    code, body = await fetch_json(server, "/memories", {"project": project, "limit": limit})
+    if code != 200 or not isinstance(body, list):
+        code2, body2 = await fetch_json(server, "/search", {"query": project, "limit": limit})
+        if code2 != 200 or not isinstance(body2, list):
+            return {"server": server["name"], "ok": False, "status": code, "detail": body,
+                    "items": []}
+        items = body2
+    else:
+        items = body
+    return {
+        "server": server["name"],
+        "group": server.get("group", "default"),
         "ok": True,
-        "source": "memories",
         "items": [
             {
                 "id": i.get("id"),
                 "title": i.get("title") or (i.get("content", "")[:80]),
                 "tags": i.get("tags", []),
-                "score": None,
                 "status": i.get("status"),
+                "created_at": i.get("created_at"),
             }
-            for i in body
+            for i in items
         ],
     }
 
 
-async def resolve_memories(ids: list[str]) -> dict[str, Any]:
-    """Resolve memory ids to cards for task drawers. Failures are honest."""
-    out: dict[str, Any] = {"items": {}, "unresolved": []}
+async def search(server: dict[str, Any], query: str, limit: int = 10,
+                 project: str = "") -> tuple[int, Any]:
+    """Hybrid search on ONE server (POST /search; mnemos is POST-only here)."""
+    body: dict[str, Any] = {"query": query, "limit": min(limit, 25)}
+    if project:
+        body["project"] = project
+    return await post_json_async(server, "/search", body, timeout=15.0)
+
+
+async def resolve_memories(server: dict[str, Any], ids: list[str]) -> dict[str, Any]:
+    """Resolve memory ids on ONE server for task drawers. Honest failures."""
+    out: dict[str, Any] = {"server": server["name"], "items": {}, "unresolved": []}
     for mid in ids[:12]:
-        code, body = await fetch_json(f"/memories/{mid}")
+        code, body = await fetch_json(server, f"/memories/{mid}")
         if code == 200 and isinstance(body, dict):
             out["items"][mid] = {
                 "id": mid,

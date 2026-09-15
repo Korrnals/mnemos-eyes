@@ -68,7 +68,44 @@ kubectl -n kube-agents rollout restart deploy/vesmaro-eyes
   mnemos ingress too). Working pattern = hostNetwork pods
   (`agentsnode-hermes-desktop`, now `vesmaro-eyes`).
 
-## 5. Next steps
+## 5. Multi-server memory (v0.2)
+
+The board watches **several memory servers** — individually or merged into
+**groups ("memory clusters")** — via a registry file on the volume:
+
+- **Registry**: `/data/memories.yaml` (cluster: ConfigMap
+  `vesmaro-eyes-memories`; local: `./data/memories.yaml`). Token resolution
+  per server: `token_file` > `token_env` > inline `token`.
+- **Scope switcher** in the top bar: `все серверы памяти` / each group
+  (⬡ кластер «abyss») / each server (● cluster, ● laptop). The rail shows
+  «Хранилища» — every declared server with live health, memory count and
+  its group; click a row to switch scope.
+- **Merged views**: group pulse merges items sorted by recency with a
+  per-server badge; merged search ranks across servers; task drawers
+  resolve each memory id against every server in scope and badge the
+  provenance («сервер: laptop»).
+- **API**: `/api/memories/servers`, `/api/memories/pulse?scope=…`,
+  `/api/memories/servers/{scope}/stats`, `/api/tasks/{id}/memories?scope=…`,
+  `/api/mnemos/search?q=…&scope=…`.
+
+### Laptop server setup (done 2026-09-15)
+
+The laptop mnemos now also serves **LAN** (for the cluster and future mesh):
+`mnemos serve --host 0.0.0.0 --port 8788` with auth (config
+`~/.mnemos/config.lan.yaml`, TOTP master key in `~/.mnemos/totp-master.key`,
+board token `vesmaro-eyes-board` in k8s secret `vesmaro-eyes-laptop`).
+A loopback-only instance on 8787 stays for local MCP/CLI traffic.
+
+### Access troubleshooting
+
+`vesmaro.abyss.lab` resolves via `/etc/hosts` (→ 192.168.1.72). If a browser
+cannot open it: disable secure-DNS (DoH) for the domain, or bypass DNS by
+using the Host-header ingress from any tool, or add the hosts entry manually.
+NodePort fallback was tested but the node firewall only admits 80/443/6443.
+Static assets are cache-busted (`?v=…`) — after an image update, hard-reload
+is no longer required.
+
+## 6. Next steps
 
 1. **Federation** — connect laptop ⇄ cluster mnemos stores (mnemos-mesh) so
    board memory links resolve cluster-side.

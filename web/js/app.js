@@ -6,6 +6,8 @@ const state = {
   board: null,        // {columns, tasks, counts}
   memories: {},       // task_id -> resolve response
   es: null,           // EventSource
+  memServers: null,   // {servers, groups}
+  memScope: "all",    // server name | group name | "all"
 };
 
 // ------------------------------------------------------------------ helpers
@@ -133,6 +135,69 @@ async function refreshBoard() {
   renderRail();
 }
 
+// ------------------------------------------------- memory servers & scope
+const SCOPE_KEY = "mnemos-eyes:memscope";
+
+function scopeParam() {
+  return state.memScope && state.memScope !== "all" ? state.memScope : "";
+}
+
+async function loadMemServers() {
+  const data = await api("/api/memories/servers");
+  state.memServers = data;
+  const sel = $("#mem-scope");
+  const prev = localStorage.getItem(SCOPE_KEY) || "all";
+  let html = `<option value="all">◉ все серверы памяти</option>`;
+  const groups = Object.entries(data.groups || {});
+  for (const [group, names] of groups) {
+    if (names.length > 1) {
+      html += `<option value="${esc(group)}">⬡ кластер «${esc(group)}» (${names.length})</option>`;
+    }
+  }
+  for (const s of data.servers || []) {
+    const mark = s.ok ? "●" : "○";
+    html += `<option value="${esc(s.name)}">${mark} ${esc(s.name)}</option>`;
+  }
+  sel.innerHTML = html;
+  state.memScope = (prev === "all" || sel.querySelector(`option[value="${CSS.escape(prev)}"]`)) ? prev : "all";
+  sel.value = state.memScope;
+  sel.onchange = () => {
+    state.memScope = sel.value;
+    localStorage.setItem(SCOPE_KEY, sel.value);
+    updateScopeLabels();
+    refreshPulse();
+    refreshStores();
+    if (drawerTask) openDrawer(drawerTask);
+  };
+  updateScopeLabels();
+}
+
+function updateScopeLabels() {
+  const label = $("#pulse-scope-label");
+  if (!label) return;
+  if (state.memScope === "all") {
+    label.textContent = "все серверы памяти · объединённо";
+    return;
+  }
+  const servers = state.memServers?.servers || [];
+  const groups = state.memServers?.groups || {};
+  if (groups[state.memScope]) {
+    label.textContent = `группа «${state.memScope}» · ${groups[state.memScope].length} сервер(ов) · объединённо`;
+  } else {
+    const s = servers.find((x) => x.name === state.memScope);
+    label.textContent = `сервер «${state.memScope}»${s?.url ? " · " + s.url : ""}`;
+  }
+}
+
+function updateMemStatus(serversHealth) {
+  const ok = (serversHealth || []).filter((s) => s.ok).length;
+  const total = (serversHealth || []).length;
+  const el = $("#mnemos-label");
+  el.textContent = total ? `memory: ${ok}/${total} online` : "memory: —";
+  $("#mnemos-status").style.borderColor = ok
+    ? "var(--color-border-iris)" : "var(--color-error)";
+}
+
 // ------------------------------------------------------------------- rail
 function renderRail() {
   const board = state.board;
@@ -177,36 +242,86 @@ function renderRail() {
 async function refreshPulse() {
   const el = $("#pulse");
   try {
-    const data = await api("/api/mnemos/pulse?project=mnemos-eyes&limit=8");
-    el.innerHTML = "";
-    if (!data.ok) {
-      el.innerHTML = `<div class="column-empty">mnemos недоступен</div>`;
-      return;
-    }
-    if (!data.items.length) {
-      const stats = data.store_stats;
-      if (stats && stats.memories_total) {
-        const projects = Object.entries(stats.by_project || {})
-          .map(([p, n]) => `${p} (${n})`).join(", ");
-        el.innerHTML = `<div class="column-empty">в этом сторе пока нет памятей проекта mnemos-eyes.<br/>Стор живой: ${stats.memories_total} памятей (${esc(projects)}). Памяти vesmaro-программы живут в лаптопном сторе — свяжите их федерацией mnemos-mesh.</div>`;
-      } else {
-        el.innerHTML = `<div class="column-empty">память молчит</div>`;
-      }
-      return;
-    }
-    for (const item of data.items) {
-      const div = document.createElement("div");
-      div.className = "pulse-item";
-      const tags = (item.tags || []).slice(0, 3)
-        .map((t) => `<span class="pulse-tag">${esc(t)}</span>`).join("");
-      div.innerHTML = `
-        <div class="pulse-title">${esc(item.title || "")}</div>
-        <div class="pulse-tags">${tags}</div>`;
-      div.title = item.id || "";
-      el.appendChild(div);
-    }
+    const scope = scopeParam();
+    const qs = `project=mnemos-eyes&limit=8${scope ? `&scope=${encodeURIComponent(scope)}` : ""}`;
+    const data = await api(`/api/memories/pulse?${qs}`);
+    renderPulse(data);
   } catch (err) {
-    el.innerHTML = `<div class="column-empty">mnemos недоступен: ${esc(err.message)}</div>`;
+    el.innerHTML = `<div class="column-empty">память недоступна: ${esc(err.message)}</div>`;
+  }
+}
+
+function renderPulse(data) {
+  const el = $("#pulse");
+  el.innerHTML = "";
+  if (!data.ok && !(data.items || []).length) {
+    el.innerHTML = `<div class="column-empty">память недоступна</div>`;
+    return;
+  }
+  const items = data.items || [];
+  if (!items.length) {
+    const stats = data.store_stats || [];
+    const line = stats
+      .filter((s) => s.stats)
+      .map((s) => `${esc(s.server)}: ${s.stats.memories_total} памятей`)
+      .join(" · ");
+    if (line) {
+      const projects = stats.filter((s) => s.stats)
+        .map((s) => `${esc(s.server)} → ${Object.entries(s.stats.by_project || {})
+          .map(([p, n]) => `${esc(p)} (${n})`).join(", ") || "пусто"}`).join("<br/>");
+      el.innerHTML = `<div class="column-empty">в выбранном источнике пока нет памятей проекта mnemos-eyes.<br/><br/>Живые хранилища:<br/>${projects}</div>`;
+    } else {
+      el.innerHTML = `<div class="column-empty">память молчит</div>`;
+    }
+    return;
+  }
+  const multi = state.memScope === "all"
+    || Object.keys(state.memServers?.groups || {}).includes(state.memScope);
+  for (const item of items) {
+    const div = document.createElement("div");
+    div.className = "pulse-item";
+    const tags = (item.tags || []).slice(0, 3)
+      .map((t) => `<span class="pulse-tag">${esc(t)}</span>`).join("");
+    const srv = multi && item.server
+      ? `<span class="pulse-server" title="сервер памяти">${esc(item.server)}</span>` : "";
+    div.innerHTML = `
+      <div class="pulse-title">${esc(item.title || "")}</div>
+      <div class="pulse-tags">${srv}${tags}</div>`;
+    div.title = item.id ? `${item.id} · ${item.server || ""}` : "";
+    el.appendChild(div);
+  }
+}
+
+// ------------------------------------------------------------ stores rail
+async function refreshStores() {
+  const el = $("#stores");
+  if (!state.memServers) { try { await loadMemServers(); } catch { /* ignore */ } }
+  const servers = (state.memServers?.servers || []);
+  el.innerHTML = "";
+  if (!servers.length) {
+    el.innerHTML = `<div class="column-empty">серверы не объявлены</div>`;
+    return;
+  }
+  // health snapshot comes from /api/health (cheap enough) — reuse last healthLoop data via cache
+  const cache = state._healthCache || [];
+  for (const s of servers) {
+    const h = cache.find((x) => x.name === s.name) || {};
+    const row = document.createElement("div");
+    row.className = "store-row";
+    row.innerHTML = `
+      <span class="dot ${h.ok ? "dot-on" : "dot-off"}"></span>
+      <span class="store-name">${esc(s.name)}</span>
+      <span class="store-total">${h.memories_total != null ? h.memories_total + " памятей" : (h.error ? "недоступен" : "…")}</span>
+      <span class="store-group">${esc(s.group)}</span>`;
+    row.title = `${s.url}${s.description ? " — " + s.description : ""}`;
+    row.addEventListener("click", () => {
+      state.memScope = s.name;
+      localStorage.setItem(SCOPE_KEY, s.name);
+      $("#mem-scope").value = s.name;
+      updateScopeLabels();
+      refreshPulse();
+    });
+    el.appendChild(row);
   }
 }
 
@@ -232,17 +347,23 @@ async function openDrawer(t) {
   memEl.innerHTML = `<div class="column-empty">загрузка памяти…</div>`;
   showDrawer();
   try {
-    const [resolved, searchHtml] = await Promise.all([
-      (t.memory_ids || []).length
-        ? api(`/api/tasks/${encodeURIComponent(t.id)}/memories`)
-        : Promise.resolve({ items: {}, unresolved: [] }),
-      memorySearchWidget(t),
-    ]);
+    const scope = scopeParam();
+    const url = `/api/tasks/${encodeURIComponent(t.id)}/memories${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`;
+    const resolved = (t.memory_ids || []).length ? await api(url) : { items: {}, unresolved: [], sources: {} };
+    const searchHtml = await memorySearchWidget(t);
     if (drawerTask !== t) return;
     memEl.innerHTML = "";
     for (const mid of t.memory_ids || []) {
       const m = resolved.items[mid];
-      memEl.appendChild(m ? memoryCard(m) : unresolvedCard(mid, resolved));
+      const card = m ? memoryCard(m) : unresolvedCard(mid, resolved);
+      const src = m && resolved.sources?.[mid];
+      if (src) {
+        const badge = document.createElement("div");
+        badge.className = "memory-provenance";
+        badge.innerHTML = `<span class="pulse-server">сервер: ${esc(src)}</span>`;
+        card.insertBefore(badge, card.firstChild);
+      }
+      memEl.appendChild(card);
     }
     memEl.insertAdjacentHTML("beforeend", searchHtml);
     wireMemSearch(memEl, t);
@@ -295,13 +416,16 @@ function wireMemSearch(memEl, t) {
     if (!q) return;
     hits.innerHTML = `<div class="column-empty">поиск…</div>`;
     try {
-      const data = await api(`/api/mnemos/search?q=${encodeURIComponent(q)}&limit=6`);
+      const scope = scopeParam();
+      const scopeQ = scope ? `&scope=${encodeURIComponent(scope)}` : "";
+      const data = await api(`/api/mnemos/search?q=${encodeURIComponent(q)}&limit=6${scopeQ}`);
       hits.innerHTML = "";
       for (const r of (data.results || [])) {
         const row = document.createElement("div");
         row.className = "mem-hit";
         row.innerHTML = `
           <span class="mem-hit-title">${esc(r.title || (r.content || "").slice(0, 70))}</span>
+          <span class="mem-hit-server">${esc(r.server || "")}</span>
           <span class="mem-hit-score">${typeof r.score === "number" ? r.score.toFixed(3) : ""}</span>
           <button type="button">+</button>`;
         $("button", row).addEventListener("click", async () => {
@@ -314,14 +438,17 @@ function wireMemSearch(memEl, t) {
               body: JSON.stringify({ memory_ids: t.memory_ids }),
             });
             row.remove();
-            const resolved = await api(`/api/tasks/${encodeURIComponent(t.id)}/memories`);
+            const scope2 = scopeParam();
+            const resolved = await api(`/api/tasks/${encodeURIComponent(t.id)}/memories${scope2 ? `?scope=${encodeURIComponent(scope2)}` : ""}`);
             const m = resolved.items[r.id];
             if (m) memEl.insertBefore(memoryCard(m), $(".mem-search", memEl));
           } catch (err) { console.error(err); }
         });
         hits.appendChild(row);
       }
-      if (!hits.children.length) hits.innerHTML = `<div class="column-empty">ничего не найдено</div>`;
+      if (!hits.children.length) {
+        hits.innerHTML = `<div class="column-empty">ничего не найдено${(data.errors || []).length ? " · " + esc(data.errors.map((e) => `${e.server}: ${e.status}`).join(", ")) : ""}</div>`;
+      }
     } catch (err) {
       hits.innerHTML = `<div class="column-empty">${esc(err.message)}</div>`;
     }
@@ -363,8 +490,10 @@ function setMnemos(ok, label) {
 async function healthLoop() {
   try {
     const h = await api("/api/health");
-    const m = h.mnemos || {};
-    setMnemos(m.ok, m.ok ? `ok · ${m.latency_ms}ms` : (m.error || "down"));
+    state._healthCache = h.servers || [];
+    updateMemStatus(h.servers);
+    const anyOk = (h.servers || []).some((s) => s.ok);
+    setMnemos(anyOk, anyOk ? "ok" : "down");
   } catch { setMnemos(false, "unreachable"); }
 }
 
@@ -402,7 +531,9 @@ applyTheme(localStorage.getItem(THEME_KEY)
 (async function boot() {
   connectSSE();
   await refreshBoard();
+  await loadMemServers().catch(() => {});
   refreshPulse();
+  refreshStores();
   healthLoop();
   setInterval(healthLoop, 30000);
   setInterval(refreshPulse, 60000);

@@ -1,10 +1,11 @@
 """vesmaro-eyes — task board server (FastAPI).
 
 Serves the vanilla-JS SPA from ``../web`` and a small JSON API over the
-board store, plus a narrow authenticated proxy to the live mnemos engine.
+board store, plus a narrow authenticated proxy to **one or more live
+mnemos engines** (multi-server, groups = "memory clusters").
 
 Run:    uvicorn server.app:app --host 0.0.0.0 --port 8080
-Volume: /data/board.db (WAL)
+Volume: /data (board.db + memories.yaml)
 """
 
 from __future__ import annotations
@@ -21,6 +22,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import mnemos_client
+from .memory_registry import (
+    DEFAULT_CONFIG_PATH,
+    groups_of,
+    load_servers,
+    write_config_template,
+)
 from .store import Store, VALID_STATUSES
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
@@ -31,6 +38,8 @@ STATIC_DIR = Path(os.environ.get("VESMARO_WEB", Path(__file__).resolve().parents
 # boundary); mnemos credentials stay server-side. Override to require a
 # bearer for mutations if the board ever leaves the trust zone.
 BOARD_WRITE_TOKEN = os.environ.get("VESMARO_BOARD_TOKEN", "")
+
+write_config_template(DEFAULT_CONFIG_PATH)
 
 store = Store(DB_PATH)
 
@@ -46,12 +55,31 @@ def _broadcast(event: dict[str, Any]) -> None:
             pass
 
 
+def get_server(name: str) -> dict[str, Any]:
+    for s in load_servers():
+        if s["name"] == name:
+            return s
+    raise HTTPException(404, f"memory server '{name}' not declared")
+
+
+def get_scope(scope: str) -> tuple[str, list[dict[str, Any]]]:
+    """Resolve a scope: a single server name or a group name."""
+    servers = load_servers()
+    matched = [s for s in servers if s["name"] == scope]
+    if matched:
+        return "server", matched
+    grouped = [s for s in servers if s["group"] == scope]
+    if grouped:
+        return "group", grouped
+    raise HTTPException(404, f"no memory server or group named '{scope}'")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="vesmaro-eyes", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="0.2.0", lifespan=lifespan)
 
 
 # --------------------------------------------------------------------- models
@@ -88,16 +116,26 @@ class MoveBody(BaseModel):
 # ------------------------------------------------------------------ board API
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    mnemos, pulse = await asyncio.gather(
-        mnemos_client.health(),
-        mnemos_client.memory_pulse(limit=1),
-    )
+    servers = load_servers()
+    probes = await asyncio.gather(*(mnemos_client.health(s) for s in servers))
+    stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
+    per_server = []
+    for s, p, st in zip(servers, probes, stats):
+        per_server.append({
+            "name": s["name"],
+            "group": s["group"],
+            "description": s["description"],
+            "ok": p["ok"],
+            "latency_ms": p["latency_ms"],
+            "error": p.get("error"),
+            "memories_total": (st or {}).get("memories_total"),
+        })
     return {
         "ok": True,
         "service": "vesmaro-eyes",
         "board_tasks": sum(store.board()["counts"].values()),
-        "mnemos": mnemos,
-        "pulse_probe": {"ok": pulse["ok"]},
+        "servers": per_server,
+        "groups": groups_of(servers),
     }
 
 
@@ -149,61 +187,185 @@ async def delete_task(task_id: str, request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/tasks/{task_id}/memories")
-async def task_memories(task_id: str) -> dict[str, Any]:
+async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
+    """Resolve task memory links against a server, a group, or all servers.
+
+    Multi-server: ids are attempted on every server in scope; a hit is
+    attributed to the resolving server so the UI can show provenance.
+    """
     task = store.task(task_id)
     if task is None:
         raise HTTPException(404, "task not found")
     ids: list[str] = task.get("memory_ids") or []
     if not ids:
-        return {"items": {}, "unresolved": []}
-    return await mnemos_client.resolve_memories(ids)
+        return {"items": {}, "unresolved": [], "sources": {}}
+
+    if scope:
+        _, servers = get_scope(scope)
+    else:
+        servers = load_servers()
+
+    results = await asyncio.gather(
+        *(mnemos_client.resolve_memories(s, ids) for s in servers)
+    )
+    items: dict[str, Any] = {}
+    unresolved: list[dict[str, Any]] = []
+    sources: dict[str, str] = {}
+    for s, r in zip(servers, results):
+        for mid, card in r["items"].items():
+            if mid not in items:
+                items[mid] = card
+                sources[mid] = s["name"]
+        for u in r["unresolved"]:
+            if u["id"] not in items and all(u["id"] != x["id"] for x in unresolved):
+                unresolved.append({"id": u["id"], "status": u["status"],
+                                   "server": s["name"]})
+    # an id unresolved everywhere lists once per server; trim to first
+    seen: set[str] = set()
+    unresolved = [u for u in unresolved if not (u["id"] in seen or seen.add(u["id"]))]
+    return {"items": items, "unresolved": unresolved, "sources": sources}
 
 
-@app.get("/api/mnemos/tags")
-async def mnemos_tags() -> dict[str, Any]:
-    code, body = await mnemos_client.fetch_json("/tags")
-    if code != 200:
-        raise HTTPException(code, body if isinstance(body, str) else body.get("detail", "mnemos error"))
-    return {"ok": True, "tags": body}
-
-
-@app.get("/api/mnemos/pulse")
-async def mnemos_pulse(project: str = "mnemos-eyes", limit: int = 8) -> dict[str, Any]:
-    data = await mnemos_client.memory_pulse(project=project, limit=min(limit, 20))
-    # Enrich with honest store stats — when the project has no memories here
-    # (e.g. the laptop store is federated separately), say so instead of
-    # pretending the memory is empty.
-    if not data.get("items"):
-        code, stats = await mnemos_client.fetch_json("/api/v1/stats")
-        if code == 200 and isinstance(stats, dict):
-            data["store_stats"] = {
-                "memories_total": stats.get("volume", {}).get("memories_total"),
-                "by_project": stats.get("volume", {}).get("by_project", {}),
+@app.get("/api/memories/servers")
+async def memory_servers() -> dict[str, Any]:
+    """Declared memory servers + groups (no tokens ever leave the server)."""
+    servers = load_servers()
+    probes = await asyncio.gather(*(mnemos_client.health(s) for s in servers))
+    by_name = {p["server"]: p for p in probes}
+    return {
+        "ok": True,
+        "servers": [
+            {
+                "name": s["name"],
+                "group": s["group"],
+                "description": s["description"],
+                "url": s["url"],
+                "ok": by_name.get(s["name"], {}).get("ok", False),
+                "latency_ms": by_name.get(s["name"], {}).get("latency_ms"),
             }
-    return data
+            for s in servers
+        ],
+        "groups": groups_of(servers),
+    }
+
+
+@app.get("/api/memories/pulse")
+async def memory_pulse_all(project: str = "mnemos-eyes", limit: int = 8,
+                           scope: str = "") -> dict[str, Any]:
+    """Merged pulse across scope (all servers | group | one server)."""
+    if scope:
+        kind, servers = get_scope(scope)
+    else:
+        kind, servers = "all", load_servers()
+    limit = min(limit, 20)
+    results = await asyncio.gather(
+        *(mnemos_client.memory_pulse(s, project=project, limit=limit) for s in servers)
+    )
+    merged_items: list[dict[str, Any]] = []
+    per_server: list[dict[str, Any]] = []
+    for s, r in zip(servers, results):
+        per_server.append({
+            "server": s["name"], "ok": r["ok"],
+            "items": len(r.get("items", [])), "detail": r.get("detail"),
+        })
+        for item in r.get("items", []):
+            item["server"] = s["name"]
+            merged_items.append(item)
+    merged_items.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+    if not merged_items:
+        # honest store stats per server when the project is empty everywhere
+        stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
+        store_stats = [
+            {"server": s["name"], "stats": st}
+            for s, st in zip(servers, stats)
+        ]
+        return {
+            "ok": any(p["ok"] for p in per_server),
+            "scope": scope or "all", "kind": kind, "items": [],
+            "per_server": per_server, "store_stats": store_stats,
+        }
+    return {
+        "ok": True, "scope": scope or "all", "kind": kind,
+        "items": merged_items[:limit], "per_server": per_server,
+    }
+
+
+@app.get("/api/memories/servers/{scope}/pulse")
+async def memory_pulse(scope: str, project: str = "mnemos-eyes", limit: int = 8) -> dict[str, Any]:
+    """Pulse for one server OR a merged group pulse (items tagged by server)."""
+    kind, servers = get_scope(scope)
+    limit = min(limit, 20)
+    results = await asyncio.gather(
+        *(mnemos_client.memory_pulse(s, project=project, limit=limit) for s in servers)
+    )
+    merged_items: list[dict[str, Any]] = []
+    per_server: list[dict[str, Any]] = []
+    for s, r in zip(servers, results):
+        per_server.append({
+            "server": s["name"], "ok": r["ok"],
+            "items": len(r.get("items", [])), "detail": r.get("detail"),
+        })
+        for item in r.get("items", []):
+            item["server"] = s["name"]
+            merged_items.append(item)
+    merged_items.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+    if not merged_items:
+        # honest store stats per server when the project is empty everywhere
+        stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
+        store_stats = [
+            {"server": s["name"], "stats": st}
+            for s, st in zip(servers, stats)
+        ]
+        return {
+            "ok": all(p["ok"] for p in per_server),
+            "scope": scope, "kind": kind, "items": [],
+            "per_server": per_server, "store_stats": store_stats,
+        }
+    return {
+        "ok": True, "scope": scope, "kind": kind,
+        "items": merged_items[:limit], "per_server": per_server,
+    }
+
+
+@app.get("/api/memories/servers/{scope}/stats")
+async def memory_stats(scope: str) -> dict[str, Any]:
+    kind, servers = get_scope(scope)
+    stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
+    return {
+        "ok": True, "scope": scope, "kind": kind,
+        "stores": [
+            {"server": s["name"], "group": s["group"], "stats": st or None}
+            for s, st in zip(servers, stats)
+        ],
+    }
 
 
 @app.get("/api/mnemos/search")
-async def mnemos_search(q: str, limit: int = 10, project: str = "") -> dict[str, Any]:
-    body: dict[str, Any] = {"query": q, "limit": min(limit, 25)}
-    if project:
-        body["project"] = project
-    # mnemos search is POST-only; hybrid search takes ~5 s (CPU vectorize).
-    code, data = await mnemos_client.post_json_async("/search", body, timeout=15.0)
-    if code != 200:
-        raise HTTPException(code, data if isinstance(data, str) else data.get("detail", "mnemos error"))
-    results = data.get("results", data) if isinstance(data, dict) else data
-    # mnemos /search returns a bare list of results.
-    return {"ok": True, "results": results if isinstance(results, list) else []}
-
-
-@app.get("/api/mnemos/memory/{memory_id}")
-async def mnemos_memory(memory_id: str) -> dict[str, Any]:
-    """Fetch one memory for display (opened from the pulse rail)."""
-    code, body = await mnemos_client.fetch_json(f"/memories/{memory_id}")
-    if code != 200:
-        raise HTTPException(code, body if isinstance(body, str) else body.get("detail", "mnemos error"))
-    return {"ok": True, "memory": body}
+async def mnemos_search(q: str, limit: int = 10, project: str = "", scope: str = "") -> dict[str, Any]:
+    """Search one server (scope=server name), a group, or the primary server."""
+    servers = load_servers()
+    if scope:
+        _, scoped = get_scope(scope)
+    else:
+        scoped = [servers[0]]
+    limit = min(limit, 25)
+    results = await asyncio.gather(
+        *(mnemos_client.search(s, q, limit=limit, project=project) for s in scoped)
+    )
+    merged: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for s, (code, data) in zip(scoped, results):
+        if code != 200:
+            errors.append({"server": s["name"], "status": code,
+                           "detail": data.get("detail") if isinstance(data, dict) else str(data)})
+            continue
+        items = data if isinstance(data, list) else data.get("results", [])
+        for it in items:
+            if isinstance(it, dict):
+                it["server"] = s["name"]
+                merged.append(it)
+    merged.sort(key=lambda i: i.get("score") or 0, reverse=True)
+    return {"ok": not errors or bool(merged), "results": merged[:limit], "errors": errors}
 
 
 def _guard_write(request: Request) -> None:
