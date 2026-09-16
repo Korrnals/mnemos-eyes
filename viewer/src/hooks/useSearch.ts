@@ -12,7 +12,7 @@ export function useSearch(params: SearchParams) {
   const gateway = useGateway();
   return useQuery({
     queryKey: keys.search.results(params),
-    queryFn: () => gateway.search(params),
+    queryFn: ({ signal }) => gateway.search(params, signal),
     staleTime: STALE_TIMES.search,
     gcTime: GC_TIMES.search,
   });

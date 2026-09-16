@@ -1,0 +1,18 @@
+/*
+ * Self-hosted fonts (T4). Replaces the Google Fonts <link> from the T1
+ * scaffold: same-origin assets keep the viewer offline-friendly for the
+ * Tauri phase (ADR 0001) and free of third-party requests.
+ *
+ * Families (tokens.css stacks):
+ *   "Inter Variable"        — UI chrome (--font-ui), weights 400/500/600 used
+ *   "Lora Variable"         — memory scroll content (--font-scroll, D11)
+ *   "JetBrains Mono"        — rule/code content (--font-mono, D11), 400 only
+ *
+ * Variable fonts carry every weight the type scale needs in one file per
+ * subset; the browser downloads a subset only when its unicode-range matches
+ * rendered glyphs (latin + cyrillic here — ~149 KB worst case, Inter's
+ * 67 KB at first paint; see the budget table in docs T4 report).
+ */
+@import "@fontsource-variable/inter/wght.css";
+@import "@fontsource-variable/lora/wght.css";
+@import "@fontsource/jetbrains-mono/400.css";

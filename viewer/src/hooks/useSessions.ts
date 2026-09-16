@@ -8,7 +8,7 @@ export function useSessions() {
   const gateway = useGateway();
   return useQuery({
     queryKey: keys.sessions.list(),
-    queryFn: () => gateway.listSessions(),
+    queryFn: ({ signal }) => gateway.listSessions(signal),
     staleTime: STALE_TIMES.sessions,
     gcTime: GC_TIMES.sessions,
   });
@@ -19,7 +19,7 @@ export function useSession(id: string) {
   const gateway = useGateway();
   return useQuery({
     queryKey: keys.sessions.detail(id),
-    queryFn: () => gateway.getSession(id),
+    queryFn: ({ signal }) => gateway.getSession(id, signal),
     staleTime: STALE_TIMES.sessions,
     gcTime: GC_TIMES.sessions,
     enabled: id.length > 0,

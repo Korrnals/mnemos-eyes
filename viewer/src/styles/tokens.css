@@ -1,9 +1,9 @@
 /**
  * Design tokens — single source of truth: docs/design-system.md.
  * Dark theme ("obsidian well") is the default on :root; light theme overrides
- * on [data-theme="light"]. Draft values where noted; task T4 does the
- * refinement pass and keeps this file in sync with the board's tokens.css
- * (ADR 0006: tokens are shared across both frontends).
+ * on [data-theme="light"]. Complete as of T4; keep in sync with the board's
+ * tokens.css (ADR 0006: tokens are shared across both frontends).
+ * Token names are frozen — components reference them.
  */
 
 /* ── Dark theme (default — "obsidian well") ─────────────────────────── */
@@ -81,11 +81,13 @@
 
 /* ── Typography ─────────────────────────────────────────────────────── */
 :root {
-  /* UI font — humanist sans */
-  --font-ui: "Inter", "Helvetica Neue", system-ui, sans-serif;
+  /* UI font — humanist sans. "Inter Variable" is the self-hosted
+   * @fontsource-variable family (fonts.css); static "Inter" stays first-fallback
+   * for board parity (ADR 0006). */
+  --font-ui: "Inter Variable", "Inter", "Helvetica Neue", system-ui, sans-serif;
 
   /* Memory content — "scroll" feel (D11: Lora; mono for rule/code) */
-  --font-scroll: "Lora", "Georgia", serif;
+  --font-scroll: "Lora Variable", "Lora", "Georgia", serif;
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
 
   /* Sizes (fluid scale) */

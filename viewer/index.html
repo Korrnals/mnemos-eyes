@@ -9,12 +9,25 @@
       content="mnemos-eyes — read-only viewer for mnemos memory"
     />
     <title>mnemos-eyes</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <script>
+      // Theme bootstrap: resolves the theme before first paint so system-light
+      // users never flash the dark :root tokens (design-system.md §9: stored
+      // choice wins, else system preference, else dark). Mirrors
+      // src/components/theme-provider.tsx — keep the storage key and
+      // resolution order in sync (guarded by src/styles/tokens.test.ts).
+      try {
+        var stored = localStorage.getItem("mnemos-eyes:theme");
+        var theme =
+          stored === "light" || stored === "dark"
+            ? stored
+            : matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+        if (theme === "light") document.documentElement.dataset.theme = "light";
+      } catch (_error) {
+        /* Storage unavailable: keep dark :root defaults. */
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -12,7 +12,7 @@ export function useMemories(params: ListMemoriesParams = {}) {
   const gateway = useGateway();
   return useQuery({
     queryKey: keys.memories.list(params),
-    queryFn: () => gateway.listMemories(params),
+    queryFn: ({ signal }) => gateway.listMemories(params, signal),
     staleTime: STALE_TIMES.memoriesList,
     gcTime: GC_TIMES.memoriesList,
   });

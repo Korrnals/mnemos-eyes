@@ -17,21 +17,29 @@ import type {
  *
  * // import { invoke } from "@tauri-apps/api/core";
  * // Each method: invoke("plugin:mnemos|search", { ... })
+ * // AbortSignal plumbing: forward to the Rust side or poll signal.aborted.
  */
 export class TauriAdapter implements MemoryGateway {
-  search(_params: SearchParams): Promise<SearchResult[]> {
+  search(_params: SearchParams, _signal?: AbortSignal): Promise<SearchResult[]> {
     return this.unimplemented("search");
   }
 
-  listMemories(_params?: ListMemoriesParams): Promise<Memory[]> {
+  listMemories(
+    _params?: ListMemoriesParams,
+    _signal?: AbortSignal,
+  ): Promise<Memory[]> {
     return this.unimplemented("listMemories");
   }
 
-  getMemory(_id: string, _includeRaw?: boolean): Promise<Memory> {
+  getMemory(
+    _id: string,
+    _includeRaw?: boolean,
+    _signal?: AbortSignal,
+  ): Promise<Memory> {
     return this.unimplemented("getMemory");
   }
 
-  listTags(): Promise<TagSummary[]> {
+  listTags(_signal?: AbortSignal): Promise<TagSummary[]> {
     return this.unimplemented("listTags");
   }
 
@@ -40,27 +48,32 @@ export class TauriAdapter implements MemoryGateway {
     _project?: string,
     _query?: string,
     _limit?: number,
+    _signal?: AbortSignal,
   ): Promise<SearchResult[]> {
     return this.unimplemented("agentRecall");
   }
 
-  health(): Promise<HealthStatus> {
+  health(_signal?: AbortSignal): Promise<HealthStatus> {
     return this.unimplemented("health");
   }
 
-  metrics(): Promise<Metrics> {
+  metrics(_signal?: AbortSignal): Promise<Metrics> {
     return this.unimplemented("metrics");
   }
 
-  listTraces(_taskLabel?: string, _limit?: number): Promise<Trace[]> {
+  listTraces(
+    _taskLabel?: string,
+    _limit?: number,
+    _signal?: AbortSignal,
+  ): Promise<Trace[]> {
     return this.unimplemented("listTraces");
   }
 
-  listSessions(): Promise<A2ASession[]> {
+  listSessions(_signal?: AbortSignal): Promise<A2ASession[]> {
     return this.unimplemented("listSessions");
   }
 
-  getSession(_id: string): Promise<A2ASession> {
+  getSession(_id: string, _signal?: AbortSignal): Promise<A2ASession> {
     return this.unimplemented("getSession");
   }
 

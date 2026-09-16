@@ -1,0 +1,48 @@
+/*
+ * IrisLogo motion (design-system.md §8.1, §8.4, §7 motion budget).
+ * The breathing iris is the page's single ambient animation — consumers must
+ * enable `breathing` on at most one IrisLogo per view.
+ */
+
+.iris-logo {
+  display: block;
+  /* Round clip so the glow halo follows the disc, not the square box. */
+  border-radius: var(--radius-full);
+}
+
+/* Hero treatment (§8.1): iris halo glow around the logo disc. */
+.iris-logo-glow {
+  box-shadow: var(--shadow-iris);
+}
+
+/*
+ * Breathing pupil. T4 contract: one slow 4.8 s cycle (inside the 4–6 s
+ * window); --duration-iris (3 s, §7) remains the design-system's generic
+ * breathing token, so the slower pupil cycle gets its own derived property.
+ */
+.iris-breathing .iris-pupil {
+  --iris-breathe-duration: 4800ms;
+
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: iris-breathe var(--iris-breathe-duration) var(--ease-breath) infinite;
+}
+
+@keyframes iris-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+/* Hard stop for reduced motion (§7): the ambient animation never runs. */
+@media (prefers-reduced-motion: reduce) {
+  .iris-breathing .iris-pupil {
+    animation: none;
+  }
+}

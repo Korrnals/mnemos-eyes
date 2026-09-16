@@ -12,7 +12,7 @@ export function useTags() {
   const gateway = useGateway();
   return useQuery({
     queryKey: keys.tags.list(),
-    queryFn: () => gateway.listTags(),
+    queryFn: ({ signal }) => gateway.listTags(signal),
     staleTime: STALE_TIMES.tags,
     gcTime: GC_TIMES.tags,
   });

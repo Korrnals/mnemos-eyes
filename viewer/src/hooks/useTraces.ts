@@ -8,7 +8,7 @@ export function useTraces(params: { task_label?: string; limit?: number } = {}) 
   const gateway = useGateway();
   return useQuery({
     queryKey: keys.traces.list(params),
-    queryFn: () => gateway.listTraces(params.task_label, params.limit),
+    queryFn: ({ signal }) => gateway.listTraces(params.task_label, params.limit, signal),
     staleTime: STALE_TIMES.traces,
     gcTime: GC_TIMES.traces,
   });

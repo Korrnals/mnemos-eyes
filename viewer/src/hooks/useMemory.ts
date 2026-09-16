@@ -11,7 +11,7 @@ export function useMemory(id: string, includeRaw = false) {
   const gateway = useGateway();
   return useQuery({
     queryKey: keys.memories.detail(id, includeRaw),
-    queryFn: () => gateway.getMemory(id, includeRaw),
+    queryFn: ({ signal }) => gateway.getMemory(id, includeRaw, signal),
     staleTime: STALE_TIMES.memoryDetail,
     gcTime: GC_TIMES.memoryDetail,
     enabled: id.length > 0,
