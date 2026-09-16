@@ -87,6 +87,13 @@ CREATE TABLE IF NOT EXISTS notifications (
     task_id  TEXT,
     read     INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS group_log (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       TEXT NOT NULL,
+    group_name TEXT NOT NULL,
+    action   TEXT NOT NULL,
+    detail   TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS server_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     ts         TEXT NOT NULL,
@@ -615,3 +622,19 @@ class Store:
                        updated_at=excluded.updated_at, json=excluded.json""",
                 (specialist, _now(), json.dumps(profile, ensure_ascii=False)),
             )
+
+    def log_group_action(self, group: str, action: str, detail: str = "") -> None:
+        with self._lock, self._conn() as db:
+            db.execute(
+                "INSERT INTO group_log (ts, group_name, action, detail) VALUES (?,?,?,?)",
+                (_now(), group, action, detail[:500]),
+            )
+
+    def group_history(self, group: str, limit: int = 30) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT ts, action, detail FROM group_log WHERE group_name=? "
+                "ORDER BY id DESC LIMIT ?",
+                (group, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]

@@ -556,6 +556,58 @@ async def memory_stats(scope: str) -> dict[str, Any]:
     }
 
 
+@app.get("/api/memories/groups/{name}/info")
+async def group_info(name: str) -> dict[str, Any]:
+    """Cluster card data: membership, per-member live state, history."""
+    groups = {g["name"]: g for g in registry.groups()}
+    g = groups.get(name)
+    if g is None:
+        raise HTTPException(404, f"group '{name}' not found")
+    members = [s for s in registry.servers() if s["group_name"] == name]
+    probes = await asyncio.gather(*(mnemos_client.ping(s) for s in members))
+    stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in members))
+    per_member = []
+    for s, p, st in zip(members, probes, stats):
+        per_member.append({
+            "name": s["name"], "url": s["url"], "enabled": bool(s["enabled"]),
+            "state": s["state"], "ok": p["ok"], "latency_ms": p["latency_ms"],
+            "memories_total": (st or {}).get("memories_total"),
+            "version": (st or {}).get("version"),
+            "by_project": (st or {}).get("by_project", {}),
+        })
+    return {
+        "ok": True, "group": {"name": name, "members": g["servers"],
+                               "description": g.get("description", "")},
+        "members": per_member,
+        "history": store.group_history(name),
+    }
+
+
+@app.post("/api/memories/groups/{name}/members")
+async def group_membership(name: str, body: dict[str, Any], request: Request) -> dict[str, Any]:
+    """Add/remove a server to/from a group: body {server, op: 'add'|'remove'}."""
+    _guard_write(request)
+    server = body.get("server", "")
+    op = body.get("op", "add")
+    if store.get_server(server) is None:
+        raise HTTPException(404, f"server '{server}' not found")
+    if op == "add":
+        out = registry.set_group(server, name)
+        store.log_group_action(name, "member-added", server)
+    elif op == "remove":
+        out = registry.set_group(server, "default")
+        store.log_group_action(name, "member-removed", server)
+    else:
+        raise HTTPException(422, f"unknown op: {op}")
+    _broadcast({"kind": "server.changed", "server": server})
+    return {"ok": True, "server": _server_public(out) if out else None}
+
+
+@app.get("/api/memories/groups/{name}/history")
+async def group_history(name: str) -> dict[str, Any]:
+    return {"ok": True, "group": name, "history": store.group_history(name)}
+
+
 @app.get("/api/mnemos/search")
 async def mnemos_search(q: str, limit: int = 10, project: str = "", scope: str = "") -> dict[str, Any]:
     """Search one server (scope=server name), a group, or all active servers."""

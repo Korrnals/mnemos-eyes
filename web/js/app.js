@@ -573,10 +573,28 @@ async function openTask(taskId) {
     }
     memEl.insertAdjacentHTML("beforeend", searchHtml);
     wireMemSearch(memEl, t);
+    // cross-navigation: linked memory cards → overlay with back-to-task
+    for (const card of memEl.querySelectorAll(".memory-card")) {
+      const title = card.querySelector(".memory-title");
+      if (title) {
+        title.style.cursor = "pointer";
+        title.title = "открыть карточку памяти";
+        card.addEventListener("click", (e) => {
+          if (e.target.closest(".mem-search") || e.target.closest("button")) return;
+          const id = (card.dataset.mid || "").trim();
+          if (id) openMemoryFromTask(id, t);
+        });
+      }
+    }
   } catch (err) {
     memEl.innerHTML = `<div class="column-empty">память недоступна: ${esc(err.message)}</div>`;
   }
   loadTaskHistory(t);
+}
+
+function openMemoryFromTask(memoryId, originTask) {
+  rememberModal(() => openTask(originTask.id));
+  openMemoryCard({ id: memoryId, title: "", server: "" });
 }
 
 function setTaskTab(name) {
@@ -645,6 +663,7 @@ function wireCrossLinks(root, t) {
 function memoryCard(m) {
   const div = document.createElement("div");
   div.className = "memory-card";
+  div.dataset.mid = m.id || "";
   const tags = (m.tags || []).map((t) => `<span class="pulse-tag">${esc(t)}</span>`).join("");
   div.innerHTML = `
     <div class="memory-provenance">
@@ -662,6 +681,7 @@ function unresolvedCard(mid, resolved) {
   const u = (resolved.unresolved || []).find((u) => u.id === mid);
   const div = document.createElement("div");
   div.className = "memory-card unresolved";
+  div.dataset.mid = mid;
   div.innerHTML = `
     <div class="memory-provenance"><span>◉ память не найдена</span></div>
     <div class="memory-excerpt">${esc(mid)}${u ? ` · HTTP ${u.status}` : ""}</div>`;
@@ -727,19 +747,34 @@ function wireMemSearch(memEl, t) {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
 }
 
+const modalHistory = []; // stack of {open} functions to restore previous modal
+
 function showTaskModal() {
   const d = $("#task-modal"), b = $("#modal-backdrop");
   b.hidden = false;
   d.hidden = false;
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
 }
+function rememberModal(reopenFn) {
+  modalHistory.push(reopenFn);
+  const b = $("#modal-back");
+  if (b) b.hidden = modalHistory.length === 0;
+}
 function closeTaskModal() {
   const d = $("#task-modal"), b = $("#modal-backdrop");
   b.classList.remove("open");
   d.classList.remove("open");
   state.activeTask = null;
+  modalHistory.length = 0;
+  const bb = $("#modal-back"); if (bb) bb.hidden = true;
   setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
 }
+if (document.querySelector("#modal-back")) document.querySelector("#modal-back").addEventListener("click", () => {
+  const reopen = modalHistory.pop();
+  const b = $("#modal-back");
+  if (b) b.hidden = modalHistory.length === 0;
+  if (reopen) reopen();
+});
 $("#modal-close").addEventListener("click", closeTaskModal);
 $("#modal-backdrop").addEventListener("click", closeTaskModal);
 document.addEventListener("keydown", (e) => {
@@ -933,14 +968,8 @@ function renderGroups() {
       <span class="group-glyph">⬡</span>
       <span class="group-name">${esc(name)}</span>
       <span class="group-servers">${members.length} хранилищ: ${esc(members.join(", "))}</span>`;
-    row.title = `кластер: ${members.join(", ")} · ПКМ — управление`;
-    row.addEventListener("click", () => {
-      state.memScope = name;
-      localStorage.setItem(SCOPE_KEY, name);
-      $("#mem-scope").value = name;
-      updateScopeLabels();
-      refreshPulse();
-    });
+    row.title = `кластер: ${members.join(", ")} · клик — карточка · ПКМ — управление`;
+    row.addEventListener("click", () => openGroupModal(name));
     row.addEventListener("contextmenu", (e) => {
       const g = (state.memServers?.groups || []).find((x) => x.name === name) || { name, servers: members };
       groupContextMenu(e, g);
@@ -1381,19 +1410,18 @@ wireMax("#srv-max", "#srv-modal");
 wireMax("#dd-max", "#dd-modal");
 
 // Back-button stack for the drill modal (tag/agent → memory card → …)
-const ddHistory = [];
+const ddStack = [];
 let ddCurrent = null;
 function ddRemember(kind, title, sub, render) {
   if (ddCurrent) ddStack.push(ddCurrent);
   ddCurrent = { kind, title, sub, render };
   updateDdBack();
 }
-const ddStack = [];
 function updateDdBack() {
   const b = $("#dd-back");
   if (b) b.hidden = ddStack.length === 0;
 }
-$("#dd-back").addEventListener("click", () => {
+if (document.querySelector("#dd-back")) document.querySelector("#dd-back").addEventListener("click", () => {
   const prev = ddStack.pop();
   if (prev) {
     ddCurrent = prev;
@@ -1494,11 +1522,16 @@ function groupContextMenu(e, g) {
   ctxTargets.group = g;
   ctxOpen(e.clientX, e.clientY, "⬡ " + g.name, "кластер памяти");
   ctxSec("Кластер");
+  ctxAdd("Открыть карточку", "⤢", () => openGroupModal(g.name));
   ctxAdd("Объединённый пульс", "◉", () => {
     state.memScope = g.name; localStorage.setItem(SCOPE_KEY, g.name);
     const sel = document.querySelector("#mem-scope");
     if (sel) sel.value = g.name;
     updateScopeLabels(); refreshPulse();
+  });
+  ctxAdd("Синк всех участников", "⟳", async () => {
+    const members = g.servers || g.members || [];
+    for (const m of members) await srvActionAndWait(m, "sync");
   });
   ctxAdd("Переименовать", "✎", async () => {
     const title = prompt("Новое название:", g.name);
@@ -1506,16 +1539,109 @@ function groupContextMenu(e, g) {
     try {
       await api("/api/memories/groups", { method: "POST", body: JSON.stringify({ name: g.name, title }) });
       await loadMemServers(); renderGroups();
-    } catch (err) { alert("Ошибка: " + err.message); }
+      toast("ok", "Кластер переименован", g.name + " → " + title);
+    } catch (err) { toast("err", "Не удалось переименовать", err.message); }
   });
   ctxAdd("Удалить кластер", "🗑", async () => {
     if (!confirm("Удалить кластер «" + g.name + "»? Хранилища перейдут в default.")) return;
     try {
       await api("/api/memories/groups/" + encodeURIComponent(g.name), { method: "DELETE" });
       await loadMemServers(); refreshStores(); renderGroups();
-      toast("ok", `Кластер «${g.name}» удалён`, "хранилища переведены в default");
-    } catch (err) { alert("Ошибка: " + err.message); }
+      toast("ok", "Кластер «" + g.name + "» удалён", "хранилища переведены в default");
+    } catch (err) { toast("err", "Не удалось удалить", err.message); }
   }, "danger");
+}
+
+// ── Cluster card modal: settings, members, meta, logs ──────────────
+async function openGroupModal(name) {
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  ddRemember("кластер", "⬡ " + name, "карточка кластера памяти", () => openGroupModal(name));
+  $("#dd-kind").textContent = "кластер";
+  $("#dd-title").textContent = "Кластер «" + name + "»";
+  $("#dd-sub").textContent = "участники, состояние, мета, логи";
+  $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
+  b.hidden = false; d.hidden = false;
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+  try {
+    const info = await api(`/api/memories/groups/${encodeURIComponent(name)}/info`);
+    const allServers = (state.memServers?.servers || [])
+      .filter((s) => !info.members.some((m) => m.name === s.name));
+
+    $("#dd-body").innerHTML = `
+      <div class="dd-section">
+        <h2 style="margin:0 0 8px">Участники<span class="dd-count">${info.members.length}</span></h2>
+        <div id="grp-members" class="dd-list"></div>
+        <div class="mem-search" style="margin-top:8px">
+          <select id="grp-add-sel" class="f-sel" style="flex:1">
+            <option value="">— добавить хранилище в кластер —</option>
+            ${allServers.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join("")}
+          </select>
+          <button id="grp-add-btn">+</button>
+        </div>
+      </div>
+      <div class="dd-section">
+        <h2 style="margin:0 0 8px">Мета</h2>
+        <div class="drawer-meta" id="grp-meta"></div>
+      </div>
+      <div class="dd-section">
+        <h2 style="margin:0 0 8px">Логи кластера</h2>
+        <div class="srv-history" id="grp-log"></div>
+      </div>`;
+
+    const membersEl = $("#grp-members");
+    for (const m of info.members) {
+      const row = document.createElement("div");
+      row.className = "dd-item";
+      row.innerHTML = `
+        <div class="dd-item-title">
+          <span class="dot ${m.ok ? "dot-on" : "dot-off"}" style="margin-right:6px"></span>
+          ${esc(m.name)} <span class="dd-count">${m.memories_total ?? "?"} памятей · ${m.latency_ms ?? "?"} ms · v${esc(m.version || "?")}</span>
+        </div>
+        <div class="dd-item-meta">
+          <span class="chip">${esc(m.state)}</span>
+          <span class="chip">${Object.keys(m.by_project || {}).slice(0, 4).map(esc).join(", ") || "—"}</span>
+          <span class="chip">${esc(m.url)}</span>
+        </div>
+        <button class="btn btn-danger" style="margin-top:6px">убрать из кластера</button>`;
+      row.querySelector("button.btn-danger").addEventListener("click", async () => {
+        try {
+          await api(`/api/memories/groups/${encodeURIComponent(name)}/members`, {
+            method: "POST", body: JSON.stringify({ server: m.name, op: "remove" }),
+          });
+          toast("ok", `${m.name}: выведен из кластера`, name);
+          await loadMemServers(); refreshStores(); renderGroups();
+          openGroupModal(name);
+        } catch (err) { toast("err", "Не удалось вывести", err.message); }
+      });
+      membersEl.appendChild(row);
+    }
+    $("#grp-add-btn").addEventListener("click", async () => {
+      const sel = $("#grp-add-sel");
+      const srv = (sel && sel.value) || "";
+      if (!srv) return;
+      try {
+        await api(`/api/memories/groups/${encodeURIComponent(name)}/members`, {
+          method: "POST", body: JSON.stringify({ server: srv, op: "add" }),
+        });
+        toast("ok", `${srv}: добавлен в кластер`, name);
+        await loadMemServers(); refreshStores(); renderGroups();
+        openGroupModal(name);
+      } catch (err) { toast("err", "Не удалось добавить", err.message); }
+    });
+
+    $("#grp-meta").innerHTML = `
+      <span class="srv-stat-chip">хранилищ: <b>${info.members.length}</b></span>
+      <span class="srv-stat-chip">онлайн: <b>${info.members.filter((m) => m.ok).length}</b></span>
+      <span class="srv-stat-chip">памятей всего: <b>${info.members.reduce((a, m) => a + (m.memories_total || 0), 0)}</b></span>`;
+
+    const logEl = $("#grp-log");
+    logEl.innerHTML = info.history.length
+      ? info.history.map((x) =>
+          `<div class="srv-history-item"><ts>${esc((x.ts || "").slice(5, 16))}</ts><span>${esc(x.action)}</span><span>${esc(x.detail || "")}</span></div>`).join("")
+      : `<div class="column-empty">событий пока нет</div>`;
+  } catch (err) {
+    $("#dd-body").innerHTML = `<div class="column-empty">${esc(err.message)}</div>`;
+  }
 }
 
 function taskContextMenu(e, t) {
@@ -1565,6 +1691,12 @@ function closeDdModal() {
   b.classList.remove("open"); d.classList.remove("open");
   ddStack.length = 0; ddCurrent = null; updateDdBack();
   setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
+  // if opened from another card (task/store), restore that modal instead of dead end
+  if (modalHistory.length) {
+    const reopen = modalHistory.pop();
+    const bb = $("#modal-back"); if (bb) bb.hidden = modalHistory.length === 0;
+    reopen();
+  }
 }
 $("#dd-close").addEventListener("click", closeDdModal);
 $("#dd-backdrop").addEventListener("click", closeDdModal);
@@ -1716,8 +1848,8 @@ function connectSSE() {
   state.es = es;
   es.onopen = () => setConn("dot-on", "live");
   es.onerror = () => {
-    // EventSource auto-reconnects; show amber only if we truly lost the socket
-    setConn("dot-wait", "переподключение");
+    // EventSource auto-reconnects; show amber only while the socket is down
+    if (es.readyState === 2) setConn("dot-wait", "переподключение");
   };
   es.onmessage = (msg) => {
     let ev;
