@@ -1,0 +1,71 @@
+name: release
+
+# Builds the vesmaro-eyes image and pushes it to ghcr.io/korrnals/vesmaro-eyes
+# on every tag push (v*). The GITHUB_TOKEN push auto-links the package to
+# this repository — the Packages block on the repo page stays populated.
+# Also publishes a GitHub Release with generated notes.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  verify:
+    # Gate before any publish: version sync + full pytest контур +
+    # the standalone security verifier.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install -r server/requirements.txt -r requirements-dev.txt
+      - name: Version sync check
+        run: bash scripts/sync-version.sh --check
+      - name: pytest
+        run: python -m pytest tests/ -q
+      - name: Security verifier
+        run: python scripts/verify_security_sprint1.py
+
+  build-push-release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Containerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

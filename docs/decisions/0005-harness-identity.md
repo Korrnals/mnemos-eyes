@@ -44,6 +44,13 @@ stack configuration, with any component missing, the rule must work.
    The board reads the profile through the standard search API — no GCW
    checkout, no direct file access; works from any store that holds the
    index. Re-run the script after GCW changes.
+5. **Server-side enforcement covers PATCH as well as create** (sprint-1
+   hardening, BE-5): `PATCH /api/tasks/{id}` applies the same role-slug
+   rejection (`gcw-*`, `@*` inside `agents` → HTTP 422) as `POST /api/tasks`.
+   Before this, a patch could silently re-introduce role slugs into the
+   harness field and corrupt per-harness efficiency stats. The rule is
+   pinned by a server-side contract test in the pytest contour (QA-1), so
+   regressions surface as CI failures, not as data drift.
 
 ## Consequences
 

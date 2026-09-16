@@ -1,6 +1,11 @@
 # vesmaro-eyes — ai-agent cluster deployment (k3s, namespace kube-agents).
 #
-# Applied via: ./deploy/apply.sh
+# DEPRECATED for normal deploys since SRE-1: the canonical path is the Helm
+# chart deploy/chart/vesmaro-eyes (see its RUNBOOK.md). This manifest is kept
+# ONLY as the emergency rollback path (hostNetwork scheme, Runbook §4, level 2).
+# It still requires the agentsnode-policies traefik fix for ingress to work.
+#
+# Legacy apply: ./deploy/apply.sh
 #
 # Pattern mirrors agentsnode-mnemos: Deployment (Recreate) + ClusterIP +
 # traefik Ingress on vesmaro.abyss.lab. Board DB lives on a local-path PVC.

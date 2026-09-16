@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
   <title>vesmaro-eyes — task board</title>
-  <link rel="stylesheet" href="/styles/tokens.css?v=1.0.0" />
-  <link rel="stylesheet" href="/styles/board.css?v=1.0.0" />
+  <link rel="stylesheet" href="/styles/fonts.css?v=1.1.0" />
+  <link rel="stylesheet" href="/styles/tokens.css?v=1.1.0" />
+  <link rel="stylesheet" href="/styles/board.css?v=1.1.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230d0f14' stroke='%231a8a96' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='5.5' fill='%2322b5c4'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -38,6 +39,7 @@
         <svg class="mnemos-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 2a5 5 0 0 1 4.9 4H10L8 9 6 7H3.1A5 5 0 0 1 8 3Zm-4.9 6H6l2 2 2-2h2.9A5 5 0 0 1 3.1 9Z"/></svg>
         <span id="mnemos-label">memory: …</span>
       </div>
+      <button class="topbar-newtask" id="new-task-btn" title="Новая задача — сырая мысль → черновик в память">+ Новая задача</button>
       <div class="bell-wrap">
         <button class="bell" id="bell" title="уведомления" aria-label="Уведомления">🔔</button>
         <span class="bell-badge" id="bell-badge" hidden></span>
@@ -144,11 +146,6 @@
           <h2>Спецификация</h2>
           <pre class="drawer-spec" id="modal-spec"></pre>
         </section>
-        <section class="rail-block">
-          <h2 class="rail-title" id="pulse-title">Пульс памяти</h2>
-          <p class="rail-sub" id="pulse-scope-label">все серверы памяти</p>
-          <div id="pulse" class="pulse"><!-- project accordion --></div>
-        </section>
       </aside>
     </div>
   </div>
@@ -176,7 +173,7 @@
       <div class="srv-form">
         <label>Название <input id="srv-name" type="text" pattern="[a-z0-9][a-z0-9_-]*" /></label>
         <label>URL <input id="srv-url" type="text" placeholder="http://host:8787" /></label>
-        <label>Токен (env:VAR / file:/path / plain:…) <input id="srv-token" type="password" placeholder="оставить пустым — без изменения" autocomplete="off" /></label>
+        <label>Токен (env:VAR / file:/path) <input id="srv-token" type="password" placeholder="оставить пустым — без изменения" autocomplete="off" /></label>
         <label>Описание <input id="srv-desc-input" type="text" /></label>
       </div>
       <div class="srv-actions">
@@ -213,6 +210,36 @@
     <div id="dd-body"></div>
   </div>
 
-  <script type="module" src="/js/app.js?v=1.0.0"></script>
+  <!-- ── New task draft modal (UI-6) ───────────────────────────── -->
+  <div class="modal-backdrop" id="draft-backdrop" hidden></div>
+  <div class="modal" id="draft-modal" hidden role="dialog" aria-modal="true" aria-label="Новая задача — черновик">
+    <div class="modal-head">
+      <span class="drawer-col">черновик</span>
+      <div class="modal-btns">
+        <button class="mbtn" id="draft-max" title="развернуть">⤢</button>
+        <button class="drawer-close" id="draft-close" aria-label="Закрыть">×</button>
+      </div>
+    </div>
+    <h1 class="drawer-title">Новая задача</h1>
+    <p class="drawer-summary">Сырая мысль владельца → черновик в памяти mnemos → @GCW: Task Manager оформит в канон и вернёт на доску. Формулировать идеально не нужно.</p>
+    <section class="drawer-section">
+      <form class="srv-form" id="draft-form">
+        <label>Что нужно сделать (обязательно)
+          <textarea id="draft-text" rows="6" required placeholder="опишите задачу своими словами…"></textarea>
+        </label>
+        <label>Проект (необязательно)
+          <input id="draft-project" type="text" placeholder="например: mnemos-eyes" />
+        </label>
+        <label>Теги через запятую (необязательно)
+          <input id="draft-tags" type="text" placeholder="например: research, api" />
+        </label>
+        <div class="srv-actions">
+          <button class="btn" id="draft-submit" type="submit">Отправить черновик</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <script type="module" src="/js/app.js?v=1.1.0"></script>
 </body>
 </html>

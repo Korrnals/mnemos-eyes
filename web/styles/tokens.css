@@ -18,6 +18,18 @@
   --color-confidence:     #c9933a;
   --color-confidence-dim: #7a5520;
 
+  /* ── Tag families (FE-5) ────────────────────────────────────────
+     One fg token per tag class; chip bg/border are color-mix tints of
+     these in board.css. Light-theme values verified ≥4.5:1 on light
+     chip surfaces (#eff1f5 / #ffffff). */
+  --color-tag-project:    #7fd4e0;
+  --color-tag-agent:      #c9b45a;
+  --color-tag-type:       #b89ae0;
+  --color-tag-domain:     #8fd0a0;
+
+  /* Foreground for initials on --color-iris-dim (avatar chips). */
+  --color-avatar-fg:      #d7f0f2;
+
   /* ── Semantic status ──────────────────────────────────────────── */
   --color-success:        #2a8a5c;
   --color-warning:        #b8852a;
@@ -101,17 +113,29 @@
   --color-iris-bright:    #136e79;
   --color-iris-glow:      #1a8a9620;
 
-  --color-confidence:     #b07a28;
-  --color-confidence-dim: #e8c98a;
+  /* FE-5: confidence darkened for AA 4.5:1 on white modal surfaces;
+     dim lifted from #e8c98a so borders stay visible on light bg. */
+  --color-confidence:     #8a5c1a;
+  --color-confidence-dim: #cf9d4e;
 
   --color-success:        #1d6e48;
   --color-warning:        #946018;
   --color-error:          #8a2020;
   --color-info:           #1a8a96;
 
+  /* FE-5: tag fg values verified ≥4.5:1 against light chip surfaces. */
+  --color-tag-project:    #0f6370;
+  --color-tag-agent:      #7a5520;
+  --color-tag-type:       #6d4d9d;
+  --color-tag-domain:     #1d6e48;
+
+  --color-avatar-fg:      #0d2b30;
+
   --color-text-primary:   #1a1e2e;
   --color-text-secondary: #4a5268;
-  --color-text-muted:     #9298b0;
+  /* FE-5: muted darkened from #9298b0 (2.5:1) to pass AA 4.5:1 on the
+     darkest common light surface (#eff1f5) where 10px metadata lives. */
+  --color-text-muted:     #646b83;
   --color-text-inverse:   #f5f6f8;
 
   --color-border-subtle:  #dee1ea;

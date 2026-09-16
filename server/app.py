@@ -12,6 +12,7 @@ Volume: /data (board.db)
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,10 +21,16 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import mnemos_client
-from .memory_registry import ServerRegistry, write_config_template
+from .memory_registry import ServerRegistry, resolve_token, write_config_template
+from .security import (
+    RateLimiter,
+    ValidationError,
+    validate_memory_url,
+    validate_token_ref,
+)
 from .store import Store, VALID_STATUSES
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
@@ -31,8 +38,10 @@ DB_PATH = DATA_DIR / "board.db"
 STATIC_DIR = Path(os.environ.get("VESMARO_WEB", Path(__file__).resolve().parents[1] / "web"))
 
 # Board read/write is open on the LAN by design (the cluster ingress is the
-# boundary); mnemos credentials stay server-side. Override to require a
-# bearer for mutations if the board ever leaves the trust zone.
+# boundary); mnemos credentials stay server-side. Since SEC-3 the write
+# guard is FAIL-CLOSED: mutations require this bearer token, and when it is
+# not configured every mutation answers 503. The Helm chart generates the
+# token; compose.yaml ships a dev default for local runs.
 BOARD_WRITE_TOKEN = os.environ.get("VESMARO_BOARD_TOKEN", "")
 
 write_config_template(DATA_DIR / "memories.yaml")
@@ -143,7 +152,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.1.0", lifespan=lifespan)
 
 
 # --------------------------------------------------------------------- models
@@ -172,6 +181,20 @@ class TaskPatch(BaseModel):
     mnemos_tags: list[str] | None = None
 
 
+def _validate_agents(agents: list[str]) -> None:
+    """ADR 0005 (BE-5): ``agents`` are execution harnesses (zcode, hermes,
+    ...); role-like slugs are specialists and belong in ``specialists``.
+    Enforced identically on create AND patch, server-side, so every client
+    inherits the rule. Raises HTTP 422."""
+    bad = [a for a in agents if a.startswith("gcw-") or a.startswith("@")]
+    if bad:
+        raise HTTPException(
+            422,
+            f"agents must be harnesses (zcode, hermes, ...), not roles: {bad}; "
+            "use specialists for @GCW roles",
+        )
+
+
 class MoveBody(BaseModel):
     col: str
     position: int | None = None
@@ -183,7 +206,8 @@ class ServerSpec(BaseModel):
     url: str = Field(min_length=1)
     group_name: str = "default"
     description: str = ""
-    token_ref: str = ""          # env:VAR | file:/path | plain:token
+    token_ref: str = ""   # env:VAR | file:<path under a provisioned secrets dir>;
+                          # plain: is rejected via the API (SEC-2)
     enabled: bool = True
 
 
@@ -195,6 +219,153 @@ class GroupSpec(BaseModel):
     name: str = Field(min_length=1, max_length=60, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     title: str = ""
     description: str = ""
+
+
+# OpenAPI response contract (arch-committee mandate #1). All models allow
+# extra fields so serialization never drops keys the SPA reads; required
+# fields are only those the store provably always returns.
+class _ApiModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class TaskOut(_ApiModel):
+    id: str
+    col: str
+    position: int
+    title: str
+    summary: str
+    spec: str
+    agents: list[str]
+    specialists: list[str]
+    env: str
+    project: str
+    memory_ids: list[str]
+    mnemos_tags: list[str]
+    created_at: str
+    updated_at: str
+    archived: int = 0
+
+
+class BoardOut(_ApiModel):
+    columns: list[str]
+    tasks: list[TaskOut]
+    counts: dict[str, int]
+
+
+class OkOut(_ApiModel):
+    ok: bool
+
+
+class OkNoteOut(_ApiModel):
+    ok: bool
+    note: str = ""
+
+
+class TaskMemoriesOut(_ApiModel):
+    items: dict[str, Any]
+    unresolved: list[dict[str, Any]]
+    sources: dict[str, str]
+
+
+class GroupOut(_ApiModel):
+    name: str
+    title: str = ""
+    description: str = ""
+    created_at: str = ""
+    servers: list[str] = []
+
+
+class MemoryServerOut(_ApiModel):
+    """Public server shape (``_server_public``) — token values never present."""
+    name: str
+    url: str
+    group_name: str
+    description: str = ""
+    enabled: bool = True
+    state: str = "idle"
+    token_ref: str = ""
+    has_token: bool = False
+    ok: bool | None = None
+    latency_ms: float | None = None
+    probe_status: int | None = None
+
+
+class MemoryServersOut(_ApiModel):
+    ok: bool
+    servers: list[MemoryServerOut]
+    groups: list[GroupOut]
+
+
+class ServerActionOut(_ApiModel):
+    ok: bool
+    server: MemoryServerOut | None = None
+
+
+class GroupsOut(_ApiModel):
+    ok: bool
+    groups: list[GroupOut]
+
+
+class GroupSaveOut(_ApiModel):
+    ok: bool
+    group: GroupOut
+
+
+class GroupMemberBody(_ApiModel):
+    server: str = Field(min_length=1)
+    op: str = "add"  # add | remove
+
+
+class GroupMemberOut(_ApiModel):
+    ok: bool
+    server: MemoryServerOut | None = None
+
+
+class ReflectOut(_ApiModel):
+    ok: bool
+    memory_id: str | None = None
+    server: str
+
+
+class TaskDraftBody(BaseModel):
+    """UI-6: raw owner thought from the "Новая задача" board form.
+    ``project`` / ``tags`` are free-form strings — they are folded into the
+    memory CONTENT as metadata, never into memory tags (poisoning
+    invariant, ui-contract §12)."""
+    text: str = Field(min_length=1, max_length=8000)
+    project: str = Field(default="", max_length=120)
+    tags: str = Field(default="", max_length=400)
+
+
+class TaskDraftOut(_ApiModel):
+    ok: bool
+    memory_id: str | None = None
+    server: str
+
+
+class NotificationOut(_ApiModel):
+    id: int
+    category: str
+    title: str
+    message: str = ""
+    task_id: str | None = None
+    ts: str
+    read: bool
+
+
+class NotificationsOut(_ApiModel):
+    ok: bool
+    unread: int
+    items: list[NotificationOut]
+
+
+class NotificationReadBody(_ApiModel):
+    id: int | None = None  # None marks ALL as read
+
+
+class NotificationReadOut(_ApiModel):
+    ok: bool
+    unread: int
 
 
 # ------------------------------------------------------------------ board API
@@ -226,28 +397,35 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/api/board")
-async def board() -> dict[str, Any]:
+async def board() -> BoardOut:
     return store.board()
 
 
 @app.post("/api/tasks", status_code=201)
-async def create_task(body: TaskCreate, request: Request) -> dict[str, Any]:
+async def create_task(body: TaskCreate, request: Request) -> TaskOut:
     _guard_write(request)
     if body.col not in VALID_STATUSES:
         raise HTTPException(422, f"invalid col: {body.col}")
-    # harness validation: agents must be execution harnesses, not roles
-    bad = [a for a in body.agents if a.startswith("gcw-") or a.startswith("@")]
-    if bad:
-        raise HTTPException(422, f"agents must be harnesses (zcode, hermes, ...), not roles: {bad}; use specialists for @GCW roles")
-    task = store.create_task(body.model_dump())
+    _validate_agents(body.agents)  # ADR 0005: harnesses only
+    # store raises ValueError on unknown env/col — surface as 422, not 500
+    try:
+        task = store.create_task(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task})
     return task
 
 
 @app.patch("/api/tasks/{task_id}")
-async def patch_task(task_id: str, body: TaskPatch, request: Request) -> dict[str, Any]:
+async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut:
     _guard_write(request)
-    task = store.update_task(task_id, body.model_dump(exclude_none=True))
+    if body.agents is not None:
+        _validate_agents(body.agents)  # ADR 0005 (BE-5): same rule as create
+    # store raises ValueError on unknown env — surface as 422, not 500
+    try:
+        task = store.update_task(task_id, body.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if task is None:
         raise HTTPException(404, "task not found")
     _broadcast({"kind": "task.updated", "task": task})
@@ -255,7 +433,7 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> dict[st
 
 
 @app.post("/api/tasks/{task_id}/move")
-async def move_task(task_id: str, body: MoveBody, request: Request) -> dict[str, Any]:
+async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
     _guard_write(request)
     try:
         task = store.move_task(task_id, body.col, body.position)
@@ -268,7 +446,7 @@ async def move_task(task_id: str, body: MoveBody, request: Request) -> dict[str,
 
 
 @app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str, request: Request) -> dict[str, Any]:
+async def delete_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request)
     if not store.delete_task(task_id):
         raise HTTPException(404, "task not found")
@@ -277,7 +455,7 @@ async def delete_task(task_id: str, request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/tasks/{task_id}/memories")
-async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
+async def task_memories(task_id: str, scope: str = "") -> TaskMemoriesOut:
     """Resolve task memory links against a server, a group, or all servers."""
     task = store.task(task_id)
     if task is None:
@@ -313,7 +491,10 @@ async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
 
 # ------------------------------------------------------- memory servers CRUD
 def _server_public(s: dict[str, Any]) -> dict[str, Any]:
-    """Public shape — never includes the token itself."""
+    """Public shape — token values are NEVER included; legacy ``plain:``
+    refs are masked (SEC-2) while ``has_token`` still reports that a
+    secret is provisioned for this server."""
+    ref = s.get("token_ref", "") or ""
     return {
         "name": s["name"],
         "url": s["url"],
@@ -321,13 +502,13 @@ def _server_public(s: dict[str, Any]) -> dict[str, Any]:
         "description": s["description"],
         "enabled": bool(s["enabled"]),
         "state": s["state"],
-        "token_ref": s.get("token_ref", ""),
-        "has_token": bool(s.get("token")),
+        "token_ref": "plain:<redacted>" if ref.startswith("plain:") else ref,
+        "has_token": bool(resolve_token(ref)),
     }
 
 
 @app.get("/api/memories/servers")
-async def memory_servers() -> dict[str, Any]:
+async def memory_servers() -> MemoryServersOut:
     rows = registry.servers()
     probes = await asyncio.gather(*(mnemos_client.ping(s) for s in rows))
     by_name = {p["server"]: p for p in probes}
@@ -343,19 +524,35 @@ async def memory_servers() -> dict[str, Any]:
     }
 
 
+async def _validate_server_spec(body: ServerSpec) -> tuple[str, str]:
+    """SEC-1 boundary: validate url (scheme + host egress policy) and
+    token_ref (no plain:, file: only under provisioned dirs) BEFORE any
+    network activity or persistence. Raises 422 on violation."""
+    try:
+        # getaddrinfo inside validate_memory_url is a blocking syscall;
+        # keep the event loop free while DNS resolves (or times out)
+        url = await asyncio.to_thread(validate_memory_url, body.url)
+        token_ref = validate_token_ref(body.token_ref)
+    except ValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return url, token_ref
+
+
 @app.post("/api/memories/servers", status_code=201)
-async def add_memory_server(body: ServerSpec, request: Request) -> dict[str, Any]:
+async def add_memory_server(body: ServerSpec, request: Request) -> MemoryServerOut:
     _guard_write(request)
-    url = body.url.rstrip("/")
+    url, token_ref = await _validate_server_spec(body)
     existing = store.get_server(body.name)
     if existing is None:
-        # verify reachability before first save (honest, non-blocking)
-        probe_spec = {"name": body.name, "url": url, "token": _token_for(body.token_ref)}
+        # verify reachability before first save (honest, non-blocking).
+        # SEC-1: the probe for a NEW host carries NO Authorization header —
+        # an attacker-chosen URL must never receive the memory token.
+        probe_spec = {"name": body.name, "url": url, "token": ""}
         code, _ = await mnemos_client.post_json_async(probe_spec, "/search",
                                                       {"query": "ping", "limit": 1}, timeout=6.0)
         row = registry.add_or_update({
             "name": body.name, "url": url, "group_name": body.group_name,
-            "description": body.description, "token_ref": body.token_ref,
+            "description": body.description, "token_ref": token_ref,
         })
         store.log_server_action(body.name, "added", f"probe http {code}")
         if code == 503:
@@ -365,26 +562,22 @@ async def add_memory_server(body: ServerSpec, request: Request) -> dict[str, Any
     raise HTTPException(409, f"server '{body.name}' already exists")
 
 
-def _token_for(token_ref: str) -> str:
-    from .memory_registry import resolve_token
-    return resolve_token(token_ref)
-
-
 @app.patch("/api/memories/servers/{name}")
-async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> dict[str, Any]:
+async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> MemoryServerOut:
     _guard_write(request)
+    url, token_ref = await _validate_server_spec(body)
     if store.get_server(name) is None:
         raise HTTPException(404, f"server '{name}' not found")
     row = registry.add_or_update({
-        "name": name, "url": body.url.rstrip("/"), "group_name": body.group_name,
-        "description": body.description, "token_ref": body.token_ref,
+        "name": name, "url": url, "group_name": body.group_name,
+        "description": body.description, "token_ref": token_ref,
     })
     _broadcast({"kind": "server.changed", "server": name})
     return _server_public(row)
 
 
 @app.post("/api/memories/servers/{name}/action")
-async def memory_server_action(name: str, body: ServerAction, request: Request) -> dict[str, Any]:
+async def memory_server_action(name: str, body: ServerAction, request: Request) -> ServerActionOut:
     _guard_write(request)
     row = store.get_server(name)
     if row is None:
@@ -430,7 +623,7 @@ async def memory_server_action(name: str, body: ServerAction, request: Request) 
 
 
 @app.delete("/api/memories/servers/{name}")
-async def delete_memory_server(name: str, request: Request) -> dict[str, Any]:
+async def delete_memory_server(name: str, request: Request) -> OkNoteOut:
     """Remove from the board registry. The memory store itself is untouched."""
     _guard_write(request)
     if not registry.delete(name):
@@ -445,12 +638,12 @@ async def memory_server_history(name: str) -> dict[str, Any]:
 
 
 @app.get("/api/memories/groups")
-async def memory_groups() -> dict[str, Any]:
+async def memory_groups() -> GroupsOut:
     return {"ok": True, "groups": registry.groups()}
 
 
 @app.post("/api/memories/groups")
-async def save_memory_group(body: GroupSpec, request: Request) -> dict[str, Any]:
+async def save_memory_group(body: GroupSpec, request: Request) -> GroupSaveOut:
     _guard_write(request)
     g = registry.save_group(body.name, body.title, body.description)
     _broadcast({"kind": "server.changed", "server": f"group:{body.name}"})
@@ -458,7 +651,7 @@ async def save_memory_group(body: GroupSpec, request: Request) -> dict[str, Any]
 
 
 @app.delete("/api/memories/groups/{name}")
-async def delete_memory_group(name: str, request: Request) -> dict[str, Any]:
+async def delete_memory_group(name: str, request: Request) -> OkNoteOut:
     _guard_write(request)
     if name == "default":
         raise HTTPException(422, "cannot delete the default group")
@@ -584,11 +777,11 @@ async def group_info(name: str) -> dict[str, Any]:
 
 
 @app.post("/api/memories/groups/{name}/members")
-async def group_membership(name: str, body: dict[str, Any], request: Request) -> dict[str, Any]:
+async def group_membership(name: str, body: GroupMemberBody, request: Request) -> GroupMemberOut:
     """Add/remove a server to/from a group: body {server, op: 'add'|'remove'}."""
     _guard_write(request)
-    server = body.get("server", "")
-    op = body.get("op", "add")
+    server = body.server
+    op = body.op
     if store.get_server(server) is None:
         raise HTTPException(404, f"server '{server}' not found")
     if op == "add":
@@ -641,14 +834,33 @@ class ReflectBody(BaseModel):
     kind: str = "agent-refine-request"  # agent-refine-request | agent-refine-commit
 
 
+# Board reflections are DATA, never instructions (SEC-4 poisoning hardening):
+# records written by this endpoint carry exactly these two tags, so agent
+# harnesses treat them as open questions from the board, not as decisions or
+# instructions. mnemos:decision and any other subtype are forbidden here.
+BOARD_REFLECT_TAGS = ["mnemos:open-question", "source:board"]
+_REFLECT_RATE_LIMIT = 10        # requests per client ...
+_REFLECT_RATE_WINDOW = 60.0     # ... per sliding window (seconds)
+_reflect_limiter = RateLimiter(limit=_REFLECT_RATE_LIMIT, window=_REFLECT_RATE_WINDOW)
+
+
 @app.post("/api/board-reflect")
-async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
+async def board_reflect(body: ReflectBody, request: Request) -> ReflectOut:
     """Refine cycle persistence: write the request/commit-marker into mnemos
-    memory (project:gcw, agent:gcw-agent-architect, mnemos:open-question /
-    mnemos:decision) so the Agent Architect harness picks it up across
-    sessions. Returns the created memory id."""
+    memory tagged ``mnemos:open-question`` + ``source:board`` ONLY (SEC-4:
+    board data is not instructions — harnesses must not treat these records
+    as decisions or directives). Rate limited per client. Returns the
+    created memory id."""
     _guard_write(request)
-    from .mnemos_client import post_json
+    client_ip = request.client.host if request.client else "unknown"
+    if not _reflect_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"board-reflect rate limit exceeded "
+            f"({_REFLECT_RATE_LIMIT} per {_REFLECT_RATE_WINDOW:.0f}s per client)",
+        )
+    if body.kind not in ("agent-refine-request", "agent-refine-commit"):
+        raise HTTPException(422, f"unknown kind: {body.kind}")
 
     servers = registry.active_servers()
     if not servers:
@@ -660,7 +872,6 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
             f"AGENT-REFINE COMMIT PREPARED for {body.specialist}: "
             f"{body.problem}. Tag: agent-refine. GCW commit pending — embed in next release (orphan-commit policy)."
         )
-        tags = ["project:gcw", "agent:gcw-agent-architect", "mnemos:decision", "agent-refine"]
         title = f"agent-refine commit marker — {body.specialist}"
     else:
         content = (
@@ -668,13 +879,71 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
             f"Owner feedback from the vesmaro-eyes specialist card. "
             f"@GCW: Agent Architect to analyze instructions/skills/rules and propose changes."
         )
-        tags = ["project:gcw", "agent:gcw-agent-architect", "mnemos:open-question", "agent-refine"]
         title = f"agent-refine request: {body.specialist}"
 
-    code, body_resp = post_json(server, "/memories", {
+    # BE-4: must stay async — a sync httpx call here would freeze the event
+    # loop and stall every concurrent request (e.g. GET /api/board) for the
+    # full mnemos round-trip.
+    code, body_resp = await mnemos_client.post_json_async(server, "/memories", {
         "content": content[:4000],
         "title": title[:120],
-        "tags": tags,
+        "tags": list(BOARD_REFLECT_TAGS),
+        "source": "mcp",
+        "memory_type": "note",
+    })
+    if code not in (200, 201):
+        detail = body_resp.get("detail") if isinstance(body_resp, dict) else str(body_resp)
+        raise HTTPException(code, f"mnemos: {detail}")
+    memory_id = body_resp.get("id") if isinstance(body_resp, dict) else None
+    return {"ok": True, "memory_id": memory_id, "server": server["name"]}
+
+
+# UI-6 "Новая задача": raw owner thought → memory draft. Freeze exception
+# (ADR 0006): tracker workflow feature — "the tracker needs itself".
+# Poisoning invariant (ui-contract §12, same SEC-4 rule as board-reflect):
+# records written here carry EXACTLY the three tags below — user-supplied
+# project/tags from the form are metadata inside CONTENT, never memory tags,
+# so no agent:/project: tag can be injected through this endpoint.
+TASK_DRAFT_TAGS = ["mnemos:open-question", "task-draft", "source:board"]
+_DRAFT_RATE_LIMIT = 10         # requests per client ...
+_DRAFT_RATE_WINDOW = 60.0      # ... per sliding window (seconds)
+_draft_limiter = RateLimiter(limit=_DRAFT_RATE_LIMIT, window=_DRAFT_RATE_WINDOW)
+
+
+@app.post("/api/task-drafts", status_code=201)
+async def create_task_draft(body: TaskDraftBody, request: Request) -> TaskDraftOut:
+    """Persist the owner's raw thought as a mnemos draft note (tags pinned
+    to TASK_DRAFT_TAGS) and return the memory coordinates; the SPA then
+    files the "Оформить черновик задачи" chore on the board. Rate limited
+    per client like board-reflect."""
+    _guard_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _draft_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"task-drafts rate limit exceeded "
+            f"({_DRAFT_RATE_LIMIT} per {_DRAFT_RATE_WINDOW:.0f}s per client)",
+        )
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(422, "draft text is empty")
+
+    servers = registry.active_servers()
+    if not servers:
+        raise HTTPException(503, "no active memory server")
+    server = servers[0]
+
+    # project / tags from the form are CONTENT metadata only — never tags
+    meta_lines = [f"проект: {body.project.strip() or '—'}",
+                  f"теги: {body.tags.strip() or '—'}"]
+    content = text + "\n\n— метаданные формы —\n" + "\n".join(meta_lines)
+    title = f"task-draft: {text[:60]}"
+
+    # BE-4: async mnemos round-trip — never block the event loop.
+    code, body_resp = await mnemos_client.post_json_async(server, "/memories", {
+        "content": content[:4000],
+        "title": title[:120],
+        "tags": list(TASK_DRAFT_TAGS),
         "source": "mcp",
         "memory_type": "note",
     })
@@ -688,7 +957,7 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
 # ----------------------------------------------------------- notifications
 @app.get("/api/notifications")
 async def notifications(after_id: int = 0, limit: int = 50,
-                        unread_only: bool = False) -> dict[str, Any]:
+                        unread_only: bool = False) -> NotificationsOut:
     return {
         "ok": True,
         "unread": store.unread_count(),
@@ -698,9 +967,12 @@ async def notifications(after_id: int = 0, limit: int = 50,
 
 
 @app.post("/api/notifications/read")
-async def notifications_read(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    nid = (body or {}).get("id")
-    store.mark_read(int(nid) if nid else None)
+async def notifications_read(
+    request: Request, body: NotificationReadBody | None = None
+) -> NotificationReadOut:
+    _guard_write(request)
+    # no body or {"id": null} marks ALL as read (previous contract kept)
+    store.mark_read(body.id if body else None)
     return {"ok": True, "unread": store.unread_count()}
 
 
@@ -719,7 +991,7 @@ async def archive() -> dict[str, Any]:
 
 
 @app.post("/api/tasks/{task_id}/archive")
-async def archive_task(task_id: str, request: Request) -> dict[str, Any]:
+async def archive_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request)
     if not store.archive_task(task_id):
         raise HTTPException(404, "task not found or already archived")
@@ -728,7 +1000,7 @@ async def archive_task(task_id: str, request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/tasks/{task_id}/unarchive")
-async def unarchive_task(task_id: str, request: Request) -> dict[str, Any]:
+async def unarchive_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request)
     if not store.unarchive_task(task_id):
         raise HTTPException(404, "task not found or not archived")
@@ -966,10 +1238,21 @@ async def agent_activity(name: str, project: str = "", limit: int = 10) -> dict[
 
 
 def _guard_write(request: Request) -> None:
+    """Mutation guard (SEC-3, fail-closed).
+
+    Empty VESMARO_BOARD_TOKEN means auth is NOT configured: every mutation
+    is rejected with 503 (the Helm chart provisions the token; compose.yaml
+    ships a dev value for local runs). The comparison is constant-time.
+    """
     if not BOARD_WRITE_TOKEN:
-        return
+        raise HTTPException(
+            503,
+            "mutation auth is not configured: set VESMARO_BOARD_TOKEN to "
+            "enable board writes (fail-closed; see compose.yaml for local dev)",
+        )
     auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {BOARD_WRITE_TOKEN}":
+    expected = f"Bearer {BOARD_WRITE_TOKEN}"
+    if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(401, "board write token required")
 
 

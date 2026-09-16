@@ -14,12 +14,15 @@ and a memory speak the same lifecycle language.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .security import mask_secrets
 
 # Columns of the kanban board, in display order. Values equal the mnemos
 # workflow state machine so a task can graduate into a memory later.
@@ -240,7 +243,9 @@ class Store:
         env = payload.get("env", "unknown")
         if env not in VALID_ENVS:
             raise ValueError(f"invalid env: {env}")
-        task_id = payload.get("id") or f"t-{int(time.time()*1000)}"
+        # random suffix: two creates in the same millisecond must not
+        # collide on the tasks.id UNIQUE constraint (QA-1 regression)
+        task_id = payload.get("id") or f"t-{int(time.time()*1000)}-{secrets.token_hex(2)}"
         now = _now()
         with self._lock, self._conn() as db:
             pos = db.execute(
@@ -459,7 +464,7 @@ class Store:
             self._log(db, "server." + action, None, {"server": server})
             db.execute(
                 "INSERT INTO server_log (ts, server, action, detail) VALUES (?,?,?,?)",
-                (_now(), server, action, detail[:500]),
+                (_now(), server, action, mask_secrets(detail)[:500]),
             )
 
     def server_history(self, server: str, limit: int = 20) -> list[dict[str, Any]]:

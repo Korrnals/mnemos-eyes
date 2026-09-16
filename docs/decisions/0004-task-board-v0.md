@@ -43,6 +43,22 @@ decision 2026-09-15, archcom rounds 3–4). This repo keeps the directory name
    k3s cluster, traefik can only reach **hostNetwork** endpoints (verified:
    pod-IP backends give 502). The board therefore runs `hostNetwork: true`
    behind `vesmaro.abyss.lab`, mirroring `agentsnode-hermes-desktop`.
+
+   **Root cause (установлен read-only спайком 2026-09-16):** 502 на
+   pod-IP/ClusterIP бэкендах вызывает не node firewall, а NetworkPolicy
+   `agentsnode-policies` (namespace `kube-agents`, чарт 0.1.8), которая
+   разрешает ingress к подам с лейблом `part-of=agentsnode` только из своего
+   namespace и из LAN `192.168.1.0/24`; traefik (kube-system, pod-IP
+   10.42.x) под оба правила не попадает и получает REJECT (k3s embedded
+   kube-router netpol). hostNetwork-бэкенды работают потому, что
+   netpol-энфорсмент привязан к veth пода и на hostNetwork-поды не
+   распространяется; node firewall к проблеме отношения не имеет.
+   Доказательная матрица: traefik→mnemos pod-IP = refused, traefik→pod без
+   лейбла (omniroute) = OK, kube-agents-под→mnemos = 401 (транспорт жив),
+   борд(hostNetwork, LAN)→mnemos = OK. **Целевой фикс (SRE-1):** добавить в
+   политику ingress-правило `from: kube-system / app.kubernetes.io/name=traefik`,
+   после чего борд переводится на Helm+ingress без hostNetwork; до правки
+   политики миграция на ClusterIP воспроизведёт 502.
 6. **Local dev** runs the same image via podman-compose with a project-dir
    bind mount (`./data:/data`) for fast iteration.
 
