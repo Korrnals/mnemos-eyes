@@ -1,6 +1,6 @@
 # vesmaro-eyes — task board (podman-compose)
 #
-# Run:    podman-compose up -d --build
+# Run:    docker compose up -d  (или podman-compose up -d)
 # Stop:   podman-compose down
 # Logs:   podman-compose logs -f eyes
 #
