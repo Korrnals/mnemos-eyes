@@ -1,0 +1,199 @@
+# Default values for vesmaro-eyes.
+# Comments are normative; keep them in sync with templates and RUNBOOK.md.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Release naming contract (see RUNBOOK.md): deploy as
+#   helm install vesmaro-eyes deploy/chart/vesmaro-eyes -n kube-agents
+# so pre-existing bare resources (deployment/service/ingress/pvc named
+# vesmaro-eyes*) are adopted instead of colliding.
+
+image:
+  repository: ghcr.io/korrnals/vesmaro-eyes
+  # Explicit tag synced from server/app.py by scripts/sync-version.sh.
+  # If left empty, .Chart.AppVersion is used.
+  tag: "1.1.0"
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: ghcr-pull
+
+serviceAccount:
+  create: true
+  name: ""
+  # The board never talks to the Kubernetes API.
+  automountServiceAccountToken: false
+
+podAnnotations: {}
+
+podLabels: {}
+
+# --- secrets -------------------------------------------------------------
+boardToken:
+  # VESMARO_BOARD_TOKEN (write guard, fail-closed). By default the chart
+  # creates the secret on first install with randAlphaNum(48) and REUSES
+  # the existing value on every later upgrade (lookup-based). Set
+  # existingSecret to skip chart generation entirely and reference a
+  # secret you manage yourself.
+  existingSecret: ""
+  existingSecretKey: VESMARO_BOARD_TOKEN
+
+mnemos:
+  cluster:
+    url: http://agentsnode-mnemos:8787
+    # Existing out-of-band secret (board bearer token, mnk_..., totp_required=0).
+    # NEVER overwritten by the chart. Required.
+    existingSecret: vesmaro-eyes-mnemos
+    existingSecretKey: MNEMOS_TOKEN
+  laptop:
+    # Laptop mnemos store (LAN bind 8788). Only the token env is injected;
+    # the server row itself lives in the board registry (SQLite).
+    enabled: true
+    existingSecret: vesmaro-eyes-laptop
+    existingSecretKey: MNEMOS_LAPTOP_TOKEN
+
+# Legacy seed file /data/memories.yaml. The live registry is DB-backed
+# (board.db on the PVC) and already seeded on this cluster, so the ConfigMap
+# stays disabled by default. Enable only for FRESH installs to seed servers
+# on first boot (mounted read-only at /config, VESMARO_MEMORY_CONFIG points
+# there; it never shadows the PVC).
+memoryRegistry:
+  configMap:
+    create: false
+    content: {}
+    # servers:
+    #   - name: cluster
+    #     url: http://agentsnode-mnemos:8787
+    #     token_env: MNEMOS_TOKEN
+    #     group: abyss
+    #     primary: true
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: traefik
+  host: vesmaro.abyss.lab
+  tls:
+    # Self-signed cert for the lab domain; browser warning is accepted
+    # (documented in RUNBOOK.md). Create the secret with
+    # scripts/gen-tls-secret.sh BEFORE the first install.
+    enabled: true
+    secretName: vesmaro-eyes-tls
+  labels: {}
+  annotations: {}
+
+persistence:
+  # Empty -> chart-managed PVC named "<fullname>-data"
+  # (vesmaro-eyes-data for the canonical release name, which matches the
+  # pre-existing local-path PVC — adopt it, see RUNBOOK.md).
+  existingClaim: ""
+  storageClass: local-path
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  # helm.sh/resource-policy: keep — survives `helm uninstall`, the board
+  # DB must never be garbage-collected by a release operation.
+  keepOnUninstall: true
+
+replicaCount: 1
+strategy: Recreate
+revisionHistoryLimit: 5
+
+containerPort: 8080
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi
+
+# /api/health is EXPENSIVE: it pings every registered mnemos server
+# (cluster + laptop) on each call. All probe timings are sized for that;
+# do not shorten timeoutSeconds without re-measuring (RUNBOOK.md).
+probes:
+  startup:
+    periodSeconds: 5
+    failureThreshold: 24 # up to 120s for first boot + mnemos pings
+    timeoutSeconds: 12
+  readiness:
+    periodSeconds: 30
+    timeoutSeconds: 12
+    failureThreshold: 2
+  liveness:
+    periodSeconds: 90
+    timeoutSeconds: 14
+    failureThreshold: 3
+
+extraEnv: []
+#  - name: EXAMPLE
+#    value: "value"
+
+# --- NetworkPolicy (SEC-3 AMEND) ------------------------------------------
+# Default-deny pod for the board itself. NOTE: the foreign shared policy
+# agentsnode-policies (helm chart agentsnode-policies-0.1.8) ALSO applies to
+# this pod via the part-of=agentsnode label; netpol semantics are a UNION,
+# so the effective access is the union of both policies (verified against
+# the live policy on 2026-09-16, see deploy/netpol-traefik-fix.md).
+networkPolicy:
+  enabled: true
+  ingress:
+    traefik:
+      enabled: true
+      # Matches the live traefik pod:
+      #   ns kube-system (kubernetes.io/metadata.name=kube-system)
+      #   pod app.kubernetes.io/name=traefik
+      namespaceLabel:
+        kubernetes.io/metadata.name: kube-system
+      podSelector:
+        app.kubernetes.io/name: traefik
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Direct LAN access to the POD (bypassing traefik) for diagnostics.
+    # Off by default; enable for a diagnostics window, then disable again.
+    allowLan:
+      enabled: false
+      cidr: 192.168.1.0/24
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    dns:
+      enabled: true
+      namespaceLabel:
+        kubernetes.io/metadata.name: kube-system
+      podSelector:
+        k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # In-cluster mnemos (agentsnode-mnemos:8787), same namespace.
+    mnemos:
+      enabled: true
+      podSelector:
+        app.kubernetes.io/name: mnemos
+      ports:
+        - port: 8787
+          protocol: TCP
+    # Laptop mnemos store over LAN.
+    lan:
+      enabled: true
+      cidr: 192.168.1.0/24
+      ports:
+        - port: 8788
+          protocol: TCP
+    # Escape hatch for future registered stores.
+    extra: []

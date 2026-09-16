@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vesmaro-eyes.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vesmaro-eyes.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy:
+    type: {{ .Values.strategy }} # Recreate: RWO local-path PVC, single replica
+  selector:
+    matchLabels:
+      {{- include "vesmaro-eyes.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vesmaro-eyes.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # NO hostNetwork: traefik reaches the pod over the ingress path once
+      # the agentsnode-policies netpol admits it (deploy/netpol-traefik-fix.md).
+      serviceAccountName: {{ include "vesmaro-eyes.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: eyes
+          image: {{ include "vesmaro-eyes.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          env:
+            - name: MNEMOS_URL
+              value: {{ .Values.mnemos.cluster.url | quote }}
+            - name: MNEMOS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "mnemos.cluster.existingSecret is required" .Values.mnemos.cluster.existingSecret }}
+                  key: {{ required "mnemos.cluster.existingSecretKey is required" .Values.mnemos.cluster.existingSecretKey }}
+            {{- if .Values.mnemos.laptop.enabled }}
+            - name: MNEMOS_LAPTOP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "mnemos.laptop.existingSecret is required" .Values.mnemos.laptop.existingSecret }}
+                  key: {{ required "mnemos.laptop.existingSecretKey is required" .Values.mnemos.laptop.existingSecretKey }}
+            {{- end }}
+            - name: VESMARO_BOARD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vesmaro-eyes.boardTokenSecretName" . }}
+                  key: {{ .Values.boardToken.existingSecretKey }}
+            {{- if .Values.memoryRegistry.configMap.create }}
+            - name: VESMARO_MEMORY_CONFIG
+              value: /config/memories.yaml
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.probes }}
+          # All probes hit /api/health which pings every registered mnemos
+          # server (cluster + laptop) — slow by design, timeouts sized for it.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: {{ .startup.periodSeconds }}
+            failureThreshold: {{ .startup.failureThreshold }}
+            timeoutSeconds: {{ .startup.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: {{ .readiness.periodSeconds }}
+            failureThreshold: {{ .readiness.failureThreshold }}
+            timeoutSeconds: {{ .readiness.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: {{ .liveness.periodSeconds }}
+            failureThreshold: {{ .liveness.failureThreshold }}
+            timeoutSeconds: {{ .liveness.timeoutSeconds }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            {{- if .Values.memoryRegistry.configMap.create }}
+            - name: memories-config
+              mountPath: /config
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "vesmaro-eyes.pvcName" . }}
+        {{- if .Values.memoryRegistry.configMap.create }}
+        - name: memories-config
+          configMap:
+            name: {{ include "vesmaro-eyes.fullname" . }}-memories
+        {{- end }}

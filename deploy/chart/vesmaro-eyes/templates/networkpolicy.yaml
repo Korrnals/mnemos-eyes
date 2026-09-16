@@ -1,0 +1,72 @@
+{{- if .Values.networkPolicy.enabled -}}
+{{/* SEC-3 AMEND: default-deny pod policy for the board. Effective access
+is the UNION of this policy and the foreign shared agentsnode-policies
+(both select the pod via part-of=agentsnode) — see
+deploy/netpol-traefik-fix.md for the live shared policy. */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vesmaro-eyes.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vesmaro-eyes.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vesmaro-eyes.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.networkPolicy.ingress.traefik.enabled }}
+    # Ingress controller only (kube-system / app.kubernetes.io/name=traefik,
+    # verified against the live pod 2026-09-16).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingress.traefik.namespaceLabel | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingress.traefik.podSelector | nindent 14 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.ingress.traefik.ports | nindent 8 }}
+    {{- end }}
+    {{- if .Values.networkPolicy.ingress.allowLan.enabled }}
+    # Diagnostics window only: direct LAN -> pod, bypassing traefik.
+    - from:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.ingress.allowLan.cidr }}
+      ports:
+        {{- toYaml .Values.networkPolicy.ingress.allowLan.ports | nindent 8 }}
+    {{- end }}
+  egress:
+    {{- if .Values.networkPolicy.egress.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.dns.namespaceLabel | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.dns.podSelector | nindent 14 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.dns.ports | nindent 8 }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.mnemos.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.mnemos.podSelector | nindent 14 }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.mnemos.ports | nindent 8 }}
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.lan.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.egress.lan.cidr }}
+      ports:
+        {{- toYaml .Values.networkPolicy.egress.lan.ports | nindent 8 }}
+    {{- end }}
+    {{- with .Values.networkPolicy.egress.extra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

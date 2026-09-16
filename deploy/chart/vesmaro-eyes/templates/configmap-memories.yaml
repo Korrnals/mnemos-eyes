@@ -1,0 +1,19 @@
+{{- if .Values.memoryRegistry.configMap.create -}}
+{{/* Legacy seed file for FRESH installs only. Mounted read-only at
+/config; VESMARO_MEMORY_CONFIG points there so it never shadows the PVC. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vesmaro-eyes.fullname" . }}-memories
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vesmaro-eyes.labels" . | nindent 4 }}
+data:
+  memories.yaml: |
+    {{- if .Values.memoryRegistry.configMap.content }}
+    {{- toYaml .Values.memoryRegistry.configMap.content | nindent 4 }}
+    {{- else }}
+    # Empty seed: the registry starts with zero servers. Fill
+    # memoryRegistry.configMap.content in values to pre-seed stores.
+    {{- end }}
+{{- end }}

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Deploy vesmaro-eyes to the abyss-ai-agent k3s cluster (namespace kube-agents).
 #
+# DEPRECATED since SRE-1: canonical deploys go through Helm
+# (deploy/chart/vesmaro-eyes, see its RUNBOOK.md). Kept only as the
+# emergency rollback path (Runbook §4, level 2).
+#
 # Steps:
 #   1. Ensure the vesmaro-eyes-mnemos secret exists. It is NEVER overwritten
 #      by this script: the board bearer token (mnk_..., totp_required=0) is

@@ -1,0 +1,23 @@
+- op: add
+  path: /spec/ingress/-
+  value:
+    # Ingress controller (traefik, helm release in kube-system).
+    # Labels verified against the live pod on 2026-09-16:
+    #   app.kubernetes.io/instance=traefik-kube-system
+    #   app.kubernetes.io/managed-by=Helm
+    #   app.kubernetes.io/name=traefik
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: traefik
+    # 8080: vesmaro-eyes board. 8787: agentsnode-mnemos (restores the
+    # intended mnemos.abyss.lab ingress, currently 502 for the same reason).
+    # Minimal set on purpose — extend only with a documented reason.
+    ports:
+      - port: 8080
+        protocol: TCP
+      - port: 8787
+        protocol: TCP
