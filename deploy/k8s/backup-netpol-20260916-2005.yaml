@@ -1,0 +1,134 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    meta.helm.sh/release-name: agentsnode-policies
+    meta.helm.sh/release-namespace: kube-agents
+  creationTimestamp: "2026-07-18T20:00:08Z"
+  generation: 14
+  labels:
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/instance: agentsnode-policies
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: agentsnode-policies
+    app.kubernetes.io/version: "1.0"
+    helm.sh/chart: agentsnode-policies-0.1.8
+  name: agentsnode-policies
+  namespace: kube-agents
+  resourceVersion: "2144605"
+  uid: db3ebdf5-fd7c-429c-905b-8c8270576d3f
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  - ports:
+    - port: 443
+      protocol: TCP
+    - port: 80
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.43.0.1/32
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 10.43.0.10/32
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 192.168.1.72/32
+  - ports:
+    - port: 443
+      protocol: UDP
+    to:
+    - ipBlock:
+        cidr: 193.176.79.79/32
+  - ports:
+    - port: 6443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 192.168.1.72/32
+  - ports:
+    - port: 8642
+      protocol: TCP
+    - port: 9119
+      protocol: TCP
+    - port: 8644
+      protocol: TCP
+    - port: 20128
+      protocol: TCP
+    - port: 8787
+      protocol: TCP
+    - port: 6080
+      protocol: TCP
+    - port: 5900
+      protocol: TCP
+    - port: 1080
+      protocol: TCP
+    - port: 8080
+      protocol: TCP
+    to:
+    - podSelector: {}
+  ingress:
+  - from:
+    - podSelector: {}
+    ports:
+    - port: 8642
+      protocol: TCP
+    - port: 9119
+      protocol: TCP
+    - port: 20128
+      protocol: TCP
+    - port: 8787
+      protocol: TCP
+    - port: 6080
+      protocol: TCP
+    - port: 5900
+      protocol: TCP
+    - port: 1080
+      protocol: TCP
+    - port: 8080
+      protocol: TCP
+  - from:
+    - ipBlock:
+        cidr: 192.168.1.0/24
+    ports:
+    - port: 8642
+      protocol: TCP
+    - port: 9119
+      protocol: TCP
+    - port: 20128
+      protocol: TCP
+    - port: 8787
+      protocol: TCP
+    - port: 6080
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: agentsnode
+  policyTypes:
+  - Ingress
+  - Egress
