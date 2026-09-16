@@ -1,13 +1,16 @@
 """Memory-server registry backed by the board DB (full UI CRUD).
 
 Servers and groups live in SQLite (``memory_servers`` / ``memory_groups``)
-— the UI can add, edit, enable/disable, pause, remove them. Tokens are
+— the UI can add, edit, enable/disable, pause/remove them. Tokens are
 NEVER stored in the DB: a server row carries ``token_ref`` which resolves
 at request time to a secret from
 
   1. ``env:<VARNAME>``  — environment variable
   2. ``file:<path>``    — file on the mounted volume (e.g. a mounted secret)
-  3. ``plain:<token>``  — dev convenience (avoid)
+  3. ``plain:<token>``  — LEGACY ONLY (never accepted via the API since
+     SEC-2; on load, existing plain refs are migrated to a 0600 file under
+     the provisioned secrets directory, or kept but always masked in API
+     responses when that is impossible)
 
 On first boot the registry seeds itself from the legacy YAML config
 (``/data/memories.yaml``) or the v0 env fallbacks, so existing deployments
@@ -41,6 +44,27 @@ def resolve_token(token_ref: str) -> str:
     if token_ref.startswith("plain:"):
         return token_ref[6:]
     return ""
+
+
+def _materialize_plain(name: str, token: str) -> str | None:
+    """Store a legacy plain: token as a 0600 file in the provisioned
+    secrets directory (SEC-2 on-the-fly migration). Returns the file: ref,
+    or None when the secret could not be written (row keeps plain: but is
+    masked in every API response)."""
+    from .security import secret_dirs
+
+    try:
+        secrets_dir = secret_dirs()[0]
+        secrets_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(secrets_dir, 0o700)
+        path = secrets_dir / f"legacy-{name}.token"
+        if not (path.exists() and path.read_text(encoding="utf-8") == token):
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(token)
+        return str(path)
+    except OSError:
+        return None
 
 
 def _guess_token_ref(url: str, name: str) -> str:
@@ -108,6 +132,35 @@ class ServerRegistry:
     def __init__(self, store: Store) -> None:
         self._store = store
         self._migrate_legacy()
+        self._migrate_plain_refs()
+
+    def _migrate_plain_refs(self) -> None:
+        """SEC-2: rewrite legacy ``plain:<token>`` rows on load.
+
+        Preferred: materialize the secret into a 0600 file under the
+        provisioned secrets directory and store a ``file:`` ref. Fallback
+        (write failed): the row keeps ``plain:`` but the raw value is never
+        returned — app._server_public masks it and server-side log writes
+        are scrubbed (store.mask_secrets). Empty ``plain:`` refs are cleared.
+        """
+        for row in self._store.list_servers():
+            ref = row.get("token_ref") or ""
+            if not ref.startswith("plain:"):
+                continue
+            base = {
+                "name": row["name"],
+                "url": row["url"],
+                "group_name": row.get("group_name", "default"),
+                "description": row.get("description", ""),
+            }
+            token = ref[6:]
+            if not token:
+                self._store.upsert_server({**base, "token_ref": ""})
+                continue
+            path = _materialize_plain(row["name"], token)
+            if path is None:
+                continue  # keep as-is; masked everywhere in the API
+            self._store.upsert_server({**base, "token_ref": f"file:{path}"})
 
     def _migrate_legacy(self) -> None:
         if self._store.list_servers():

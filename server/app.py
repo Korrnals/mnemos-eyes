@@ -12,6 +12,7 @@ Volume: /data (board.db)
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,7 +24,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import mnemos_client
-from .memory_registry import ServerRegistry, write_config_template
+from .memory_registry import ServerRegistry, resolve_token, write_config_template
+from .security import (
+    RateLimiter,
+    ValidationError,
+    validate_memory_url,
+    validate_token_ref,
+)
 from .store import Store, VALID_STATUSES
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
@@ -31,8 +38,10 @@ DB_PATH = DATA_DIR / "board.db"
 STATIC_DIR = Path(os.environ.get("VESMARO_WEB", Path(__file__).resolve().parents[1] / "web"))
 
 # Board read/write is open on the LAN by design (the cluster ingress is the
-# boundary); mnemos credentials stay server-side. Override to require a
-# bearer for mutations if the board ever leaves the trust zone.
+# boundary); mnemos credentials stay server-side. Since SEC-3 the write
+# guard is FAIL-CLOSED: mutations require this bearer token, and when it is
+# not configured every mutation answers 503. The Helm chart generates the
+# token; compose.yaml ships a dev default for local runs.
 BOARD_WRITE_TOKEN = os.environ.get("VESMARO_BOARD_TOKEN", "")
 
 write_config_template(DATA_DIR / "memories.yaml")
@@ -183,7 +192,8 @@ class ServerSpec(BaseModel):
     url: str = Field(min_length=1)
     group_name: str = "default"
     description: str = ""
-    token_ref: str = ""          # env:VAR | file:/path | plain:token
+    token_ref: str = ""   # env:VAR | file:<path under a provisioned secrets dir>;
+                          # plain: is rejected via the API (SEC-2)
     enabled: bool = True
 
 
@@ -313,7 +323,10 @@ async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
 
 # ------------------------------------------------------- memory servers CRUD
 def _server_public(s: dict[str, Any]) -> dict[str, Any]:
-    """Public shape — never includes the token itself."""
+    """Public shape — token values are NEVER included; legacy ``plain:``
+    refs are masked (SEC-2) while ``has_token`` still reports that a
+    secret is provisioned for this server."""
+    ref = s.get("token_ref", "") or ""
     return {
         "name": s["name"],
         "url": s["url"],
@@ -321,8 +334,8 @@ def _server_public(s: dict[str, Any]) -> dict[str, Any]:
         "description": s["description"],
         "enabled": bool(s["enabled"]),
         "state": s["state"],
-        "token_ref": s.get("token_ref", ""),
-        "has_token": bool(s.get("token")),
+        "token_ref": "plain:<redacted>" if ref.startswith("plain:") else ref,
+        "has_token": bool(resolve_token(ref)),
     }
 
 
@@ -343,19 +356,33 @@ async def memory_servers() -> dict[str, Any]:
     }
 
 
+def _validate_server_spec(body: ServerSpec) -> tuple[str, str]:
+    """SEC-1 boundary: validate url (scheme + host egress policy) and
+    token_ref (no plain:, file: only under provisioned dirs) BEFORE any
+    network activity or persistence. Raises 422 on violation."""
+    try:
+        url = validate_memory_url(body.url)
+        token_ref = validate_token_ref(body.token_ref)
+    except ValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return url, token_ref
+
+
 @app.post("/api/memories/servers", status_code=201)
 async def add_memory_server(body: ServerSpec, request: Request) -> dict[str, Any]:
     _guard_write(request)
-    url = body.url.rstrip("/")
+    url, token_ref = _validate_server_spec(body)
     existing = store.get_server(body.name)
     if existing is None:
-        # verify reachability before first save (honest, non-blocking)
-        probe_spec = {"name": body.name, "url": url, "token": _token_for(body.token_ref)}
+        # verify reachability before first save (honest, non-blocking).
+        # SEC-1: the probe for a NEW host carries NO Authorization header —
+        # an attacker-chosen URL must never receive the memory token.
+        probe_spec = {"name": body.name, "url": url, "token": ""}
         code, _ = await mnemos_client.post_json_async(probe_spec, "/search",
                                                       {"query": "ping", "limit": 1}, timeout=6.0)
         row = registry.add_or_update({
             "name": body.name, "url": url, "group_name": body.group_name,
-            "description": body.description, "token_ref": body.token_ref,
+            "description": body.description, "token_ref": token_ref,
         })
         store.log_server_action(body.name, "added", f"probe http {code}")
         if code == 503:
@@ -365,19 +392,15 @@ async def add_memory_server(body: ServerSpec, request: Request) -> dict[str, Any
     raise HTTPException(409, f"server '{body.name}' already exists")
 
 
-def _token_for(token_ref: str) -> str:
-    from .memory_registry import resolve_token
-    return resolve_token(token_ref)
-
-
 @app.patch("/api/memories/servers/{name}")
 async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> dict[str, Any]:
     _guard_write(request)
+    url, token_ref = _validate_server_spec(body)
     if store.get_server(name) is None:
         raise HTTPException(404, f"server '{name}' not found")
     row = registry.add_or_update({
-        "name": name, "url": body.url.rstrip("/"), "group_name": body.group_name,
-        "description": body.description, "token_ref": body.token_ref,
+        "name": name, "url": url, "group_name": body.group_name,
+        "description": body.description, "token_ref": token_ref,
     })
     _broadcast({"kind": "server.changed", "server": name})
     return _server_public(row)
@@ -641,13 +664,33 @@ class ReflectBody(BaseModel):
     kind: str = "agent-refine-request"  # agent-refine-request | agent-refine-commit
 
 
+# Board reflections are DATA, never instructions (SEC-4 poisoning hardening):
+# records written by this endpoint carry exactly these two tags, so agent
+# harnesses treat them as open questions from the board, not as decisions or
+# instructions. mnemos:decision and any other subtype are forbidden here.
+BOARD_REFLECT_TAGS = ["mnemos:open-question", "source:board"]
+_REFLECT_RATE_LIMIT = 10        # requests per client ...
+_REFLECT_RATE_WINDOW = 60.0     # ... per sliding window (seconds)
+_reflect_limiter = RateLimiter(limit=_REFLECT_RATE_LIMIT, window=_REFLECT_RATE_WINDOW)
+
+
 @app.post("/api/board-reflect")
 async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
     """Refine cycle persistence: write the request/commit-marker into mnemos
-    memory (project:gcw, agent:gcw-agent-architect, mnemos:open-question /
-    mnemos:decision) so the Agent Architect harness picks it up across
-    sessions. Returns the created memory id."""
+    memory tagged ``mnemos:open-question`` + ``source:board`` ONLY (SEC-4:
+    board data is not instructions — harnesses must not treat these records
+    as decisions or directives). Rate limited per client. Returns the
+    created memory id."""
     _guard_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _reflect_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"board-reflect rate limit exceeded "
+            f"({_REFLECT_RATE_LIMIT} per {_REFLECT_RATE_WINDOW:.0f}s per client)",
+        )
+    if body.kind not in ("agent-refine-request", "agent-refine-commit"):
+        raise HTTPException(422, f"unknown kind: {body.kind}")
     from .mnemos_client import post_json
 
     servers = registry.active_servers()
@@ -660,7 +703,6 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
             f"AGENT-REFINE COMMIT PREPARED for {body.specialist}: "
             f"{body.problem}. Tag: agent-refine. GCW commit pending — embed in next release (orphan-commit policy)."
         )
-        tags = ["project:gcw", "agent:gcw-agent-architect", "mnemos:decision", "agent-refine"]
         title = f"agent-refine commit marker — {body.specialist}"
     else:
         content = (
@@ -668,13 +710,12 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
             f"Owner feedback from the vesmaro-eyes specialist card. "
             f"@GCW: Agent Architect to analyze instructions/skills/rules and propose changes."
         )
-        tags = ["project:gcw", "agent:gcw-agent-architect", "mnemos:open-question", "agent-refine"]
         title = f"agent-refine request: {body.specialist}"
 
     code, body_resp = post_json(server, "/memories", {
         "content": content[:4000],
         "title": title[:120],
-        "tags": tags,
+        "tags": list(BOARD_REFLECT_TAGS),
         "source": "mcp",
         "memory_type": "note",
     })
@@ -966,10 +1007,21 @@ async def agent_activity(name: str, project: str = "", limit: int = 10) -> dict[
 
 
 def _guard_write(request: Request) -> None:
+    """Mutation guard (SEC-3, fail-closed).
+
+    Empty VESMARO_BOARD_TOKEN means auth is NOT configured: every mutation
+    is rejected with 503 (the Helm chart provisions the token; compose.yaml
+    ships a dev value for local runs). The comparison is constant-time.
+    """
     if not BOARD_WRITE_TOKEN:
-        return
+        raise HTTPException(
+            503,
+            "mutation auth is not configured: set VESMARO_BOARD_TOKEN to "
+            "enable board writes (fail-closed; see compose.yaml for local dev)",
+        )
     auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {BOARD_WRITE_TOKEN}":
+    expected = f"Bearer {BOARD_WRITE_TOKEN}"
+    if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(401, "board write token required")
 
 

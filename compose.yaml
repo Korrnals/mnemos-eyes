@@ -26,6 +26,11 @@ services:
     environment:
       - MNEMOS_URL=${MNEMOS_URL:-http://host.containers.internal:8787}
       - MNEMOS_TOKEN=${MNEMOS_TOKEN:-}
+      # SEC-3: mutations are fail-closed — a dev default keeps the local
+      # scenario working; production must override via the chart secret.
+      - VESMARO_BOARD_TOKEN=${VESMARO_BOARD_TOKEN:-dev-board-token-change-me}
+      # SEC-1: egress allowlist for memory-server hosts (dev: local mnemos).
+      - VESMARO_ALLOWED_MEMORY_HOSTS=${VESMARO_ALLOWED_MEMORY_HOSTS:-host.containers.internal,localhost,127.0.0.1}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4).status==200 else 1)"]
       interval: 30s

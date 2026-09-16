@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .security import mask_secrets
+
 # Columns of the kanban board, in display order. Values equal the mnemos
 # workflow state machine so a task can graduate into a memory later.
 COLUMNS: tuple[str, ...] = ("open", "in-progress", "blocked", "resolved", "done")
@@ -459,7 +461,7 @@ class Store:
             self._log(db, "server." + action, None, {"server": server})
             db.execute(
                 "INSERT INTO server_log (ts, server, action, detail) VALUES (?,?,?,?)",
-                (_now(), server, action, detail[:500]),
+                (_now(), server, action, mask_secrets(detail)[:500]),
             )
 
     def server_history(self, server: str, limit: int = 20) -> list[dict[str, Any]]:
