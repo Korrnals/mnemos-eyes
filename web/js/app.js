@@ -809,7 +809,8 @@ async function openServerModal(name) {
   $("#srv-name").disabled = !!name;
   $("#srv-url").value = "";
   $("#srv-token").value = "";
-  $("#srv-token").placeholder = name ? "оставить пустым — без изменения" : "env:VAR / file:/path / plain:token";
+  // Server API answers 422 for raw-token refs — only env:/file: are offered.
+  $("#srv-token").placeholder = name ? "оставить пустым — без изменения" : "env:VAR / file:/path";
   $("#srv-desc-input").value = "";
   $("#srv-note").textContent = "";
   $("#srv-history").innerHTML = "";
