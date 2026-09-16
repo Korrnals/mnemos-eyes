@@ -327,6 +327,22 @@ class ReflectOut(_ApiModel):
     server: str
 
 
+class TaskDraftBody(BaseModel):
+    """UI-6: raw owner thought from the "Новая задача" board form.
+    ``project`` / ``tags`` are free-form strings — they are folded into the
+    memory CONTENT as metadata, never into memory tags (poisoning
+    invariant, ui-contract §12)."""
+    text: str = Field(min_length=1, max_length=8000)
+    project: str = Field(default="", max_length=120)
+    tags: str = Field(default="", max_length=400)
+
+
+class TaskDraftOut(_ApiModel):
+    ok: bool
+    memory_id: str | None = None
+    server: str
+
+
 class NotificationOut(_ApiModel):
     id: int
     category: str
@@ -872,6 +888,62 @@ async def board_reflect(body: ReflectBody, request: Request) -> ReflectOut:
         "content": content[:4000],
         "title": title[:120],
         "tags": list(BOARD_REFLECT_TAGS),
+        "source": "mcp",
+        "memory_type": "note",
+    })
+    if code not in (200, 201):
+        detail = body_resp.get("detail") if isinstance(body_resp, dict) else str(body_resp)
+        raise HTTPException(code, f"mnemos: {detail}")
+    memory_id = body_resp.get("id") if isinstance(body_resp, dict) else None
+    return {"ok": True, "memory_id": memory_id, "server": server["name"]}
+
+
+# UI-6 "Новая задача": raw owner thought → memory draft. Freeze exception
+# (ADR 0006): tracker workflow feature — "the tracker needs itself".
+# Poisoning invariant (ui-contract §12, same SEC-4 rule as board-reflect):
+# records written here carry EXACTLY the three tags below — user-supplied
+# project/tags from the form are metadata inside CONTENT, never memory tags,
+# so no agent:/project: tag can be injected through this endpoint.
+TASK_DRAFT_TAGS = ["mnemos:open-question", "task-draft", "source:board"]
+_DRAFT_RATE_LIMIT = 10         # requests per client ...
+_DRAFT_RATE_WINDOW = 60.0      # ... per sliding window (seconds)
+_draft_limiter = RateLimiter(limit=_DRAFT_RATE_LIMIT, window=_DRAFT_RATE_WINDOW)
+
+
+@app.post("/api/task-drafts", status_code=201)
+async def create_task_draft(body: TaskDraftBody, request: Request) -> TaskDraftOut:
+    """Persist the owner's raw thought as a mnemos draft note (tags pinned
+    to TASK_DRAFT_TAGS) and return the memory coordinates; the SPA then
+    files the "Оформить черновик задачи" chore on the board. Rate limited
+    per client like board-reflect."""
+    _guard_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _draft_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"task-drafts rate limit exceeded "
+            f"({_DRAFT_RATE_LIMIT} per {_DRAFT_RATE_WINDOW:.0f}s per client)",
+        )
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(422, "draft text is empty")
+
+    servers = registry.active_servers()
+    if not servers:
+        raise HTTPException(503, "no active memory server")
+    server = servers[0]
+
+    # project / tags from the form are CONTENT metadata only — never tags
+    meta_lines = [f"проект: {body.project.strip() or '—'}",
+                  f"теги: {body.tags.strip() or '—'}"]
+    content = text + "\n\n— метаданные формы —\n" + "\n".join(meta_lines)
+    title = f"task-draft: {text[:60]}"
+
+    # BE-4: async mnemos round-trip — never block the event loop.
+    code, body_resp = await mnemos_client.post_json_async(server, "/memories", {
+        "content": content[:4000],
+        "title": title[:120],
+        "tags": list(TASK_DRAFT_TAGS),
         "source": "mcp",
         "memory_type": "note",
     })

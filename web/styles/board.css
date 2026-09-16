@@ -394,6 +394,20 @@ body {
 }
 .srv-stat-chip b { color: var(--color-text-primary); }
 
+/* New task draft modal (UI-6) */
+.topbar-newtask {
+  background: none; border: 1px solid var(--color-border-iris); color: var(--color-iris-bright);
+  border-radius: var(--radius-md); cursor: pointer; font-size: var(--text-sm);
+  padding: 2px 10px; line-height: 1.5; white-space: nowrap;
+}
+.srv-form textarea {
+  background: var(--color-bg-base); border: 1px solid var(--color-border);
+  border-radius: var(--radius-md); color: var(--color-text-primary);
+  font-size: var(--text-sm); padding: var(--space-2) var(--space-3); outline: none;
+  resize: vertical; min-height: 96px; font-family: inherit;
+}
+.srv-form .btn[disabled] { opacity: .4; cursor: not-allowed; }
+
 .rail-add {
   background: none; border: 1px solid var(--color-border-iris); color: var(--color-iris-bright);
   border-radius: var(--radius-sm); cursor: pointer; font-size: var(--text-sm);
@@ -723,12 +737,12 @@ body {
 
 /* quiet bordered controls (buttons, tabs): iris ripple on hover + keyboard focus */
 :is(.btn, .mbtn, .rail-add, .f-clear, .theme-toggle, .bell, .drawer-close,
-    .notif-clear, .ntab, .mtab, .stab):is(:hover, :focus-visible) {
+    .notif-clear, .ntab, .mtab, .stab, .topbar-newtask):is(:hover, :focus-visible) {
   border-color: var(--color-border-iris);
   color: var(--color-iris-bright);
 }
 :is(.btn, .mbtn, .rail-add, .f-clear, .theme-toggle, .bell, .drawer-close,
-    .notif-clear, .ntab, .mtab, .stab):active {
+    .notif-clear, .ntab, .mtab, .stab, .topbar-newtask):active {
   transform: translateY(1px);
 }
 
@@ -741,7 +755,7 @@ body {
 
 /* text inputs: one shared focus pattern (iris border + glow); local
    outline: none on these is compensated by this ≥3:1 indicator */
-:is(.f-text, .mem-search input, .srv-form input, .spec-refine input):focus {
+:is(.f-text, .mem-search input, .srv-form input, .srv-form textarea, .spec-refine input):focus {
   border-color: var(--color-iris-bright);
   box-shadow: var(--shadow-iris);
 }

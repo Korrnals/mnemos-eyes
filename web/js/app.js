@@ -996,6 +996,91 @@ function renderGroups() {
   }
 }
 
+// ------------------------------------------------- new task draft (UI-6)
+// Owner's raw thought → /api/task-drafts (draft note in mnemos, tags pinned
+// server-side) → "Оформить черновик задачи" chore on the board for
+// @GCW: Task Manager. Freeze exception per ADR 0006. The modal rides the
+// shared modalOpened/modalClosed stack, so Escape pops only the topmost
+// overlay and toasts reuse the existing system.
+function openDraftModal() {
+  const d = $("#draft-modal"), b = $("#draft-backdrop");
+  b.hidden = false; d.hidden = false;
+  modalOpened("draft-modal", closeDraftModal);
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+  $("#draft-text").focus();
+}
+
+function closeDraftModal() {
+  const d = $("#draft-modal"), b = $("#draft-backdrop");
+  b.classList.remove("open"); d.classList.remove("open");
+  modalClosed("draft-modal");
+  setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
+}
+
+$("#new-task-btn").addEventListener("click", openDraftModal);
+$("#draft-close").addEventListener("click", closeDraftModal);
+$("#draft-backdrop").addEventListener("click", closeDraftModal);
+
+$("#draft-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("#draft-submit");
+  const text = $("#draft-text").value.trim();
+  if (!text) {
+    toast("err", "Пустой черновик", "опишите задачу — текст обязателен");
+    $("#draft-text").focus();
+    return;
+  }
+  const project = $("#draft-project").value.trim();
+  const tags = $("#draft-tags").value.trim();
+  btn.disabled = true;
+  btn.textContent = "Отправка…";
+  try {
+    // Draft memory first. The backend pins memory tags to the exact
+    // allowed set; project/tags from the form travel inside content only.
+    const draft = await api("/api/task-drafts", {
+      method: "POST",
+      body: JSON.stringify({ text, project, tags }),
+    });
+    const memoryId = draft.memory_id || "";
+    try {
+      await api("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          title: `Оформить черновик задачи (memory ${memoryId})`,
+          summary: text.slice(0, 140),
+          spec: `Черновик владельца в памяти ${draft.server}:${memoryId}. `
+              + "@GCW: Task Manager — оформить в канон (название/summary/spec/AC/исполнители), вернуть на доску в validating-статус.",
+          col: "open",
+          agents: ["zcode"],
+          specialists: ["@GCW: Task Manager"],
+          env: "unknown",
+          project,
+          mnemos_tags: ["task-draft"],
+          memory_ids: memoryId ? [memoryId] : [],
+        }),
+      });
+      toast("ok", "Черновик отправлен", `память ${draft.server}:${memoryId} · задача-поручение создана`);
+      $("#draft-text").value = "";
+      $("#draft-project").value = "";
+      $("#draft-tags").value = "";
+      btn.disabled = false;
+      btn.textContent = "Отправить черновик";
+      closeDraftModal();
+      await refreshBoard();
+    } catch (err) {
+      // The draft memory already exists — never re-submit the form
+      // (a second POST /api/task-drafts would duplicate the memory).
+      btn.textContent = "Черновик сохранён — задача не создана";
+      toast("err", "Задача-поручение не создана",
+        `черновик уже в памяти ${draft.server}:${memoryId} — форму повторно не отправляйте: ${err.message}`, 8000);
+    }
+  } catch (err) {
+    toast("err", "Черновик не сохранён", err.message);
+    btn.disabled = false;
+    btn.textContent = "Отправить черновик";
+  }
+});
+
 // ------------------------------------------------------------------ toasts
 function toast(kind, title, message, ms = 4000) {
   let holder = document.querySelector("#toasts");
@@ -1428,6 +1513,7 @@ function wireMax(btnId, modalId) {
 wireMax("#modal-max", "#task-modal");
 wireMax("#srv-max", "#srv-modal");
 wireMax("#dd-max", "#dd-modal");
+wireMax("#draft-max", "#draft-modal");
 
 // Back-button stack for the drill modal (tag/agent → memory card → …)
 const ddStack = [];

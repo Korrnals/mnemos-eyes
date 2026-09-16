@@ -39,6 +39,7 @@
         <svg class="mnemos-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 2a5 5 0 0 1 4.9 4H10L8 9 6 7H3.1A5 5 0 0 1 8 3Zm-4.9 6H6l2 2 2-2h2.9A5 5 0 0 1 3.1 9Z"/></svg>
         <span id="mnemos-label">memory: …</span>
       </div>
+      <button class="topbar-newtask" id="new-task-btn" title="Новая задача — сырая мысль → черновик в память">+ Новая задача</button>
       <div class="bell-wrap">
         <button class="bell" id="bell" title="уведомления" aria-label="Уведомления">🔔</button>
         <span class="bell-badge" id="bell-badge" hidden></span>
@@ -207,6 +208,36 @@
     <h1 class="drawer-title" id="dd-title"></h1>
     <p class="drawer-summary" id="dd-sub"></p>
     <div id="dd-body"></div>
+  </div>
+
+  <!-- ── New task draft modal (UI-6) ───────────────────────────── -->
+  <div class="modal-backdrop" id="draft-backdrop" hidden></div>
+  <div class="modal" id="draft-modal" hidden role="dialog" aria-modal="true" aria-label="Новая задача — черновик">
+    <div class="modal-head">
+      <span class="drawer-col">черновик</span>
+      <div class="modal-btns">
+        <button class="mbtn" id="draft-max" title="развернуть">⤢</button>
+        <button class="drawer-close" id="draft-close" aria-label="Закрыть">×</button>
+      </div>
+    </div>
+    <h1 class="drawer-title">Новая задача</h1>
+    <p class="drawer-summary">Сырая мысль владельца → черновик в памяти mnemos → @GCW: Task Manager оформит в канон и вернёт на доску. Формулировать идеально не нужно.</p>
+    <section class="drawer-section">
+      <form class="srv-form" id="draft-form">
+        <label>Что нужно сделать (обязательно)
+          <textarea id="draft-text" rows="6" required placeholder="опишите задачу своими словами…"></textarea>
+        </label>
+        <label>Проект (необязательно)
+          <input id="draft-project" type="text" placeholder="например: mnemos-eyes" />
+        </label>
+        <label>Теги через запятую (необязательно)
+          <input id="draft-tags" type="text" placeholder="например: research, api" />
+        </label>
+        <div class="srv-actions">
+          <button class="btn" id="draft-submit" type="submit">Отправить черновик</button>
+        </div>
+      </form>
+    </section>
   </div>
 
   <script type="module" src="/js/app.js?v=1.1.0"></script>
