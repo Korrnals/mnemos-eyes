@@ -450,6 +450,7 @@ async function openMemoryCard(item) {
   $("#dd-sub").textContent = "память mnemos · " + (item.server || "");
   $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
   b.hidden = false; d.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
   try {
     const r = await api(`/api/memories/item/${encodeURIComponent(item.id)}`);
     const m = r.memory;
@@ -472,7 +473,6 @@ async function openMemoryCard(item) {
         ${m.source ? `<span class="chip">источник: ${esc(m.source)}</span>` : ""}
         ${m.updated_at ? `<span class="chip">обновлено ${esc(m.updated_at.slice(0, 10))}</span>` : ""}
       </div>`;
-    wireCrossLinks($("#dd-body"), null);
   } catch (err) {
     $("#dd-body").innerHTML = `<div class="column-empty">${esc(err.message)}</div>`;
   }
@@ -536,8 +536,8 @@ async function openTask(taskId) {
       ${(t.mnemos_tags || []).map((tag) => tagChip(tag)).join("")}
     </div>`;
 
-  // wire cross-navigation inside the modal
-  wireCrossLinks(meta, t);
+  // cross-navigation inside the modal is handled by the delegated
+  // document click listener (tag/agent chips)
 
   const memEl = $("#modal-memories");
   memEl.innerHTML = `<div class="column-empty">загрузка памяти…</div>`;
@@ -750,6 +750,7 @@ function showTaskModal() {
   const d = $("#task-modal"), b = $("#modal-backdrop");
   b.hidden = false;
   d.hidden = false;
+  modalOpened("task-modal", closeTaskModal);
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
 }
 function rememberModal(reopenFn) {
@@ -761,6 +762,7 @@ function closeTaskModal() {
   const d = $("#task-modal"), b = $("#modal-backdrop");
   b.classList.remove("open");
   d.classList.remove("open");
+  modalClosed("task-modal");
   state.activeTask = null;
   modalHistory.length = 0;
   const bb = $("#modal-back"); if (bb) bb.hidden = true;
@@ -774,10 +776,25 @@ if (document.querySelector("#modal-back")) document.querySelector("#modal-back")
 });
 $("#modal-close").addEventListener("click", closeTaskModal);
 $("#modal-backdrop").addEventListener("click", closeTaskModal);
+
+// ── modal stack: single Escape handler pops only the topmost modal ──
+// Modals layer (task card → dd overlay → …). Every open/close funnels
+// through modalOpened/modalClosed, so Esc closes the stack top only and
+// never wipes all open modals at once.
+const modalStack = []; // {id, close} — topmost last
+function modalOpened(id, closeFn) {
+  const i = modalStack.findIndex((m) => m.id === id);
+  if (i !== -1) modalStack.splice(i, 1); // re-open lifts the modal to the top
+  modalStack.push({ id, close: closeFn });
+}
+function modalClosed(id) {
+  const i = modalStack.findIndex((m) => m.id === id);
+  if (i !== -1) modalStack.splice(i, 1);
+}
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!$("#srv-modal").hidden) closeSrvModal();
-  else closeTaskModal();
+  const top = modalStack[modalStack.length - 1];
+  if (top) top.close();
 });
 
 // --------------------------------------------------------- server management
@@ -833,6 +850,7 @@ async function openServerModal(name) {
   }
   b.hidden = false;
   d.hidden = false;
+  modalOpened("srv-modal", closeSrvModal);
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
 }
 
@@ -840,6 +858,7 @@ function closeSrvModal() {
   const d = $("#srv-modal"), b = $("#srv-backdrop");
   b.classList.remove("open");
   d.classList.remove("open");
+  modalClosed("srv-modal");
   srvName = "";
   setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
 }
@@ -916,7 +935,8 @@ $("#srv-toggle").addEventListener("click", async () => {
 });
 
 $("#srv-delete").addEventListener("click", async () => {
-  // из борда, не физически
+  // из борда, не физически — действие необратимо для конфигурации борда
+  if (!confirm(`Удалить хранилище «${srvName}» из борда?`)) return;
   try {
     await api(`/api/memories/servers/${encodeURIComponent(srvName)}`, { method: "DELETE" });
     closeSrvModal();
@@ -1106,6 +1126,7 @@ async function openArchiveModal() {
   $("#dd-title").textContent = `Архив задач (${d.count})`;
   $("#dd-sub").textContent = "сгруппировано по проектам · клик по задаче — вернуть на доску";
   back.hidden = false; modal.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
   requestAnimationFrame(() => { back.classList.add("open"); modal.classList.add("open"); });
 
   const body = $("#dd-body");
@@ -1175,6 +1196,7 @@ async function openSpecialistModal(name) {
   $("#dd-sub").textContent = "роль GCW · состав, статистика, refine-цикл";
   $("#dd-body").innerHTML = `<div class="column-empty">загрузка профиля…</div>`;
   b.hidden = false; d.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
 
   // parallel: board stats, activity memories, composed profile (instructions/skills/…)
@@ -1558,6 +1580,7 @@ async function openGroupModal(name) {
   $("#dd-sub").textContent = "участники, состояние, мета, логи";
   $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
   b.hidden = false; d.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
   try {
     const info = await api(`/api/memories/groups/${encodeURIComponent(name)}/info`);
@@ -1681,11 +1704,13 @@ function showDdModal(kindLabel, title, sub) {
   const d = $("#dd-modal"), b = $("#dd-backdrop");
   b.hidden = false;
   d.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
 }
 function closeDdModal() {
   const d = $("#dd-modal"), b = $("#dd-backdrop");
   b.classList.remove("open"); d.classList.remove("open");
+  modalClosed("dd-modal");
   ddStack.length = 0; ddCurrent = null; updateDdBack();
   setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
   // if opened from another card (task/store), restore that modal instead of dead end
@@ -1697,9 +1722,6 @@ function closeDdModal() {
 }
 $("#dd-close").addEventListener("click", closeDdModal);
 $("#dd-backdrop").addEventListener("click", closeDdModal);
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#dd-modal").hidden) closeDdModal();
-});
 
 function ddItem({ title, meta, excerpt, onClick }) {
   const div = document.createElement("div");
@@ -1708,7 +1730,12 @@ function ddItem({ title, meta, excerpt, onClick }) {
     <div class="dd-item-title">${esc(title)}</div>
     <div class="dd-item-meta">${meta}</div>
     ${excerpt ? `<div class="dd-item-excerpt">${esc(excerpt)}</div>` : ""}`;
-  div.addEventListener("click", onClick);
+  div.addEventListener("click", (e) => {
+    // tag/agent chips inside items are cross-links — the delegated
+    // document listener owns them, don't also trigger the whole item
+    if (e.target.closest(".tagchip[data-tag], [data-agent]")) return;
+    onClick();
+  });
   return div;
 }
 
@@ -1720,6 +1747,7 @@ async function openTagDrill(tag) {
   $("#dd-sub").textContent = "все задачи и знания, связанные с этим тегом (по всем серверам памяти)";
   $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
   b.hidden = false; d.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
   try {
     const data = await api(`/api/tags/${encodeURIComponent(tag)}/drill?limit=12`);
@@ -1771,6 +1799,7 @@ async function openAgentActivity(agent) {
   $("#dd-sub").textContent = "задачи агента на борде + последние знания из памяти (по всем серверам)";
   $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
   b.hidden = false; d.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
   try {
     const data = await api(`/api/agents/${encodeURIComponent(agent)}/activity?limit=8`);
     const body = $("#dd-body");
@@ -1845,8 +1874,10 @@ function connectSSE() {
   state.es = es;
   es.onopen = () => setConn("dot-on", "live");
   es.onerror = () => {
-    // EventSource auto-reconnects; show amber only while the socket is down
-    if (es.readyState === 2) setConn("dot-wait", "переподключение");
+    // EventSource auto-reconnects; show honest amber while the socket is
+    // not OPEN (CONNECTING=0 during retry backoff, CLOSED=2 after a drop).
+    // es.onopen flips it back to green once the stream is live again.
+    if (es.readyState !== 1) setConn("dot-wait", "переподключение");
   };
   es.onmessage = (msg) => {
     let ev;
