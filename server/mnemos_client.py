@@ -151,12 +151,15 @@ async def store_stats(server: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-async def memory_pulse(server: dict[str, Any], project: str = "mnemos-eyes",
-                       limit: int = 8) -> dict[str, Any]:
-    """Recent memories of a project from ONE store; enriched with stats."""
-    code, body = await fetch_json(server, "/memories", {"project": project, "limit": limit})
+async def memory_pulse(server: dict[str, Any], project: str = "",
+                       limit: int = 12) -> dict[str, Any]:
+    """Recent memories from ONE store (optionally per project); with stats."""
+    params: dict[str, Any] = {"limit": limit}
+    if project:
+        params["project"] = project
+    code, body = await fetch_json(server, "/memories", params)
     if code != 200 or not isinstance(body, list):
-        code2, body2 = await fetch_json(server, "/search", {"query": project, "limit": limit})
+        code2, body2 = await fetch_json(server, "/search", {"query": project or "vesmaro", "limit": limit})
         if code2 != 200 or not isinstance(body2, list):
             return {"server": server["name"], "ok": False, "status": code, "detail": body,
                     "items": []}

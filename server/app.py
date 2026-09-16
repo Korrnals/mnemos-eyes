@@ -394,7 +394,7 @@ async def delete_memory_group(name: str, request: Request) -> dict[str, Any]:
 
 # ------------------------------------------------------------- merged views
 @app.get("/api/memories/pulse")
-async def memory_pulse_all(project: str = "mnemos-eyes", limit: int = 8,
+async def memory_pulse_all(project: str = "", limit: int = 12,
                            scope: str = "") -> dict[str, Any]:
     """Merged pulse across scope (all servers | group | one server)."""
     if scope and scope != "all":
@@ -505,6 +505,56 @@ async def mnemos_search(q: str, limit: int = 10, project: str = "", scope: str =
                 merged.append(it)
     merged.sort(key=lambda i: i.get("score") or 0, reverse=True)
     return {"ok": not errors or bool(merged), "results": merged[:limit], "errors": errors}
+
+
+class ReflectBody(BaseModel):
+    specialist: str
+    problem: str = ""
+    kind: str = "agent-refine-request"  # agent-refine-request | agent-refine-commit
+
+
+@app.post("/api/board-reflect")
+async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
+    """Refine cycle persistence: write the request/commit-marker into mnemos
+    memory (project:gcw, agent:gcw-agent-architect, mnemos:open-question /
+    mnemos:decision) so the Agent Architect harness picks it up across
+    sessions. Returns the created memory id."""
+    _guard_write(request)
+    from .mnemos_client import post_json
+
+    servers = registry.active_servers()
+    if not servers:
+        raise HTTPException(503, "no active memory server")
+    server = servers[0]
+
+    if body.kind == "agent-refine-commit":
+        content = (
+            f"AGENT-REFINE COMMIT PREPARED for {body.specialist}: "
+            f"{body.problem}. Tag: agent-refine. GCW commit pending — embed in next release (orphan-commit policy)."
+        )
+        tags = ["project:gcw", "agent:gcw-agent-architect", "mnemos:decision", "agent-refine"]
+        title = f"agent-refine commit marker — {body.specialist}"
+    else:
+        content = (
+            f"AGENT-REFINE REQUEST for {body.specialist}: {body.problem} "
+            f"Owner feedback from the vesmaro-eyes specialist card. "
+            f"@GCW: Agent Architect to analyze instructions/skills/rules and propose changes."
+        )
+        tags = ["project:gcw", "agent:gcw-agent-architect", "mnemos:open-question", "agent-refine"]
+        title = f"agent-refine request: {body.specialist}"
+
+    code, body_resp = post_json(server, "/memories", {
+        "content": content[:4000],
+        "title": title[:120],
+        "tags": tags,
+        "source": "mcp",
+        "memory_type": "note",
+    })
+    if code not in (200, 201):
+        detail = body_resp.get("detail") if isinstance(body_resp, dict) else str(body_resp)
+        raise HTTPException(code, f"mnemos: {detail}")
+    memory_id = body_resp.get("id") if isinstance(body_resp, dict) else None
+    return {"ok": True, "memory_id": memory_id, "server": server["name"]}
 
 
 @app.get("/api/tasks/{task_id}/history")

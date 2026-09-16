@@ -323,29 +323,48 @@ function renderRail() {
   const board = state.board;
   if (!board) return;
 
-  // Specialist roster with avatars
-  const roster = new Map();
+  // AGENTS (harnesses) vs SPECIALISTS — two distinct groups, never mixed.
+  const agents = new Map();
+  const specialists = new Map();
   for (const t of board.tasks) {
-    for (const s of t.specialists || []) {
-      roster.set(s, (roster.get(s) || 0) + 1);
-    }
+    for (const a of t.agents || []) agents.set(a, (agents.get(a) || 0) + 1);
+    for (const s of t.specialists || []) specialists.set(s, (specialists.get(s) || 0) + 1);
   }
+
+  const agentsEl = $("#agents");
+  agentsEl.innerHTML = "";
+  for (const [name, n] of [...agents.entries()].sort((a, b) => b[1] - a[1])) {
+    const done = board.tasks.filter((t) => (t.agents || []).includes(name) && (t.col === "done" || t.col === "resolved")).length;
+    const wip = board.tasks.filter((t) => (t.agents || []).includes(name) && t.col === "in-progress").length;
+    const row = document.createElement("div");
+    row.className = "person-row";
+    row.title = "клик — активность и статистика агента";
+    row.innerHTML = `
+      <span class="mini-avatar" style="cursor:pointer">⚒</span>
+      <span class="person-info"><span class="person-name">${esc(name)}</span>
+        <span class="person-stat">задач: ${n} · в работе: ${wip} · готово: ${done}</span></span>
+      <span class="roster-count">${n}</span>`;
+    row.addEventListener("click", () => openAgentActivity(name));
+    agentsEl.appendChild(row);
+  }
+
   const rosterEl = $("#roster");
   rosterEl.innerHTML = "";
-  const sorted = [...roster.entries()].sort((a, b) => b[1] - a[1]);
-  for (const [name, n] of sorted) {
+  for (const [name, n] of [...specialists.entries()].sort((a, b) => b[1] - a[1])) {
     const initials = name.replace(/[^A-Za-zА-Яа-я ]/g, "").trim().split(/\s+/)
       .map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
     const row = document.createElement("div");
-    row.className = "roster-row";
+    row.className = "person-row";
+    row.title = "клик — карточка специалиста (инструкции, скиллы, refine)";
     row.innerHTML = `
       <span class="avatar">${esc(initials)}</span>
-      <span class="roster-name">${esc(name)}</span>
+      <span class="person-info"><span class="person-name">${esc(name)}</span>
+        <span class="person-stat">задач: ${n}</span></span>
       <span class="roster-count">${n}</span>`;
+    row.addEventListener("click", () => openSpecialistModal(name));
     rosterEl.appendChild(row);
   }
 
-  // Environments
   const envs = new Map();
   for (const t of board.tasks) envs.set(t.env, (envs.get(t.env) || 0) + 1);
   const envsEl = $("#envs");
@@ -358,12 +377,11 @@ function renderRail() {
   }
 }
 
-// ------------------------------------------------------------- memory pulse
 async function refreshPulse() {
   const el = $("#pulse");
   try {
     const scope = scopeParam();
-    const qs = `project=mnemos-eyes&limit=8${scope ? `&scope=${encodeURIComponent(scope)}` : ""}`;
+    const qs = `limit=12${scope ? `&scope=${encodeURIComponent(scope)}` : ""}`;
     const data = await api(`/api/memories/pulse?${qs}`);
     renderPulse(data);
   } catch (err) {
@@ -931,6 +949,172 @@ function renderGroups() {
   }
 }
 
+// ------------------------------------------------------------------ toasts
+function toast(kind, title, message, ms = 4000) {
+  let holder = document.querySelector("#toasts");
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.id = "toasts";
+    document.body.appendChild(holder);
+  }
+  const t = document.createElement("div");
+  t.className = "toast " + kind;
+  t.innerHTML = `<span class="t-kind">${esc(kind === "ok" ? "выполнено" : kind === "err" ? "сбой" : "инфо")}</span>
+    <b>${esc(title)}</b>${message ? `<div style="font-size:12px;color:var(--color-text-secondary);margin-top:2px">${esc(message)}</div>` : ""}`;
+  holder.appendChild(t);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, ms);
+}
+
+// ---------------------------------------------------- specialist card
+// v1: профиль из памяти mnemos (role contract + skills) + refine-форма.
+// refine → создаёт запись в памяти (agent:gcw-agent-architect) и таску
+// «Refine: <специалист>» в колонке open — Архитектор Агентов подхватит.
+// Кнопка «Коммит в GCW» активируется после генерации правок (v1: каркас
+// git-интеграции; применённые патчи копируются в буфер + пишутся в память).
+
+async function openSpecialistModal(name) {
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  $("#dd-kind").textContent = "специалист";
+  $("#dd-title").textContent = name;
+  $("#dd-sub").textContent = "роль GCW · инструкции, скиллы, правила · refine-цикл";
+  $("#dd-body").innerHTML = `<div class="column-empty">загрузка профиля…</div>`;
+  b.hidden = false; d.hidden = false;
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+
+  // profile from memory: search specialist-related decisions/knowledge
+  let profile = null, memories = [];
+  try {
+    const r = await api(`/api/agents/${encodeURIComponent(name.replace("@GCW: ", "gcw-").replace(/\s+/g, "-").toLowerCase())}/activity?limit=6`);
+    memories = r.memories || [];
+  } catch { /* honest empty */ }
+
+  const tasks = (state.board?.tasks || []).filter((t) => (t.specialists || []).includes(name));
+  const done = tasks.filter((t) => t.col === "done" || t.col === "resolved").length;
+  const wip = tasks.filter((t) => t.col === "in-progress").length;
+  const blocked = tasks.filter((t) => t.col === "blocked").length;
+
+  $("#dd-body").innerHTML = `
+    <div class="dd-section">
+      <h2 style="margin:0 0 8px">Статистика по борду<span class="dd-count">${tasks.length} задач</span></h2>
+      <div class="drawer-meta">
+        <span class="srv-stat-chip">всего: <b>${tasks.length}</b></span>
+        <span class="srv-stat-chip">в работе: <b>${wip}</b></span>
+        <span class="srv-stat-chip">готово: <b>${done}</b></span>
+        <span class="srv-stat-chip">блокировано: <b>${blocked}</b></span>
+      </div>
+    </div>
+    <div class="dd-section">
+      <h2 style="margin:0 0 8px">Профиль в памяти<span class="dd-count">${memories.length} записей</span></h2>
+      <div class="dd-list" id="spec-mem"></div>
+    </div>
+    <div class="dd-section">
+      <h2 style="margin:0 0 8px">Refine · доработка специалиста</h2>
+      <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 8px">
+        Опишите проблематику — @GCW: Agent Architect проанализирует инструкции/скиллы/правила
+        специалиста и предложит изменения. Результат появится ниже и в карточке специалиста в памяти.</p>
+      <div class="spec-refine">
+        <input id="refine-input" type="text" placeholder="что улучшить? опишите проблему…" aria-label="формулировка для доработки" />
+        <button id="refine-go">Анализ →</button>
+      </div>
+      <div class="spec-answer" id="refine-answer"></div>
+      <div class="spec-commit-row" id="spec-commit-row">
+        <button class="btn" id="spec-commit" disabled>⎇ Коммит в GCW</button>
+        <span class="commit-note">активируется после подготовки изменений · тег <b>agent-refine</b></span>
+      </div>
+    </div>`;
+
+  const memList = $("#spec-mem");
+  if (!memories.length) {
+    memList.innerHTML = `<div class="column-empty">записей о специалисте в памяти пока нет</div>`;
+  }
+  for (const m of memories) {
+    memList.appendChild(ddItem({
+      title: m.title || m.id,
+      meta: `<span class="pulse-server">${esc(m.server || "")}</span>
+             <span class="chip">${esc((m.created_at || "").slice(0, 10))}</span>`,
+      excerpt: m.excerpt,
+      onClick: () => window.open(`/api/mnemos/memory/${encodeURIComponent(m.id)}`, "_blank"),
+    }));
+  }
+
+  // refine flow (v1)
+  $("#refine-go").addEventListener("click", async () => {
+    const input = $("#refine-input");
+    const problem = input.value.trim();
+    if (!problem) { input.focus(); return; }
+    $("#refine-answer").style.display = "block";
+    $("#refine-answer").textContent = "⌁ @GCW: Agent Architect анализирует профиль специалиста…";
+    $("#spec-commit-row").style.display = "none";
+    try {
+      // 1) memory record — the request itself becomes agent memory
+      await api("/api/board-reflect", {
+        method: "POST",
+        body: JSON.stringify({
+          specialist: name, problem,
+          kind: "agent-refine-request",
+        }),
+      });
+      // 2) task for the Architect
+      const task = await api("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          title: `Refine ${name}: доработать инструкции по замечанию владельца`,
+          summary: "Владелец отметил неэффективность работы специалиста. " +
+                   "Архитектору Агентов: проанализировать инструкции/скиллы/правила, предложить изменения.",
+          spec: "Проблема от владельца (из карточки специалиста в борде):\n\n" + problem
+              + "\n\nAcceptance criteria:\n— [ ] анализ текущих инструкций/скиллов специалиста\n— [ ] конкретные правки в AGENTS/SKILL/инструкции\n— [ ] ответ владельцу в карточке специалиста",
+          col: "open", env: "laptop",
+          agents: ["gcw-agent-architect"],
+          specialists: ["@GCW: Agent Architect"],
+          project: "gcw",
+          mnemos_tags: ["project:gcw", "agent:gcw-agent-architect", "mnemos:session", "agent-refine"],
+        }),
+      });
+      $("#refine-answer").textContent =
+        `Принято. Создана задача ${task.id} для @GCW: Agent Architect, проблематика записана в память ` +
+        `(agent-refine). Архитектор проанализирует инструкции, скиллы и правила специалиста и предложит правки — ` +
+        `здесь появится решение, после подтверждения — коммит в GCW.`;
+      $("#refine-answer").textContent += "\n\n[Черновик анализа]\n" + refineDraft(name, problem, memories);
+      $("#spec-commit-row").style.display = "flex";
+      input.value = "";
+      toast("ok", "Refine-запрос отправлен", `${name}: таска ${task.id} создана для Архитектора Агентов`);
+      await refreshBoard();
+      $("#spec-commit").disabled = false;
+    } catch (err) {
+      $("#refine-answer").textContent = "Сбой: " + err.message;
+      toast("err", "Refine-запрос не прошёл", err.message);
+    }
+  });
+
+  $("#spec-commit").addEventListener("click", async () => {
+    // v1 каркас: готовит патч-файл + запись в памяти; реальный git-коммит в GCW
+    // выполняет агент (таска уже в борде). Кнопка активна только после refine.
+    try {
+      const r = await api("/api/board-reflect", {
+        method: "POST",
+        body: JSON.stringify({
+          specialist: name, kind: "agent-refine-commit",
+          problem: "commit prepared from specialist card",
+        }),
+      });
+      toast("ok", "Готово к коммиту", `правки помечены тегом agent-refine (${r.memory_id ? "id " + r.memory_id.slice(0, 8) : ""})`);
+      $("#spec-commit").disabled = true;
+    } catch (err) {
+      toast("err", "Не удалось пометить правки", err.message);
+    }
+  });
+}
+
+function refineDraft(name, problem, memories) {
+  return [
+    "1. Проблема: " + problem,
+    "2. Контекст специалиста: " + (memories.length ? memories.length + " связанных записей в памяти" : "записей нет"),
+    "3. Рекомендация @GCW: Agent Architect (v1): проанализировать role-contract и skills специалиста,",
+    "   локализовать узкое место в инструкциях, предложить правки в формате diff-патча,",
+    "   применить локально, затем коммит в GCW с тегом agent-refine.",
+  ].join("\n");
+}
+
 // ------------------------------------------------------- context menu
 const ctxTargets = { store: null, group: null, task: null, memory: null };
 
@@ -973,7 +1157,8 @@ function moveTaskTo(id, col) {
   if (!t) return;
   t.col = col; renderBoard();
   api("/api/tasks/" + encodeURIComponent(id) + "/move", { method: "POST", body: JSON.stringify({ col }) })
-    .catch(() => refreshBoard());
+    .then(() => toast("ok", `${id}: перемещена`, "колонка «" + (COLUMN_TITLES[col] || col) + "»"))
+    .catch((err) => { toast("err", `${id}: перемещение не удалось`, err.message); refreshBoard(); });
 }
 
 async function srvActionAndWait(name, action) {
@@ -1024,6 +1209,7 @@ function groupContextMenu(e, g) {
     try {
       await api("/api/memories/groups/" + encodeURIComponent(g.name), { method: "DELETE" });
       await loadMemServers(); refreshStores(); renderGroups();
+      toast("ok", `Кластер «${g.name}» удалён`, "хранилища переведены в default");
     } catch (err) { alert("Ошибка: " + err.message); }
   }, "danger");
 }

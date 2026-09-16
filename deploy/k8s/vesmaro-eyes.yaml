@@ -57,7 +57,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: eyes
-          image: ghcr.io/korrnals/vesmaro-eyes:0.5.1
+          image: ghcr.io/korrnals/vesmaro-eyes:0.6.1
           imagePullPolicy: Always
           ports:
             - name: http
@@ -100,17 +100,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-            - name: memories-config
-              mountPath: /data/memories.yaml
-              subPath: memories.yaml
-              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: vesmaro-eyes-data
-        - name: memories-config
-          configMap:
-            name: vesmaro-eyes-memories
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

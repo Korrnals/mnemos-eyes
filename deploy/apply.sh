@@ -23,10 +23,7 @@ else
   echo "  secret exists — left untouched"
 fi
 
-echo "→ applying manifest (incl. memories.yaml ConfigMap)"
-kubectl -n "$NS" create configmap vesmaro-eyes-memories \
-    --from-file=memories.yaml="$(dirname "$0")/k8s/memories.yaml" \
-    --dry-run=client -o yaml | kubectl -n "$NS" apply -f -
+echo "→ applying manifest"
 kubectl -n "$NS" apply -f "$MANIFEST"
 
 echo "→ waiting for rollout"

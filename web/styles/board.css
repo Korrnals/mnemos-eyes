@@ -567,3 +567,55 @@ body {
   font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
   color: var(--color-text-muted); padding: var(--space-2) var(--space-3) 2px;
 }
+
+/* ── People rows (agents & specialists) ──────────────────────────── */
+.person-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2); border-radius: var(--radius-md);
+  cursor: pointer; transition: background var(--duration-fast);
+  font-size: var(--text-xs);
+}
+.person-row:hover { background: var(--color-bg-base); }
+.person-info { display: flex; flex-direction: column; min-width: 0; }
+.person-name { color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-stat { font-size: 10px; color: var(--color-text-muted); }
+
+/* ── Specialist modal ────────────────────────────────────────────── */
+.spec-refine { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+.spec-refine input {
+  flex: 1; background: var(--color-bg-base); border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl); color: var(--color-text-primary);
+  font-size: var(--text-sm); padding: var(--space-2) var(--space-4); outline: none;
+}
+.spec-refine input:focus { border-color: var(--color-iris-bright); box-shadow: var(--shadow-iris); }
+.spec-refine button {
+  background: var(--color-iris); color: var(--color-text-inverse); border: none;
+  border-radius: var(--radius-md); cursor: pointer; font-size: var(--text-sm); padding: 0 var(--space-4);
+}
+.spec-refine button:hover { background: var(--color-iris-bright); }
+.spec-answer {
+  margin-top: var(--space-3); background: var(--color-scroll-bg);
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg);
+  padding: var(--space-4); font-family: var(--font-scroll); font-size: var(--text-sm);
+  line-height: 1.7; white-space: pre-wrap; display: none;
+}
+.spec-commit-row { margin-top: var(--space-3); display: none; align-items: center; gap: var(--space-3); }
+.spec-commit-row .btn[disabled] { opacity: .4; cursor: not-allowed; }
+.commit-note { font-size: var(--text-xs); color: var(--color-text-muted); }
+
+/* ── Toasts ──────────────────────────────────────────────────────── */
+#toasts { position: fixed; right: var(--space-5); bottom: var(--space-5); z-index: 120; display: flex; flex-direction: column; gap: var(--space-2); }
+.toast {
+  min-width: 240px; max-width: 380px;
+  background: var(--color-bg-elevated); border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-iris);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-float);
+  padding: var(--space-3) var(--space-4); font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  animation: toastIn var(--duration-normal) var(--ease-out);
+}
+.toast.ok { border-left-color: var(--color-success); }
+.toast.err { border-left-color: var(--color-error); }
+.toast .t-kind { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-text-muted); display: block; margin-bottom: 2px; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(12px); } }
+.toast.out { opacity: 0; transition: opacity var(--duration-normal); }
