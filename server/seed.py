@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-SEED_VERSION = "2"
+SEED_VERSION = "3"
 
 TM_STYLE = (
     "Канон таски (GCW Task Manager): title = глагол + объект + цель; "
@@ -67,7 +67,7 @@ SEED_TASKS: list[dict[str, Any]] = [
         "env": "cluster",
         "project": "mnemos-eyes",
         "memory_ids": ["25cdc0e9-1912-4217-aaf0-0e7c48912df1"],
-        "mnemos_tags": ["project:mnemos-eyes", "agent:gcw-tech-lead", "mnemos:decision"],
+        "mnemos_tags": ["project:mnemos-eyes", "agent:zcode", "mnemos:decision"],
     },
     {
         "id": "RB-1",
@@ -84,7 +84,7 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] фаза B: PyPI+npm одним сеансом (Trusted Publishers)\n"
                "— [ ] фаза C: домены (.com+.dev минимум, Cloudflare at-cost)\n"
                "— [ ] фаза D: MCP-директории после волны доков",
-        "agents": ["gcw-tech-lead"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Tech Lead", "owner"],
         "env": "laptop",
         "project": "mnemos",
@@ -94,7 +94,7 @@ SEED_TASKS: list[dict[str, Any]] = [
             "9917a27d-5f1c-4f11-aa8b-fce513789a61",
             "754f83a7-466e-4a42-a884-76382c7ea6d4",
         ],
-        "mnemos_tags": ["project:mnemos", "agent:gcw-tech-lead", "mnemos:decision", "naming"],
+        "mnemos_tags": ["project:mnemos", "agent:zcode", "mnemos:decision", "naming"],
     },
     {
         "id": "RB-2",
@@ -107,12 +107,12 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] LLM mis-spawn тест 4–5 моделей пройден (однострочники)\n"
                "— [ ] placeholder-пакеты vesm*-пятёрки подготовлены\n"
                "— [ ] cron-мониторинг vesm*/mnem* настроен",
-        "agents": ["gcw-tech-lead"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Tech Lead", "@GCW: Senior Security Engineer"],
         "env": "laptop",
         "project": "mnemos",
         "memory_ids": ["754f83a7-466e-4a42-a884-76382c7ea6d4"],
-        "mnemos_tags": ["project:mnemos", "agent:gcw-tech-lead", "mnemos:decision", "rebrand-plan"],
+        "mnemos_tags": ["project:mnemos", "agent:zcode", "mnemos:decision", "rebrand-plan"],
     },
     {
         "id": "T1",
@@ -125,12 +125,12 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] структура папок = docs/architecture.md §2\n"
                "— [ ] ESLint+Prettier зелёные\n"
                "— [ ] dev-server поднимается, IrisLogo виден",
-        "agents": ["gcw-senior-frontend-developer"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Senior Frontend Developer"],
         "env": "laptop",
         "project": "mnemos-eyes",
         "memory_ids": ["25cdc0e9-1912-4217-aaf0-0e7c48912df1"],
-        "mnemos_tags": ["project:mnemos-eyes", "agent:gcw-senior-frontend-developer", "mnemos:session"],
+        "mnemos_tags": ["project:mnemos-eyes", "agent:zcode", "mnemos:session"],
     },
     {
         "id": "T2",
@@ -143,12 +143,12 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] интерфейс MemoryGateway соответствует спецификации\n"
                "— [ ] MockAdapter покрывает все L1-вью фикстурами\n"
                "— [ ] DI на бутстрапе, ни одного fetch вне gateway/",
-        "agents": ["gcw-senior-frontend-developer"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Senior Frontend Developer"],
         "env": "laptop",
         "project": "mnemos-eyes",
         "memory_ids": [],
-        "mnemos_tags": ["project:mnemos-eyes", "agent:gcw-senior-frontend-developer", "mnemos:session"],
+        "mnemos_tags": ["project:mnemos-eyes", "agent:zcode", "mnemos:session"],
     },
     {
         "id": "T4",
@@ -161,12 +161,12 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] tokens.css = design-system.md без расхождений\n"
                "— [ ] тёмная/светлая темы переключаются, выбор персистится\n"
                "— [ ] не больше 1 ambient-анимации одновременно",
-        "agents": ["gcw-senior-frontend-developer"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Senior Frontend Developer"],
         "env": "laptop",
         "project": "mnemos-eyes",
         "memory_ids": [],
-        "mnemos_tags": ["project:mnemos-eyes", "agent:gcw-senior-frontend-developer", "mnemos:session"],
+        "mnemos_tags": ["project:mnemos-eyes", "agent:zcode", "mnemos:session"],
     },
     {
         "id": "T3",
@@ -178,12 +178,12 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] npx openapi-typescript … --immutable-types отрабатывает\n"
                "— [ ] src/types/openapi.d.ts закоммичен, «DO NOT EDIT» шапка\n"
                "— [ ] CI падает при расхождении схемы",
-        "agents": ["gcw-senior-frontend-developer"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Senior Frontend Developer"],
         "env": "laptop",
         "project": "mnemos-eyes",
         "memory_ids": [],
-        "mnemos_tags": ["project:mnemos-eyes", "agent:gcw-senior-frontend-developer", "mnemos:session"],
+        "mnemos_tags": ["project:mnemos-eyes", "agent:zcode", "mnemos:session"],
     },
     {
         "id": "T5",
@@ -196,12 +196,12 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] все L1-компоненты реализованы и работают на MockAdapter\n"
                "— [ ] staleTime-таблица из architecture.md §6 применена\n"
                "— [ ] навигация без layout-shift",
-        "agents": ["gcw-senior-frontend-developer"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Senior Frontend Developer"],
         "env": "laptop",
         "project": "mnemos-eyes",
         "memory_ids": [],
-        "mnemos_tags": ["project:mnemos-eyes", "agent:gcw-senior-frontend-developer", "mnemos:session"],
+        "mnemos_tags": ["project:mnemos-eyes", "agent:zcode", "mnemos:session"],
     },
     {
         "id": "T7",
@@ -213,12 +213,12 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] WCAG 2.2 AA — ноль критических находок\n"
                "— [ ] perf-бюджет соблюдён (размер чанков, LCP)\n"
                "— [ ] lint-подавлений нет — только исправления",
-        "agents": ["gcw-senior-frontend-developer"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Senior Frontend Developer"],
         "env": "laptop",
         "project": "mnemos-eyes",
         "memory_ids": [],
-        "mnemos_tags": ["project:mnemos-eyes", "agent:gcw-senior-frontend-developer", "mnemos:session"],
+        "mnemos_tags": ["project:mnemos-eyes", "agent:zcode", "mnemos:session"],
     },
     {
         "id": "MSH-1",
@@ -232,11 +232,11 @@ SEED_TASKS: list[dict[str, Any]] = [
                "— [ ] peer-пара laptop⇄cluster зарегистрирована\n"
                "— [ ] контрольный seed виден с обеих сторон\n"
                "— [ ] drawer RB-1 резолвит 4 памяти без 404",
-        "agents": ["gcw-senior-system-engineer"],
+        "agents": ["zcode"],
         "specialists": ["@GCW: Senior System Engineer", "@GCW: SRE/DevOps"],
         "env": "cluster",
         "project": "mnemos-mesh",
         "memory_ids": [],
-        "mnemos_tags": ["project:mnemos-mesh", "agent:gcw-senior-system-engineer", "mnemos:open-question"],
+        "mnemos_tags": ["project:mnemos-mesh", "agent:zcode", "mnemos:open-question"],
     },
 ]

@@ -965,6 +965,176 @@ function toast(kind, title, message, ms = 4000) {
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, ms);
 }
 
+// --------------------------------------------------------- notifications
+const notifState = { cat: "all", open: false };
+
+async function refreshBell() {
+  try {
+    const d = await api("/api/notifications?limit=1");
+    const badge = $("#bell-badge");
+    if (d.unread > 0) { badge.hidden = false; badge.textContent = d.unread > 99 ? "99+" : d.unread; }
+    else badge.hidden = true;
+  } catch { /* board offline — bell stays as-is */ }
+}
+
+function renderNotifList(items) {
+  const list = $("#notif-list");
+  list.innerHTML = "";
+  const filtered = notifState.cat === "all"
+    ? items : items.filter((n) => n.category === notifState.cat);
+  if (!filtered.length) {
+    list.innerHTML = `<div class="column-empty">уведомлений нет</div>`;
+    return;
+  }
+  for (const n of filtered) {
+    const el = document.createElement("div");
+    el.className = "notif-item " + n.category + (n.read ? "" : " unread");
+    el.dataset.id = n.id;
+    el.innerHTML = `
+      <div style="min-width:0">
+        <span class="n-cat">${esc(n.category === "work" ? "рабочее" : "система")}</span>
+        <span class="n-title">${esc(n.title)}</span>
+        ${n.message ? `<div class="n-msg">${esc(n.message)}</div>` : ""}
+      </div>
+      <span class="n-ts">${esc((n.ts || "").slice(5, 16).replace("T", " "))}</span>`;
+    el.addEventListener("click", async () => {
+      if (!n.read) {
+        await api("/api/notifications/read", { method: "POST", body: JSON.stringify({ id: n.id }) });
+        el.classList.remove("unread");
+        refreshBell();
+      }
+      if (n.task_id) {
+        closeNotifPanel();
+        const t = (state.board?.tasks || []).find((x) => x.id === n.task_id);
+        if (t) openTask(t.id);
+      }
+    });
+    list.appendChild(el);
+  }
+}
+
+async function openNotifPanel() {
+  notifState.open = true;
+  $("#notif-panel").hidden = false;
+  try {
+    const d = await api("/api/notifications?limit=50");
+    renderNotifList(d.items);
+  } catch {
+    $("#notif-list").innerHTML = `<div class="column-empty">не удалось загрузить</div>`;
+  }
+}
+function closeNotifPanel() {
+  notifState.open = false;
+  $("#notif-panel").hidden = true;
+}
+$("#bell").addEventListener("click", () => notifState.open ? closeNotifPanel() : openNotifPanel());
+document.addEventListener("click", (e) => {
+  if (notifState.open && !e.target.closest("#notif-panel") && !e.target.closest("#bell")) closeNotifPanel();
+});
+for (const b of document.querySelectorAll(".ntab")) {
+  b.addEventListener("click", async () => {
+    for (const x of document.querySelectorAll(".ntab")) x.classList.toggle("active", x === b);
+    notifState.cat = b.dataset.ncat;
+    const d = await api("/api/notifications?limit=50");
+    renderNotifList(d.items);
+  });
+}
+$("#notif-read-all").addEventListener("click", async () => {
+  await api("/api/notifications/read", { method: "POST", body: JSON.stringify({}) });
+  refreshBell();
+  openNotifPanel();
+});
+
+// ------------------------------------------------------------- archive
+async function refreshArchiveTeaser() {
+  try {
+    const d = await api("/api/archive");
+    $("#archive-count").textContent = d.count ? d.count + " в архиве" : "";
+    const el = $("#archive-teaser");
+    el.innerHTML = "";
+    if (!d.count) { el.innerHTML = `<div class="column-empty" style="padding:8px">пусто</div>`; return; }
+    const projects = Object.entries(d.projects).slice(0, 4);
+    for (const [proj, tasks] of projects) {
+      const link = document.createElement("div");
+      link.className = "archive-link";
+      link.innerHTML = `<b>${esc(proj)}</b><span>${tasks.length}</span>`;
+      link.addEventListener("click", () => openArchiveModal());
+      el.appendChild(link);
+    }
+    if (Object.keys(d.projects).length > 4) {
+      const more = document.createElement("div");
+      more.className = "archive-link";
+      more.innerHTML = `<b>ещё ${Object.keys(d.projects).length - 4}…</b>`;
+      more.addEventListener("click", () => openArchiveModal());
+      el.appendChild(more);
+    }
+  } catch { /* ignore */ }
+}
+
+async function openArchiveModal() {
+  let d;
+  try { d = await api("/api/archive"); }
+  catch (err) { toast("err", "Архив недоступен", err.message); return; }
+  const modal = $("#dd-modal"), back = $("#dd-backdrop");
+  $("#dd-kind").textContent = "архив";
+  $("#dd-title").textContent = `Архив задач (${d.count})`;
+  $("#dd-sub").textContent = "сгруппировано по проектам · клик по задаче — вернуть на доску";
+  back.hidden = false; modal.hidden = false;
+  requestAnimationFrame(() => { back.classList.add("open"); modal.classList.add("open"); });
+
+  const body = $("#dd-body");
+  body.innerHTML = "";
+  if (!Object.keys(d.projects).length) {
+    body.innerHTML = `<div class="column-empty">архив пуст</div>`;
+    return;
+  }
+  for (const [proj, tasks] of Object.entries(d.projects)) {
+    const box = document.createElement("div");
+    box.className = "pulse-project open";
+    box.innerHTML = `
+      <div class="pulse-proj-head">
+        <span class="caret">▶</span>
+        <span class="chip tagchip tag-project" style="cursor:default">${esc(proj)}</span>
+        <span class="pulse-proj-count">${tasks.length}</span>
+      </div>
+      <div class="pulse-proj-body"></div>`;
+    const inner = box.querySelector(".pulse-proj-body");
+    for (const t of tasks) {
+      const month = (t.updated_at || "").slice(0, 7);
+      const item = document.createElement("div");
+      item.className = "dd-item";
+      item.dataset.id = t.id;
+      item.innerHTML = `
+        <div class="dd-item-title">${esc(t.id)} · ${esc(t.title)}</div>
+        <div class="dd-item-meta">
+          <span class="chip">${esc(COLUMN_TITLES[t.col] || t.col)}</span>
+          <span class="chip">${esc(month || "")}</span>
+          <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env || "")}</span>
+        </div>`;
+      item.addEventListener("click", async () => {
+        if (!confirm(`Вернуть ${t.id} на доску?`)) return;
+        try {
+          await api(`/api/tasks/${encodeURIComponent(t.id)}/unarchive`, { method: "POST" });
+          toast("ok", `${t.id}: возвращена из архива`);
+          closeDdModal();
+          await refreshBoard(); refreshArchiveTeaser();
+        } catch (err) { toast("err", "Не удалось вернуть", err.message); }
+      });
+      inner.appendChild(item);
+    }
+    box.querySelector(".pulse-proj-head").addEventListener("click", (e) => {
+      if (e.target.closest(".dd-item")) return;
+      box.classList.toggle("open");
+    });
+    body.appendChild(box);
+  }
+}
+
+// memory items always open OVERLAY (never a new tab) — global style
+function openMemoryOverlay(memoryId) {
+  openMemoryCard({ id: memoryId, title: "", server: "" });
+}
+
 // ---------------------------------------------------- specialist card
 // v1: профиль из памяти mnemos (role contract + skills) + refine-форма.
 // refine → создаёт запись в памяти (agent:gcw-agent-architect) и таску
@@ -976,42 +1146,77 @@ async function openSpecialistModal(name) {
   const d = $("#dd-modal"), b = $("#dd-backdrop");
   $("#dd-kind").textContent = "специалист";
   $("#dd-title").textContent = name;
-  $("#dd-sub").textContent = "роль GCW · инструкции, скиллы, правила · refine-цикл";
+  $("#dd-sub").textContent = "роль GCW · состав, статистика, refine-цикл";
   $("#dd-body").innerHTML = `<div class="column-empty">загрузка профиля…</div>`;
   b.hidden = false; d.hidden = false;
   requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
 
-  // profile from memory: search specialist-related decisions/knowledge
-  let profile = null, memories = [];
-  try {
-    const r = await api(`/api/agents/${encodeURIComponent(name.replace("@GCW: ", "gcw-").replace(/\s+/g, "-").toLowerCase())}/activity?limit=6`);
-    memories = r.memories || [];
-  } catch { /* honest empty */ }
+  // parallel: board stats, activity memories, composed profile (instructions/skills/…)
+  const slug = name.replace("@GCW: ", "gcw-").replace(/\s+/g, "-").toLowerCase();
+  const [actRes, profRes] = await Promise.allSettled([
+    api(`/api/agents/${encodeURIComponent(slug)}/activity?limit=12`),
+    api(`/api/specialists/${encodeURIComponent(name)}/profile`),
+  ]);
+  const memories = actRes.status === "fulfilled" ? (actRes.value.memories || []) : [];
+  const profile = profRes.status === "fulfilled" ? profRes.value : null;
 
   const tasks = (state.board?.tasks || []).filter((t) => (t.specialists || []).includes(name));
   const done = tasks.filter((t) => t.col === "done" || t.col === "resolved").length;
   const wip = tasks.filter((t) => t.col === "in-progress").length;
   const blocked = tasks.filter((t) => t.col === "blocked").length;
 
+  const sec = profile?.sections || {};
+  const nInstr = (sec.instructions || []).length;
+  const nSkills = (sec.skills || []).length;
+  const nRules = (sec.rules || []).length;
+  const nTrig = (sec.triggers || []).length;
+  const nOther = (sec.other || []).length;
+  const indexed = profile?.indexed;
+
   $("#dd-body").innerHTML = `
     <div class="dd-section">
-      <h2 style="margin:0 0 8px">Статистика по борду<span class="dd-count">${tasks.length} задач</span></h2>
+      <h2 style="margin:0 0 8px">Состав специалиста<span class="dd-count">${indexed ? "индекс GCW в памяти" : "профиль не индексирован"}</span></h2>
       <div class="drawer-meta">
-        <span class="srv-stat-chip">всего: <b>${tasks.length}</b></span>
-        <span class="srv-stat-chip">в работе: <b>${wip}</b></span>
-        <span class="srv-stat-chip">готово: <b>${done}</b></span>
-        <span class="srv-stat-chip">блокировано: <b>${blocked}</b></span>
+        <span class="srv-stat-chip">инструкции: <b>${nInstr}</b></span>
+        <span class="srv-stat-chip">скиллы: <b>${nSkills}</b></span>
+        <span class="srv-stat-chip">правила: <b>${nRules}</b></span>
+        <span class="srv-stat-chip">триггеры: <b>${nTrig}</b></span>
+        ${nOther ? `<span class="srv-stat-chip">прочее: <b>${nOther}</b></span>` : ""}
       </div>
     </div>
-    <div class="dd-section">
-      <h2 style="margin:0 0 8px">Профиль в памяти<span class="dd-count">${memories.length} записей</span></h2>
-      <div class="dd-list" id="spec-mem"></div>
+
+    <div class="spec-tabs">
+      <button class="stab active" data-stab="overview">Обзор</button>
+      <button class="stab" data-stab="instructions">Инструкции (${nInstr})</button>
+      <button class="stab" data-stab="skills">Скиллы (${nSkills})</button>
+      <button class="stab" data-stab="rules">Правила (${nRules + nTrig})</button>
+      <button class="stab" data-stab="refine">Refine</button>
     </div>
-    <div class="dd-section">
-      <h2 style="margin:0 0 8px">Refine · доработка специалиста</h2>
+
+    <div class="ssec active" data-ssec="overview">
+      <div class="dd-section">
+        <h2 style="margin:0 0 8px">Статистика по борду<span class="dd-count">${tasks.length} задач</span></h2>
+        <div class="drawer-meta">
+          <span class="srv-stat-chip">всего: <b>${tasks.length}</b></span>
+          <span class="srv-stat-chip">в работе: <b>${wip}</b></span>
+          <span class="srv-stat-chip">готово: <b>${done}</b></span>
+          <span class="srv-stat-chip">блокировано: <b>${blocked}</b></span>
+        </div>
+      </div>
+      <div class="dd-section">
+        <h2 style="margin:0 0 8px">Активность в памяти<span class="dd-count">${memories.length}</span></h2>
+        <div id="spec-mem"></div>
+      </div>
+    </div>
+
+    <div class="ssec" data-ssec="instructions"><div id="spec-instructions"></div></div>
+    <div class="ssec" data-ssec="skills"><div id="spec-skills"></div></div>
+    <div class="ssec" data-ssec="rules"><div id="spec-rules"></div></div>
+
+    <div class="ssec" data-ssec="refine">
       <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 8px">
         Опишите проблематику — @GCW: Agent Architect проанализирует инструкции/скиллы/правила
-        специалиста и предложит изменения. Результат появится ниже и в карточке специалиста в памяти.</p>
+        специалиста и предложит изменения. Сначала изучите состав (вкладки выше)!</p>
       <div class="spec-refine">
         <input id="refine-input" type="text" placeholder="что улучшить? опишите проблему…" aria-label="формулировка для доработки" />
         <button id="refine-go">Анализ →</button>
@@ -1023,21 +1228,78 @@ async function openSpecialistModal(name) {
       </div>
     </div>`;
 
-  const memList = $("#spec-mem");
-  if (!memories.length) {
-    memList.innerHTML = `<div class="column-empty">записей о специалисте в памяти пока нет</div>`;
-  }
-  for (const m of memories) {
-    memList.appendChild(ddItem({
-      title: m.title || m.id,
-      meta: `<span class="pulse-server">${esc(m.server || "")}</span>
-             <span class="chip">${esc((m.created_at || "").slice(0, 10))}</span>`,
-      excerpt: m.excerpt,
-      onClick: () => window.open(`/api/mnemos/memory/${encodeURIComponent(m.id)}`, "_blank"),
-    }));
+  // tab wiring
+  for (const btn of document.querySelectorAll(".stab")) {
+    btn.addEventListener("click", () => {
+      for (const x of document.querySelectorAll(".stab")) x.classList.toggle("active", x === btn);
+      for (const s of document.querySelectorAll(".ssec")) s.classList.toggle("active", s.dataset.ssec === btn.dataset.stab);
+    });
   }
 
-  // refine flow (v1)
+  // composition sections: collapsible files
+  const fileCard = (e) => {
+    const div = document.createElement("div");
+    div.className = "spec-file";
+    div.innerHTML = `
+      <div class="spec-file-head">
+        <span class="spec-file-title">${esc(e.title)}</span>
+        <span class="spec-file-src">${esc((e.source_url || "").replace("file://", ""))}</span>
+      </div>
+      <div class="spec-file-body">${esc(e.excerpt)}</div>`;
+    div.querySelector(".spec-file-head").addEventListener("click", () => div.classList.toggle("open"));
+    return div;
+  };
+  const fillSec = (elId, entries) => {
+    const el = $(elId);
+    el.innerHTML = "";
+    if (!entries || !entries.length) {
+      el.innerHTML = `<div class="column-empty">нет записей — запустите scripts/sync-gcw-profiles.py</div>`;
+      return;
+    }
+    for (const e of entries) el.appendChild(fileCard(e));
+  };
+  fillSec("#spec-instructions", sec.instructions);
+  fillSec("#spec-skills", sec.skills);
+  fillSec("#spec-rules", [...(sec.rules || []), ...(sec.triggers || []), ...(sec.other || [])]);
+
+  // memory accordion by project (compact, like the pulse rail)
+  const memHolder = $("#spec-mem");
+  if (!memories.length) {
+    memHolder.innerHTML = `<div class="column-empty">записей о специалисте в памяти пока нет</div>`;
+  } else {
+    const byProj = new Map();
+    for (const m of memories) {
+      const p = (m.tags || []).find((t) => t.startsWith("project:"))?.slice(8) || "без проекта";
+      if (!byProj.has(p)) byProj.set(p, []);
+      byProj.get(p).push(m);
+    }
+    for (const [p, list] of byProj) {
+      const box = document.createElement("div");
+      box.className = "pulse-project";
+      box.innerHTML = `
+        <div class="pulse-proj-head">
+          <span class="caret">▶</span>
+          <span class="chip tagchip tag-project" style="cursor:default">${esc(p)}</span>
+          <span class="pulse-proj-count">${list.length}</span>
+        </div>
+        <div class="pulse-proj-body"></div>`;
+      const inner = box.querySelector(".pulse-proj-body");
+      for (const m of list) {
+        const item = document.createElement("div");
+        item.className = "pulse-item";
+        item.innerHTML = `
+          <div class="pulse-title">${esc(m.title || m.id)}</div>
+          <div class="pulse-tags"><span class="pulse-server">${esc(m.server || "")}</span>
+            <span class="chip">${esc((m.created_at || "").slice(0, 10))}</span></div>`;
+        item.addEventListener("click", () => openMemoryOverlay(m.id));
+        inner.appendChild(item);
+      }
+      box.querySelector(".pulse-proj-head").addEventListener("click", () => box.classList.toggle("open"));
+      memHolder.appendChild(box);
+    }
+  }
+
+  // refine flow (v1) — same as before
   $("#refine-go").addEventListener("click", async () => {
     const input = $("#refine-input");
     const problem = input.value.trim();
@@ -1046,15 +1308,10 @@ async function openSpecialistModal(name) {
     $("#refine-answer").textContent = "⌁ @GCW: Agent Architect анализирует профиль специалиста…";
     $("#spec-commit-row").style.display = "none";
     try {
-      // 1) memory record — the request itself becomes agent memory
       await api("/api/board-reflect", {
         method: "POST",
-        body: JSON.stringify({
-          specialist: name, problem,
-          kind: "agent-refine-request",
-        }),
+        body: JSON.stringify({ specialist: name, problem, kind: "agent-refine-request" }),
       });
-      // 2) task for the Architect
       const task = await api("/api/tasks", {
         method: "POST",
         body: JSON.stringify({
@@ -1064,17 +1321,14 @@ async function openSpecialistModal(name) {
           spec: "Проблема от владельца (из карточки специалиста в борде):\n\n" + problem
               + "\n\nAcceptance criteria:\n— [ ] анализ текущих инструкций/скиллов специалиста\n— [ ] конкретные правки в AGENTS/SKILL/инструкции\n— [ ] ответ владельцу в карточке специалиста",
           col: "open", env: "laptop",
-          agents: ["gcw-agent-architect"],
+          agents: ["zcode"],
           specialists: ["@GCW: Agent Architect"],
           project: "gcw",
           mnemos_tags: ["project:gcw", "agent:gcw-agent-architect", "mnemos:session", "agent-refine"],
         }),
       });
       $("#refine-answer").textContent =
-        `Принято. Создана задача ${task.id} для @GCW: Agent Architect, проблематика записана в память ` +
-        `(agent-refine). Архитектор проанализирует инструкции, скиллы и правила специалиста и предложит правки — ` +
-        `здесь появится решение, после подтверждения — коммит в GCW.`;
-      $("#refine-answer").textContent += "\n\n[Черновик анализа]\n" + refineDraft(name, problem, memories);
+        `Принято. Создана задача ${task.id} для @GCW: Agent Architect; проблематика записана в память (agent-refine).\n\n[Черновик анализа]\n` + refineDraft(name, problem, memories);
       $("#spec-commit-row").style.display = "flex";
       input.value = "";
       toast("ok", "Refine-запрос отправлен", `${name}: таска ${task.id} создана для Архитектора Агентов`);
@@ -1087,8 +1341,6 @@ async function openSpecialistModal(name) {
   });
 
   $("#spec-commit").addEventListener("click", async () => {
-    // v1 каркас: готовит патч-файл + запись в памяти; реальный git-коммит в GCW
-    // выполняет агент (таска уже в борде). Кнопка активна только после refine.
     try {
       const r = await api("/api/board-reflect", {
         method: "POST",
@@ -1224,6 +1476,14 @@ function taskContextMenu(e, t) {
   if (t.col !== "blocked") ctxAdd("В «блокировано»", "⊘", () => moveTaskTo(t.id, "blocked"));
   if (t.col !== "open") ctxAdd("В «открыто»", "↺", () => moveTaskTo(t.id, "open"));
   ctxSep();
+  ctxAdd("В архив", "🗄", async () => {
+    if (!confirm(`Архивировать ${t.id}?`)) return;
+    try {
+      await api(`/api/tasks/${encodeURIComponent(t.id)}/archive`, { method: "POST" });
+      toast("ok", `${t.id}: в архиве`, "вернуть можно из архива в панели");
+      await refreshBoard(); refreshArchiveTeaser();
+    } catch (err) { toast("err", "Архивация не удалась", err.message); }
+  });
   ctxAdd("Копировать id", "⧉", () => navigator.clipboard && navigator.clipboard.writeText(t.id));
 }
 
@@ -1307,7 +1567,7 @@ async function openTagDrill(tag) {
                  <span class="chip">${esc((m.created_at || "").slice(0, 10))}</span>
                  ${(m.tags || []).slice(0, 3).map((t) => tagChip(t)).join("")}`,
           excerpt: m.excerpt,
-          onClick: () => { closeDdModal(); window.open(`/api/mnemos/memory/${encodeURIComponent(m.id)}`, "_blank"); },
+          onClick: () => openMemoryOverlay(m.id),
         }));
       }
       body.appendChild(list);
@@ -1354,7 +1614,7 @@ async function openAgentActivity(agent) {
           meta: `<span class="pulse-server">${esc(m.server || "")}</span>
                  <span class="chip">${esc((m.created_at || "").slice(0, 10))}</span>`,
           excerpt: m.excerpt,
-          onClick: () => { closeDdModal(); window.open(`/api/mnemos/memory/${encodeURIComponent(m.id)}`, "_blank"); },
+          onClick: () => openMemoryOverlay(m.id),
         }));
       }
       body.appendChild(list);
@@ -1440,7 +1700,10 @@ applyTheme(localStorage.getItem(THEME_KEY)
   refreshPulse();
   refreshStores();
   renderGroups();
+  refreshBell();
+  refreshArchiveTeaser();
   healthLoop();
   setInterval(healthLoop, 30000);
   setInterval(refreshPulse, 60000);
+  setInterval(refreshBell, 20000);
 })();

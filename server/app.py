@@ -52,6 +52,15 @@ def _broadcast(event: dict[str, Any]) -> None:
             pass
 
 
+def _notify_and_broadcast(category: str, title: str, message: str = "",
+                          task_id: str | None = None, event: dict[str, Any] | None = None) -> None:
+    """Persist a notification, then broadcast it together with the board event."""
+    n = store.notify(category, title, message, task_id)
+    if event:
+        event["notification"] = n
+    _broadcast(event or {"kind": "notification", "notification": n})
+
+
 def get_scope_servers(scope: str, active_only: bool = False) -> tuple[str, list[dict[str, Any]]]:
     """Resolve scope: 'all' | group name | server name → server list."""
     servers = registry.active_servers() if active_only else registry.servers()
@@ -71,7 +80,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="vesmaro-eyes", version="0.3.0", lifespan=lifespan)
+COLUMN_RU = {
+    "open": "открыто", "in-progress": "в работе", "blocked": "блокировано",
+    "resolved": "решено", "done": "готово",
+}
+
+app = FastAPI(title="vesmaro-eyes", version="0.7.0", lifespan=lifespan)
 
 
 # --------------------------------------------------------------------- models
@@ -163,8 +177,12 @@ async def create_task(body: TaskCreate, request: Request) -> dict[str, Any]:
     _guard_write(request)
     if body.col not in VALID_STATUSES:
         raise HTTPException(422, f"invalid col: {body.col}")
+    # harness validation: agents must be execution harnesses, not roles
+    bad = [a for a in body.agents if a.startswith("gcw-") or a.startswith("@")]
+    if bad:
+        raise HTTPException(422, f"agents must be harnesses (zcode, hermes, ...), not roles: {bad}; use specialists for @GCW roles")
     task = store.create_task(body.model_dump())
-    _broadcast({"kind": "task.created", "task": task})
+    _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task})
     return task
 
 
@@ -187,7 +205,7 @@ async def move_task(task_id: str, body: MoveBody, request: Request) -> dict[str,
         raise HTTPException(422, str(exc)) from exc
     if task is None:
         raise HTTPException(404, "task not found")
-    _broadcast({"kind": "task.moved", "task": task})
+    _notify_and_broadcast("work", f"{task['id']}: статус → {COLUMN_RU.get(task['col'], task['col'])}", "", task["id"], {"kind": "task.moved", "task": task})
     return task
 
 
@@ -196,7 +214,7 @@ async def delete_task(task_id: str, request: Request) -> dict[str, Any]:
     _guard_write(request)
     if not store.delete_task(task_id):
         raise HTTPException(404, "task not found")
-    _broadcast({"kind": "task.deleted", "task_id": task_id})
+    _notify_and_broadcast("work", f"{task_id}: удалена", "", task_id, {"kind": "task.deleted", "task_id": task_id})
     return {"ok": True}
 
 
@@ -349,7 +367,7 @@ async def memory_server_action(name: str, body: ServerAction, request: Request) 
     else:
         raise HTTPException(422, f"unknown action: {act}")
     store.log_server_action(name, act)
-    _broadcast({"kind": "server.changed", "server": name})
+    _notify_and_broadcast("system", f"хранилище {name}: {act}", "", None, {"kind": "server.changed", "server": name})
     return {"ok": True, "server": _server_public(out) if out else None}
 
 
@@ -557,6 +575,130 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
     return {"ok": True, "memory_id": memory_id, "server": server["name"]}
 
 
+# ----------------------------------------------------------- notifications
+@app.get("/api/notifications")
+async def notifications(after_id: int = 0, limit: int = 50,
+                        unread_only: bool = False) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "unread": store.unread_count(),
+        "items": store.notifications(after_id=after_id, limit=limit,
+                                     unread_only=unread_only),
+    }
+
+
+@app.post("/api/notifications/read")
+async def notifications_read(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    nid = (body or {}).get("id")
+    store.mark_read(int(nid) if nid else None)
+    return {"ok": True, "unread": store.unread_count()}
+
+
+@app.get("/api/archive")
+async def archive() -> dict[str, Any]:
+    tasks = store.archived_tasks()
+    # group by project, then by month of updated_at
+    by_project: dict[str, list[dict[str, Any]]] = {}
+    for t in tasks:
+        by_project.setdefault(t.get("project") or "без проекта", []).append({
+            "id": t["id"], "title": t["title"], "col": t["col"],
+            "agents": t.get("agents", []), "env": t.get("env"),
+            "updated_at": t.get("updated_at"),
+        })
+    return {"ok": True, "count": len(tasks), "projects": by_project}
+
+
+@app.post("/api/tasks/{task_id}/archive")
+async def archive_task(task_id: str, request: Request) -> dict[str, Any]:
+    _guard_write(request)
+    if not store.archive_task(task_id):
+        raise HTTPException(404, "task not found or already archived")
+    _notify_and_broadcast("work", f"{task_id}: в архиве", "задача архивирована", task_id, {"kind": "task.archived", "task_id": task_id})
+    return {"ok": True}
+
+
+@app.post("/api/tasks/{task_id}/unarchive")
+async def unarchive_task(task_id: str, request: Request) -> dict[str, Any]:
+    _guard_write(request)
+    if not store.unarchive_task(task_id):
+        raise HTTPException(404, "task not found or not archived")
+    _notify_and_broadcast("work", f"{task_id}: из архива", "задача возвращена на доску", task_id, {"kind": "task.unarchived", "task_id": task_id})
+    return {"ok": True}
+
+
+# -------------------------------------------------------- specialist profile
+@app.get("/api/specialists/{name}/profile")
+async def specialist_profile(name: str) -> dict[str, Any]:
+    """Specialist composition from memory (cross-system): instructions,
+    skills, rules, triggers. Records are indexed into mnemos by
+    scripts/sync-gcw-profiles.py with the tag specialist:<slug> — any
+    store holding the index serves the profile, no GCW checkout needed.
+    """
+    slug = name.lower().replace("@gcw: ", "gcw-").replace(" ", "-")
+    tag = f"specialist:{slug}"
+    servers = registry.active_servers()
+    results = await asyncio.gather(*(
+        mnemos_client.post_json_async(
+            s, "/search", {"query": "*", "tags": [tag], "limit": 50},
+            timeout=15.0,
+        ) for s in servers
+    ))
+    sections: dict[str, list[dict[str, Any]]] = {
+        "instructions": [], "skills": [], "rules": [], "triggers": [],
+    }
+    meta: dict[str, Any] = {"role": name, "slug": slug}
+    errors = []
+    for s, (code, data) in zip(servers, results):
+        if code != 200:
+            errors.append({"server": s["name"], "status": code})
+            continue
+        for it in (data if isinstance(data, list) else []):
+            kind = it.get("memory_type") or _section_of(it.get("title", ""))
+            entry = {
+                "title": (it.get("title") or "")[:120],
+                "source_url": (it.get("source_url") or "") or "",
+                "excerpt": (it.get("content") or "")[:400],
+                "id": it.get("id"),
+                "server": s["name"],
+            }
+            if kind in sections:
+                sections[kind].append(entry)
+            elif kind == "meta":
+                meta.update(_parse_meta_excerpt(it.get("content") or ""))
+            else:
+                sections.setdefault("other", []).append(entry)
+    return {
+        "ok": not errors or any(sections.values()),
+        "specialist": name, "slug": slug, "meta": meta,
+        "sections": sections, "errors": errors,
+        "indexed": any(sections.values()),
+    }
+
+
+def _section_of(title: str) -> str:
+    tl = title.lower()
+    if "instruction" in tl or "инструкц" in tl:
+        return "instructions"
+    if "skill" in tl:
+        return "skills"
+    if "rule" in tl or "правил" in tl:
+        return "rules"
+    if "trigger" in tl or "триггер" in tl:
+        return "triggers"
+    if "meta" in tl or "profile" in tl:
+        return "meta"
+    return "other"
+
+
+def _parse_meta_excerpt(text: str) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for line in text.splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            out[k.strip().lower()] = v.strip()[:200]
+    return out
+
+
 @app.get("/api/tasks/{task_id}/history")
 async def task_history(task_id: str) -> dict[str, Any]:
     """Unified timeline for a task: board events + linked-memories timeline.
@@ -627,7 +769,7 @@ async def tag_drill(tag: str, limit: int = 12) -> dict[str, Any]:
     servers = registry.active_servers()
     results = await asyncio.gather(*(
         mnemos_client.post_json_async(
-            s, "/search", {"query": "", "tags": [tag], "limit": min(limit, 25)},
+            s, "/search", {"query": "*", "tags": [tag], "limit": min(limit, 25)},
             timeout=15.0,
         ) for s in servers
     ))

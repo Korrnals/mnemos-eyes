@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS memory_servers (
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS notifications (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'system' CHECK (category IN ('system','work')),
+    title    TEXT NOT NULL,
+    message  TEXT NOT NULL DEFAULT '',
+    task_id  TEXT,
+    read     INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS server_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     ts         TEXT NOT NULL,
@@ -86,7 +95,10 @@ CREATE INDEX IF NOT EXISTS idx_server_log ON server_log (server, id);
 """
 
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
-SEED_VERSION = "2"
+# Single source of truth: server/seed.py (imported lazily to avoid a cycle).
+def _seed_version() -> str:
+    from .seed import SEED_VERSION
+    return SEED_VERSION
 
 
 def _now() -> str:
@@ -121,18 +133,31 @@ class Store:
         return db
 
     # ------------------------------------------------------------------ meta
+    # Harnesses are EXECUTION ENVIRONMENTS (zcode, hermes, pi, copilot,
+    # claude-code, ...). GCW roles like "gcw-tech-lead" are SPECIALISTS,
+    # never agents. Enforced on every write — cross-stack, config-independent.
+    KNOWN_HARNESSES = frozenset({
+        "zcode", "hermes", "pi", "copilot", "claude-code", "cursor",
+        "aider", "continue", "cline", "windsurf",
+    })
+
     def _migrate(self, db: sqlite3.Connection) -> None:
+        # schema evolution for pre-0.7 databases
+        cols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(tasks)").fetchall()}
+        if "archived" not in cols:
+            db.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
         stored = row["value"] if row else None
-        if stored != SEED_VERSION:
+        if stored != _seed_version():
             # Wipe board tables and reseed from the shipped fixtures.
             db.execute("DELETE FROM tasks")
             db.execute("DELETE FROM events")
             db.execute(
                 "INSERT OR REPLACE INTO board_meta (key, value) VALUES ('seed_version', ?)",
-                (SEED_VERSION,),
+                (_seed_version(),),
             )
 
     def _seed_if_empty(self, db: sqlite3.Connection) -> None:
@@ -170,7 +195,7 @@ class Store:
     def board(self) -> dict[str, Any]:
         with self._lock, self._conn() as db:
             tasks = [dict(r) for r in db.execute(
-                "SELECT * FROM tasks ORDER BY col, position"
+                "SELECT * FROM tasks WHERE archived=0 ORDER BY col, position"
             ).fetchall()]
             stats = db.execute(
                 """SELECT col, COUNT(*) AS n FROM tasks GROUP BY col"""
@@ -487,3 +512,76 @@ class Store:
             )
             self._log(db, "server.moved", None, {"server": name, "group": group})
         return self.get_server(name)
+
+    # -------------------------------------------------------- notifications
+    def notify(self, category: str, title: str, message: str = "",
+               task_id: str | None = None) -> dict[str, Any]:
+        if category not in ("system", "work"):
+            category = "system"
+        with self._lock, self._conn() as db:
+            cur = db.execute(
+                "INSERT INTO notifications (ts, category, title, message, task_id) "
+                "VALUES (?,?,?,?,?)",
+                (_now(), category, title[:200], message[:500], task_id),
+            )
+            nid = cur.lastrowid
+        return {"id": nid, "category": category, "title": title, "message": message,
+                "task_id": task_id, "ts": _now(), "read": 0}
+
+    def notifications(self, after_id: int = 0, limit: int = 50,
+                      unread_only: bool = False) -> list[dict[str, Any]]:
+        q = "SELECT * FROM notifications WHERE id > ?"
+        params: list[Any] = [after_id]
+        if unread_only:
+            q += " AND read=0"
+        q += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with self._lock, self._conn() as db:
+            rows = [dict(r) for r in db.execute(q, params).fetchall()]
+        for r in rows:
+            r["read"] = bool(r["read"])
+        return rows
+
+    def unread_count(self) -> int:
+        with self._lock, self._conn() as db:
+            return int(db.execute(
+                "SELECT COUNT(*) AS n FROM notifications WHERE read=0"
+            ).fetchone()["n"])
+
+    def mark_read(self, nid: int | None = None) -> bool:
+        with self._lock, self._conn() as db:
+            if nid is None:
+                db.execute("UPDATE notifications SET read=1 WHERE read=0")
+            else:
+                db.execute("UPDATE notifications SET read=1 WHERE id=?", (nid,))
+        return True
+
+    # ------------------------------------------------------------- archive
+    def archive_task(self, task_id: str) -> bool:
+        with self._lock, self._conn() as db:
+            cur = db.execute(
+                "UPDATE tasks SET archived=1, updated_at=? WHERE id=? AND archived=0",
+                (_now(), task_id),
+            )
+            done = cur.rowcount > 0
+            if done:
+                self._log(db, "task.archived", task_id, {})
+        return done
+
+    def unarchive_task(self, task_id: str) -> bool:
+        with self._lock, self._conn() as db:
+            cur = db.execute(
+                "UPDATE tasks SET archived=0, updated_at=? WHERE id=? AND archived=1",
+                (_now(), task_id),
+            )
+            return cur.rowcount > 0
+
+    def archived_tasks(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as db:
+            rows = [dict(r) for r in db.execute(
+                "SELECT * FROM tasks WHERE archived=1 ORDER BY updated_at DESC"
+            ).fetchall()]
+        for t in rows:
+            for k in ("agents", "specialists", "memory_ids", "mnemos_tags"):
+                t[k] = _loads(t[k])
+        return rows
