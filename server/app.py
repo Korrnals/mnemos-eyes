@@ -129,7 +129,7 @@ class GroupSpec(BaseModel):
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     servers = registry.servers()
-    probes = await asyncio.gather(*(mnemos_client.health(s) for s in servers))
+    probes = await asyncio.gather(*(mnemos_client.ping(s) for s in servers))
     stats = await asyncio.gather(*(mnemos_client.store_stats(s) for s in servers))
     per_server = []
     for s, p, st in zip(servers, probes, stats):
@@ -253,7 +253,7 @@ def _server_public(s: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/memories/servers")
 async def memory_servers() -> dict[str, Any]:
     rows = registry.servers()
-    probes = await asyncio.gather(*(mnemos_client.health(s) for s in rows))
+    probes = await asyncio.gather(*(mnemos_client.ping(s) for s in rows))
     by_name = {p["server"]: p for p in probes}
     return {
         "ok": True,
@@ -436,6 +436,35 @@ async def memory_pulse_all(project: str = "mnemos-eyes", limit: int = 8,
 @app.get("/api/memories/servers/{scope}/pulse")
 async def memory_pulse(scope: str, project: str = "mnemos-eyes", limit: int = 8) -> dict[str, Any]:
     return await memory_pulse_all(project=project, limit=limit, scope=scope)
+
+
+@app.get("/api/memories/item/{memory_id}")
+async def memory_item(memory_id: str) -> dict[str, Any]:
+    """Full memory card for the pulse/session modal (first resolving server)."""
+    servers = registry.active_servers()
+    for s in servers:
+        code, body = await mnemos_client.fetch_json(s, f"/memories/{memory_id}")
+        if code == 200 and isinstance(body, dict):
+            return {
+                "ok": True,
+                "server": s["name"],
+                "memory": {
+                    "id": body.get("id", memory_id),
+                    "title": body.get("title") or "",
+                    "content": body.get("content") or "",
+                    "raw_content": body.get("raw_content"),
+                    "tags": body.get("tags", []),
+                    "status": body.get("status"),
+                    "memory_type": body.get("memory_type"),
+                    "source": body.get("source"),
+                    "source_url": body.get("source_url"),
+                    "project": (body.get("tags") or [""])[0].replace("project:", "") if body.get("tags") else "",
+                    "agent": next((t[6:] for t in (body.get("tags") or []) if t.startswith("agent:")), ""),
+                    "created_at": body.get("created_at"),
+                    "updated_at": body.get("updated_at"),
+                },
+            }
+    return {"ok": False, "error": "memory not found on any active server"}
 
 
 @app.get("/api/memories/servers/{scope}/stats")
@@ -652,8 +681,11 @@ async def events() -> StreamingResponse:
             yield b"retry: 3000\n\n"
             yield _sse({"kind": "hello", "last_event_id": store.last_event_id()})
             while True:
-                event = await queue.get()
-                yield _sse(event)
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield _sse(event)
+                except asyncio.TimeoutError:
+                    yield b": keep-alive\n\n"  # comment frame — keeps proxies from idling out
         except asyncio.CancelledError:  # client disconnected
             pass
         finally:

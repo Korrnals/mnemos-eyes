@@ -47,59 +47,53 @@ const COLUMN_TITLES = {
   done: "готово",
 };
 
-function renderBoard() {
-  const board = state.board;
-  if (!board) return;
-  const el = $("#board");
-  el.innerHTML = "";
-  for (const col of board.columns) {
-    const tasks = board.tasks.filter((t) => t.col === col);
-    const colEl = document.createElement("div");
-    colEl.className = "column";
-    colEl.dataset.col = col;
-    colEl.innerHTML = `
-      <div class="column-head">
-        <span class="column-title">${esc(COLUMN_TITLES[col] || col)}</span>
-        <span class="column-count">${tasks.length}</span>
-      </div>
-      <div class="column-body"></div>`;
-    const body = $(".column-body", colEl);
-    if (!tasks.length) {
-      body.innerHTML = `<div class="column-empty">пусто</div>`;
-    }
-    for (const t of tasks) body.appendChild(taskCard(t));
-    colEl.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      colEl.classList.add("drag-over");
-    });
-    colEl.addEventListener("dragleave", () => colEl.classList.remove("drag-over"));
-    colEl.addEventListener("drop", async (e) => {
-      e.preventDefault();
-      colEl.classList.remove("drag-over");
-      const id = e.dataTransfer.getData("text/task-id");
-      if (!id) return;
-      const task = state.board.tasks.find((t) => t.id === id);
-      if (!task || task.col === col) return;
-      // Optimistic update; SSE will reconcile.
-      task.col = col;
-      renderBoard();
-      try {
-        await api(`/api/tasks/${encodeURIComponent(id)}/move`, {
-          method: "POST",
-          body: JSON.stringify({ col }),
-        });
-      } catch (err) {
-        console.error("move failed", err);
-        await refreshBoard();
-      }
-    });
-    el.appendChild(colEl);
-  }
+// ------------------------------------------------------------- filters
+const filter = { text: "", project: "", agent: "", env: "", tag: "" };
+
+async function refreshBoard() {
+  state.board = await api("/api/board");
+  renderBoard();
+  renderRail();
+  refreshFilterOptions();
 }
 
+function taskMatches(t) {
+  if (filter.project && t.project !== filter.project
+      && !(t.mnemos_tags || []).includes("project:" + filter.project)) return false;
+  if (filter.agent && !(t.agents || []).includes(filter.agent)) return false;
+  if (filter.env && t.env !== filter.env) return false;
+  if (filter.tag
+      && !(t.mnemos_tags || []).includes(filter.tag)
+      && !(t.specialists || []).includes(filter.tag)
+      && !(t.agents || []).includes(filter.tag)) return false;
+  if (filter.text) {
+    const hay = `${t.id} ${t.title} ${t.summary} ${t.spec} ${(t.agents||[]).join(" ")} ${(t.specialists||[]).join(" ")} ${(t.mnemos_tags||[]).join(" ")}`.toLowerCase();
+    if (!hay.includes(filter.text.toLowerCase())) return false;
+  }
+  return true;
+}
+
+function refreshFilterOptions() {
+  const tasks = state.board?.tasks || [];
+  const fill = (sel, values, label) => {
+    const el = $(sel);
+    const cur = el.value;
+    const uniq = [...new Set(values.filter(Boolean))].sort();
+    el.innerHTML = `<option value="">${label}: все</option>`
+      + uniq.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    if (uniq.includes(cur)) el.value = cur;
+  };
+  fill("#f-project", tasks.map((t) => t.project).filter(Boolean), "проект");
+  fill("#f-agent", tasks.flatMap((t) => t.agents || []), "агент");
+  fill("#f-env", [...new Set(tasks.map((t) => t.env))], "среда");
+  fill("#f-tag", tasks.flatMap((t) => t.mnemos_tags || []), "тег");
+}
+
+// ------------------------------------------------- tags & card helpers
 function tagClass(tag) {
   if (tag.startsWith("project:")) return "tag-project";
-  if (tag.startsWith("agent:") || tag.startsWith("@")) return "tag-agent";
+  if (tag.startsWith("agent:")) return "tag-agent";
+  if (tag.startsWith("@")) return "tag-agent";
   if (tag.startsWith("mnemos:")) return "tag-type";
   if (tag.startsWith("domain:")) return "tag-domain";
   return "tag-other";
@@ -141,16 +135,18 @@ function taskCard(t) {
   const allTags = [...(t.mnemos_tags || []), ...(t.specialists || [])];
   const cardTags = allTags.slice(0, 4);
   const more = allTags.length - cardTags.length;
+  const proj = t.project || (t.mnemos_tags || []).find((x) => x.startsWith("project:"))?.slice(8) || "";
 
   card.innerHTML = `
     <div class="task-top">
       <span class="task-id">${esc(t.id)}</span>
+      ${proj ? `<span class="chip tagchip tag-project" data-tag="project:${esc(proj)}" title="проект">${esc(proj)}</span>` : ""}
       <span class="task-age" title="обновлено ${esc(t.updated_at || "")}">${esc(ageOf(t.updated_at))}</span>
     </div>
     <h3 class="task-title">${esc(t.title)}</h3>
     <div class="task-chips">${chips.join("")}</div>
     <div class="task-tagrow">${cardTags.map((tag) => tagChip(tag)).join("")}
-      ${more > 0 ? `<span class="chip tagchip tag-other" data-more="+${more}">+${more}</span>` : ""}
+      ${more > 0 ? `<span class="chip tagchip tag-other">+${more}</span>` : ""}
     </div>
     <div class="task-foot">
       <span class="task-agents">${miniAvatars(t.agents)}</span>
@@ -163,7 +159,10 @@ function taskCard(t) {
     card.classList.add("dragging");
   });
   card.addEventListener("dragend", () => card.classList.remove("dragging"));
-  // tag clicks drill down; agent chips/avatars show agent activity; rest opens task
+  card.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    taskContextMenu(e, t);
+  });
   card.addEventListener("click", (e) => {
     const tag = e.target.closest(".tagchip");
     if (tag) {
@@ -182,10 +181,78 @@ function taskCard(t) {
   return card;
 }
 
-async function refreshBoard() {
-  state.board = await api("/api/board");
-  renderBoard();
-  renderRail();
+function wireFilters() {
+  $("#f-text").addEventListener("input", (e) => { filter.text = e.target.value.trim(); renderBoard(); });
+  for (const [id, key] of [["#f-project","project"],["#f-agent","agent"],["#f-env","env"],["#f-tag","tag"]]) {
+    $(id).addEventListener("change", (e) => {
+      filter[key] = e.target.value;
+      e.target.classList.toggle("active", !!e.target.value);
+      renderBoard();
+    });
+  }
+  $("#f-clear").addEventListener("click", () => {
+    Object.assign(filter, { text: "", project: "", agent: "", env: "", tag: "" });
+    $("#f-text").value = "";
+    for (const id of ["#f-project","#f-agent","#f-env","#f-tag"]) { $(id).value = ""; $(id).classList.remove("active"); }
+    renderBoard();
+  });
+}
+
+function renderBoard() {
+  const board = state.board;
+  if (!board) return;
+  const el = $("#board");
+  el.innerHTML = "";
+  let visibleTotal = 0;
+  for (const col of board.columns) {
+    const all = board.tasks.filter((t) => t.col === col);
+    const tasks = all.filter(taskMatches);
+    visibleTotal += tasks.length;
+    const colEl = document.createElement("div");
+    colEl.className = "column";
+    colEl.dataset.col = col;
+    const filtered = visibleTotal >= 0 && (filter.text || filter.project || filter.agent || filter.env || filter.tag);
+    colEl.innerHTML = `
+      <div class="column-head">
+        <span class="column-title">${esc(COLUMN_TITLES[col] || col)}</span>
+        <span class="column-count">${filter && (filter.text || filter.project || filter.agent || filter.env || filter.tag) ? tasks.length + "/" + all.length : tasks.length}</span>
+      </div>
+      <div class="column-body"></div>`;
+    const body = $(".column-body", colEl);
+    if (!tasks.length) {
+      body.innerHTML = `<div class="column-empty">${all.length ? "скрыто фильтром" : "пусто"}</div>`;
+    }
+    for (const t of tasks) body.appendChild(taskCard(t));
+    colEl.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      colEl.classList.add("drag-over");
+    });
+    colEl.addEventListener("dragleave", () => colEl.classList.remove("drag-over"));
+    colEl.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      colEl.classList.remove("drag-over");
+      const id = e.dataTransfer.getData("text/task-id");
+      if (!id) return;
+      const task = state.board.tasks.find((t) => t.id === id);
+      if (!task || task.col === col) return;
+      task.col = col;
+      renderBoard();
+      try {
+        await api(`/api/tasks/${encodeURIComponent(id)}/move`, {
+          method: "POST",
+          body: JSON.stringify({ col }),
+        });
+      } catch (err) {
+        console.error("move failed", err);
+        await refreshBoard();
+      }
+    });
+    el.appendChild(colEl);
+  }
+  const fc = $("#f-count"), fb = $("#f-clear");
+  const any = filter.text || filter.project || filter.agent || filter.env || filter.tag;
+  fc.textContent = any ? `${visibleTotal} из ${board.tasks.length}` : "";
+  fb.hidden = !any;
 }
 
 // ------------------------------------------------- memory servers & scope
@@ -314,34 +381,90 @@ function renderPulse(data) {
   const items = data.items || [];
   if (!items.length) {
     const stats = data.store_stats || [];
-    const line = stats
-      .filter((s) => s.stats)
-      .map((s) => `${esc(s.server)}: ${s.stats.memories_total} памятей`)
-      .join(" · ");
-    if (line) {
-      const projects = stats.filter((s) => s.stats)
-        .map((s) => `${esc(s.server)} → ${Object.entries(s.stats.by_project || {})
-          .map(([p, n]) => `${esc(p)} (${n})`).join(", ") || "пусто"}`).join("<br/>");
-      el.innerHTML = `<div class="column-empty">в выбранном источнике пока нет памятей проекта mnemos-eyes.<br/><br/>Живые хранилища:<br/>${projects}</div>`;
-    } else {
-      el.innerHTML = `<div class="column-empty">память молчит</div>`;
-    }
+    const parts = stats.filter((s) => s.stats)
+      .map((s) => `${esc(s.server)}: ${s.stats.memories_total} памятей (${Object.keys(s.stats.by_project || {}).join(", ") || "пусто"})`);
+    el.innerHTML = `<div class="column-empty">${parts.length ? "нет свежих памятей проекта mnemos-eyes.<br/><br/>" + parts.join("<br/>") : "память молчит"}</div>`;
     return;
+  }
+
+  // group by project (from tags), keep recency inside groups
+  const byProject = new Map();
+  for (const it of items) {
+    const proj = (it.tags || []).find((t) => t.startsWith("project:"))?.slice(8) || "без проекта";
+    if (!byProject.has(proj)) byProject.set(proj, []);
+    byProject.get(proj).push(it);
   }
   const multi = state.memScope === "all"
     || Object.keys(state.memServers?.groups || {}).includes(state.memScope);
-  for (const item of items) {
-    const div = document.createElement("div");
-    div.className = "pulse-item";
-    const tags = (item.tags || []).slice(0, 3)
-      .map((t) => `<span class="pulse-tag">${esc(t)}</span>`).join("");
-    const srv = multi && item.server
-      ? `<span class="pulse-server" title="сервер памяти">${esc(item.server)}</span>` : "";
-    div.innerHTML = `
-      <div class="pulse-title">${esc(item.title || "")}</div>
-      <div class="pulse-tags">${srv}${tags}</div>`;
-    div.title = item.id ? `${item.id} · ${item.server || ""}` : "";
-    el.appendChild(div);
+  for (const [proj, list] of [...byProject.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    const box = document.createElement("div");
+    box.className = "pulse-project";
+    const head = document.createElement("div");
+    head.className = "pulse-proj-head";
+    head.innerHTML = `<span class="caret">▶</span>
+      <span class="chip tagchip tag-project" style="cursor:default">${esc(proj)}</span>
+      <span class="pulse-proj-count">${list.length}</span>`;
+    head.title = "развернуть сессии проекта";
+    const body = document.createElement("div");
+    body.className = "pulse-proj-body";
+    for (const item of list) {
+      const div = document.createElement("div");
+      div.className = "pulse-item";
+      const tags = (item.tags || []).filter((t) => !t.startsWith("project:")).slice(0, 4)
+        .map((t) => tagChip(t)).join("");
+      const srv = multi && item.server
+        ? `<span class="pulse-server">${esc(item.server)}</span>` : "";
+      div.innerHTML = `
+        <div class="pulse-title">${esc(item.title || "")}</div>
+        <div class="pulse-tags">${srv}${tags}</div>`;
+      div.title = item.id ? `${item.id} · ${item.server || ""} · ПКМ — действия` : "";
+      div.addEventListener("click", () => openMemoryCard(item));
+      div.addEventListener("contextmenu", (e) => memoryContextMenu(e, item));
+      body.appendChild(div);
+    }
+    head.addEventListener("click", () => box.classList.toggle("open"));
+    box.appendChild(head);
+    box.appendChild(body);
+    el.appendChild(box);
+  }
+  // first project expanded by default
+  const first = el.querySelector(".pulse-project");
+  if (first) first.classList.add("open");
+}
+
+// ── session/memory card modal (pulse items) ─────────────────────
+async function openMemoryCard(item) {
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  $("#dd-kind").textContent = "знание";
+  $("#dd-title").textContent = item.title || item.id;
+  $("#dd-sub").textContent = "память mnemos · " + (item.server || "");
+  $("#dd-body").innerHTML = `<div class="column-empty">загрузка…</div>`;
+  b.hidden = false; d.hidden = false;
+  try {
+    const r = await api(`/api/memories/item/${encodeURIComponent(item.id)}`);
+    const m = r.memory;
+    if (!r.ok) { $("#dd-body").innerHTML = `<div class="column-empty">${esc(r.error)}</div>`; return; }
+    $("#dd-body").innerHTML = `
+      <div class="memory-card" style="margin-bottom:12px">
+        <div class="memory-provenance">
+          <span class="pulse-server">${esc(r.server)}</span>
+          <span>${esc(m.status || "")}</span>
+          <span>${esc(m.memory_type || "")}</span>
+          <span>${esc((m.created_at || "").slice(0, 10))}</span>
+        </div>
+        <div class="memory-title">${esc(m.title || "(без заголовка)")}</div>
+        <div class="memory-excerpt" style="white-space:pre-wrap; max-height:300px; overflow-y:auto">${esc(m.content || "")}</div>
+        <div class="memory-tags">${(m.tags || []).map((t) => tagChip(t)).join("")}</div>
+      </div>
+      <div class="drawer-meta">
+        <span class="chip tagchip tag-project" data-tag="project:${esc(m.project || "")}" style="${m.project ? "" : "display:none"}">◈ ${esc(m.project || "")}</span>
+        <span class="chip tagchip tag-agent" data-agent="${esc(m.agent || "")}" style="${m.agent ? "" : "display:none"}">⚒ ${esc(m.agent || "")}</span>
+        ${m.source ? `<span class="chip">источник: ${esc(m.source)}</span>` : ""}
+        ${m.updated_at ? `<span class="chip">обновлено ${esc(m.updated_at.slice(0, 10))}</span>` : ""}
+      </div>`;
+    wireCrossLinks($("#dd-body"), null);
+  } catch (err) {
+    $("#dd-body").innerHTML = `<div class="column-empty">${esc(err.message)}</div>`;
   }
 }
 
@@ -366,19 +489,9 @@ async function refreshStores() {
       <span class="store-name">${esc(s.name)}</span>
       <span class="store-total">${h.memories_total != null ? h.memories_total + " памятей" : (h.error ? "недоступен" : "…")}</span>
       <span class="store-group">${esc(s.group)}</span>`;
-    row.title = `${s.url}${s.description ? " — " + s.description : ""}`;
-    row.addEventListener("click", (e) => {
-      if (e.altKey) {
-        // alt-click = switch scope quickly
-        state.memScope = s.name;
-        localStorage.setItem(SCOPE_KEY, s.name);
-        $("#mem-scope").value = s.name;
-        updateScopeLabels();
-        refreshPulse();
-      } else {
-        openServerModal(s.name);
-      }
-    });
+    row.title = `${s.url}${s.description ? " — " + s.description : ""} · ПКМ — быстрые действия`;
+    row.addEventListener("click", () => openServerModal(s.name));
+    row.addEventListener("contextmenu", (e) => storeContextMenu(e, { ...s }));
     el.appendChild(row);
   }
 }
@@ -402,6 +515,7 @@ async function openTask(taskId) {
   const meta = $("#modal-meta");
   meta.innerHTML = `
     <div class="drawer-meta">
+      ${(t.project ? `<span class="chip tagchip tag-project" data-tag="project:${esc(t.project)}" title="проект">◈ ${esc(t.project)}</span>` : "")}
       <span class="chip chip-agent" data-agent="${esc((t.agents || [])[0] || "")}" title="активность агента">⚒ ${esc(t.agents.join(", ") || "—")}</span>
       <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env)}</span>
     </div>
@@ -699,17 +813,16 @@ $("#srv-save").addEventListener("click", async () => {
   try {
     if (srvMode === "add") {
       await api("/api/memories/servers", { method: "POST", body: JSON.stringify(body) });
-      $("#srv-note").textContent = "Хранилище подключено.";
     } else {
       const patch = { ...body, name: srvName };
       await api(`/api/memories/servers/${encodeURIComponent(srvName)}`, { method: "PATCH", body: JSON.stringify(patch) });
-      $("#srv-note").textContent = "Сохранено.";
     }
     await loadMemServers();
     refreshStores();
     renderGroups();
+    closeSrvModal(); // применено и закрыто — note не нужен
   } catch (err) {
-    $("#srv-note").textContent = "Ошибка: " + err.message;
+    $("#srv-note").textContent = "Ошибка: " + err.message; // окно остаётся открытым для правки
   }
 });
 
@@ -802,7 +915,7 @@ function renderGroups() {
       <span class="group-glyph">⬡</span>
       <span class="group-name">${esc(name)}</span>
       <span class="group-servers">${members.length} хранилищ: ${esc(members.join(", "))}</span>`;
-    row.title = `кластер: ${members.join(", ")}`;
+    row.title = `кластер: ${members.join(", ")} · ПКМ — управление`;
     row.addEventListener("click", () => {
       state.memScope = name;
       localStorage.setItem(SCOPE_KEY, name);
@@ -810,8 +923,132 @@ function renderGroups() {
       updateScopeLabels();
       refreshPulse();
     });
+    row.addEventListener("contextmenu", (e) => {
+      const g = (state.memServers?.groups || []).find((x) => x.name === name) || { name, servers: members };
+      groupContextMenu(e, g);
+    });
     el.appendChild(row);
   }
+}
+
+// ------------------------------------------------------- context menu
+const ctxTargets = { store: null, group: null, task: null, memory: null };
+
+function ctxOpen(x, y, headTitle, headSub) {
+  let menu = document.querySelector("#ctx-menu");
+  if (!menu) {
+    menu = document.createElement("div");
+    menu.className = "ctx-menu";
+    menu.id = "ctx-menu";
+    document.body.appendChild(menu);
+  }
+  menu.innerHTML = `<div class="ctx-head"><span>${esc(headTitle)}</span><span style="margin-left:auto;opacity:.6">${esc(headSub || "")}</span></div>`;
+  menu.classList.add("open");
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(x, innerWidth - mw - 8) + "px";
+  menu.style.top = Math.min(y, innerHeight - mh - 8) + "px";
+  return menu;
+}
+function ctxAdd(label, ic, fn, cls) {
+  const menu = document.querySelector("#ctx-menu");
+  const btn = document.createElement("button");
+  btn.className = "ctx-item " + (cls || "");
+  btn.innerHTML = `<span class="ic">${ic}</span>${esc(label)}`;
+  btn.addEventListener("click", () => { closeCtx(); fn(); });
+  menu.appendChild(btn);
+}
+function ctxSep() { document.querySelector("#ctx-menu").insertAdjacentHTML("beforeend", "<div class=\"ctx-sep\"></div>"); }
+function ctxSec(label) { document.querySelector("#ctx-menu").insertAdjacentHTML("beforeend", "<div class=\"ctx-sec\">" + esc(label) + "</div>"); }
+function closeCtx() {
+  const m = document.querySelector("#ctx-menu");
+  if (m) m.classList.remove("open");
+  ctxTargets.store = null; ctxTargets.group = null; ctxTargets.task = null; ctxTargets.memory = null;
+}
+document.addEventListener("click", (e) => { if (!e.target.closest("#ctx-menu")) closeCtx(); });
+document.addEventListener("scroll", closeCtx, true);
+window.addEventListener("resize", closeCtx);
+
+function moveTaskTo(id, col) {
+  const t = state.board && state.board.tasks ? state.board.tasks.find((x) => x.id === id) : null;
+  if (!t) return;
+  t.col = col; renderBoard();
+  api("/api/tasks/" + encodeURIComponent(id) + "/move", { method: "POST", body: JSON.stringify({ col }) })
+    .catch(() => refreshBoard());
+}
+
+async function srvActionAndWait(name, action) {
+  try {
+    await api("/api/memories/servers/" + encodeURIComponent(name) + "/action", {
+      method: "POST", body: JSON.stringify({ action }),
+    });
+  } catch (err) { console.error(err); }
+  await loadMemServers(); refreshStores();
+}
+
+function storeContextMenu(e, s) {
+  e.preventDefault();
+  ctxTargets.store = s;
+  ctxOpen(e.clientX, e.clientY, "◉ " + s.name, s.group_name);
+  ctxSec("Хранилище");
+  ctxAdd(s.enabled ? "Отключить" : "Подключить", "⏻", () => srvActionAndWait(s.name, s.enabled ? "disable" : "enable"));
+  ctxAdd("Проверить связь", "⌁", () => srvActionAndWait(s.name, "test"));
+  ctxAdd(s.state === "paused" ? "Снять с паузы" : "Пауза", "⏸", () => srvActionAndWait(s.name, s.state === "paused" ? "resume" : "pause"));
+  ctxAdd("Синк", "⟳", () => srvActionAndWait(s.name, "sync"));
+  ctxAdd("Перезагрузить", "↻", () => srvActionAndWait(s.name, "reload"));
+  ctxSep();
+  ctxAdd("Открыть карточку", "⤢", () => openServerModal(s.name));
+  ctxAdd("Копировать URL", "⧉", () => navigator.clipboard && navigator.clipboard.writeText(s.url));
+}
+
+function groupContextMenu(e, g) {
+  e.preventDefault();
+  ctxTargets.group = g;
+  ctxOpen(e.clientX, e.clientY, "⬡ " + g.name, "кластер памяти");
+  ctxSec("Кластер");
+  ctxAdd("Объединённый пульс", "◉", () => {
+    state.memScope = g.name; localStorage.setItem(SCOPE_KEY, g.name);
+    const sel = document.querySelector("#mem-scope");
+    if (sel) sel.value = g.name;
+    updateScopeLabels(); refreshPulse();
+  });
+  ctxAdd("Переименовать", "✎", async () => {
+    const title = prompt("Новое название:", g.name);
+    if (!title) return;
+    try {
+      await api("/api/memories/groups", { method: "POST", body: JSON.stringify({ name: g.name, title }) });
+      await loadMemServers(); renderGroups();
+    } catch (err) { alert("Ошибка: " + err.message); }
+  });
+  ctxAdd("Удалить кластер", "🗑", async () => {
+    if (!confirm("Удалить кластер «" + g.name + "»? Хранилища перейдут в default.")) return;
+    try {
+      await api("/api/memories/groups/" + encodeURIComponent(g.name), { method: "DELETE" });
+      await loadMemServers(); refreshStores(); renderGroups();
+    } catch (err) { alert("Ошибка: " + err.message); }
+  }, "danger");
+}
+
+function taskContextMenu(e, t) {
+  e.preventDefault();
+  ctxTargets.task = t;
+  ctxOpen(e.clientX, e.clientY, t.id + " · " + t.title.slice(0, 30), COLUMN_TITLES[t.col] || t.col);
+  ctxSec("Задача");
+  ctxAdd("Открыть карточку", "⤢", () => openTask(t.id));
+  if (t.col !== "done") ctxAdd("В «готово»", "✓", () => moveTaskTo(t.id, "done"));
+  if (t.col !== "blocked") ctxAdd("В «блокировано»", "⊘", () => moveTaskTo(t.id, "blocked"));
+  if (t.col !== "open") ctxAdd("В «открыто»", "↺", () => moveTaskTo(t.id, "open"));
+  ctxSep();
+  ctxAdd("Копировать id", "⧉", () => navigator.clipboard && navigator.clipboard.writeText(t.id));
+}
+
+function memoryContextMenu(e, item) {
+  e.preventDefault();
+  ctxTargets.memory = item;
+  ctxOpen(e.clientX, e.clientY, (item.title || item.id).slice(0, 34), item.server || "");
+  ctxSec("Знание");
+  ctxAdd("Открыть карточку", "◉", () => openMemoryCard(item));
+  ctxSep();
+  ctxAdd("Копировать id", "⧉", () => navigator.clipboard && navigator.clipboard.writeText(item.id));
 }
 
 // --------------------------------------------------- cross-links: drilldown
@@ -977,7 +1214,10 @@ function connectSSE() {
   const es = new EventSource("/api/events");
   state.es = es;
   es.onopen = () => setConn("dot-on", "live");
-  es.onerror = () => setConn("dot-wait", "reconnecting…");
+  es.onerror = () => {
+    // EventSource auto-reconnects; show amber only if we truly lost the socket
+    setConn("dot-wait", "переподключение");
+  };
   es.onmessage = (msg) => {
     let ev;
     try { ev = JSON.parse(msg.data); } catch { return; }
@@ -1009,6 +1249,7 @@ applyTheme(localStorage.getItem(THEME_KEY)
 (async function boot() {
   connectSSE();
   await refreshBoard();
+  wireFilters();
   await loadMemServers().catch(() => {});
   refreshPulse();
   refreshStores();

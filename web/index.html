@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
   <title>vesmaro-eyes — task board</title>
-  <link rel="stylesheet" href="/styles/tokens.css?v=0.4.2" />
-  <link rel="stylesheet" href="/styles/board.css?v=0.4.2" />
+  <link rel="stylesheet" href="/styles/tokens.css?v=0.5.1" />
+  <link rel="stylesheet" href="/styles/board.css?v=0.5.1" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230d0f14' stroke='%231a8a96' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='5.5' fill='%2322b5c4'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -26,7 +26,7 @@
           <span class="brand-sub">task board · a gaze into the work</span>
         </div>
       </div>
-      <div class="topbar-status" id="conn-status" title="live updates">
+      <div class="topbar-status" id="conn-status" title="live-соединение с бордом">
         <span class="dot dot-off" id="conn-dot"></span>
         <span id="conn-label">connecting…</span>
       </div>
@@ -41,16 +41,25 @@
       <button class="theme-toggle" id="theme-toggle" title="тема" aria-label="Переключить тему">◐</button>
     </header>
 
-    <!-- ── Main: board + right rail ────────────────────────────── -->
+    <!-- ── Main: filterbar + board + right rail ─────────────────── -->
     <main class="main">
       <section class="board-wrap">
+        <div class="filterbar" id="filterbar">
+          <input type="search" id="f-text" class="f-text" placeholder="поиск по задачам…" aria-label="фильтр задач" />
+          <select id="f-project" class="f-sel" aria-label="проект"><option value="">проект: все</option></select>
+          <select id="f-agent" class="f-sel" aria-label="агент"><option value="">агент: все</option></select>
+          <select id="f-env" class="f-sel" aria-label="среда"><option value="">среда: все</option></select>
+          <select id="f-tag" class="f-sel" aria-label="тег"><option value="">тег: все</option></select>
+          <button class="f-clear" id="f-clear" title="сбросить фильтры" hidden>×</button>
+          <span class="f-count" id="f-count"></span>
+        </div>
         <div class="board" id="board"><!-- columns render here --></div>
       </section>
       <aside class="rail">
         <section class="rail-block">
           <h2 class="rail-title" id="pulse-title">Пульс памяти</h2>
           <p class="rail-sub" id="pulse-scope-label">все серверы памяти</p>
-          <div id="pulse" class="pulse"><!-- pulse items --></div>
+          <div id="pulse" class="pulse"><!-- project accordion --></div>
         </section>
         <section class="rail-block">
           <h2 class="rail-title">Хранилища <button class="rail-add" id="srv-add" title="Подключить хранилище">+</button></h2>
@@ -162,6 +171,6 @@
     <div id="dd-body"></div>
   </div>
 
-  <script type="module" src="/js/app.js?v=0.4.2"></script>
+  <script type="module" src="/js/app.js?v=0.5.1"></script>
 </body>
 </html>

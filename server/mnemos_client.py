@@ -89,13 +89,28 @@ def post_json(server: dict[str, Any], path: str, body: dict[str, Any],
 
 
 # ------------------------------------------------------------------ probes
-async def health(server: dict[str, Any]) -> dict[str, Any]:
-    """Cheap async probe of one memory server. Honest latency, honest errors.
+async def ping(server: dict[str, Any]) -> dict[str, Any]:
+    """Cheap liveness probe: GET /health (no vectorize, no search).
 
-    Uses a HEAD /health-style short POST probe: hybrid search on a cold CPU
-    store can take >10 s, so the probe uses the cheapest query with a
-    generous 12 s budget; slow-but-alive stores still report ok.
+    Used by the board's periodic health loop so the store indicator is
+    stable: enabled+reachable = green, regardless of search latency.
     """
+    started = time.monotonic()
+    code, body = await fetch_json(server, "/health")
+    return {
+        "server": server["name"],
+        "group": server.get("group_name", server.get("group", "default")),
+        "ok": code == 200,
+        "http_status": code,
+        "latency_ms": round((time.monotonic() - started) * 1000, 1),
+        "url": server["url"],
+        "auth": bool(server.get("token")),
+        "error": None if code == 200 else str(body.get("detail") if isinstance(body, dict) else body),
+    }
+
+
+async def health(server: dict[str, Any]) -> dict[str, Any]:
+    """Deep probe: one real search (honest end-to-end latency)."""
     started = time.monotonic()
     code, body = await post_json_async(
         server, "/search", {"query": "vesmaro", "limit": 1}, timeout=12.0
