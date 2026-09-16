@@ -24,3 +24,12 @@ src-tauri/gen/
 
 # VS Code Local History extension
 .history/
+data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Backups (local snapshots, never in git)
+../backups/
+

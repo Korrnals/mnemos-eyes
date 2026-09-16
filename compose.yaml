@@ -1,0 +1,34 @@
+# vesmaro-eyes — task board (podman-compose)
+#
+# Run:    docker compose up -d  (или podman-compose up -d)
+# Stop:   podman-compose down
+# Logs:   podman-compose logs -f eyes
+#
+# The board DB lives in ./data (bind mount into the project directory),
+# so board state survives rebuilds and is inspectable from the host.
+#
+# MNEMOS_URL points at the host machine's mnemos (compose port 8787).
+# MNEMOS_TOKEN: export MNEMOS_TOKEN='mnk_...' before `up` — token with
+# totp_required=0 from the mnemos operator (see mnemos docs, api-key).
+
+services:
+  eyes:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: ghcr.io/korrnals/vesmaro-eyes:1.0.0
+    container_name: vesmaro-eyes
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - MNEMOS_URL=${MNEMOS_URL:-http://host.containers.internal:8787}
+      - MNEMOS_TOKEN=${MNEMOS_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
