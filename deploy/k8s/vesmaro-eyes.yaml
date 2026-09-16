@@ -57,7 +57,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: eyes
-          image: ghcr.io/korrnals/vesmaro-eyes:0.7.3
+          image: ghcr.io/korrnals/vesmaro-eyes:0.8.5
           imagePullPolicy: Always
           ports:
             - name: http

@@ -75,9 +75,67 @@ def get_scope_servers(scope: str, active_only: bool = False) -> tuple[str, list[
     raise HTTPException(404, f"no memory server or group named '{scope}'")
 
 
+async def _profile_cache_refresher() -> None:
+    """Refresh specialist profile caches in the background (every 5 min)."""
+    while True:
+        await asyncio.sleep(300)
+        try:
+            for name in {t["specialists"][0] for t in store.board()["tasks"]
+                          if t.get("specialists")}:
+                tag = f"specialist:{name.lower().replace('@gcw: ', 'gcw-').replace(' ', '-')}"
+                tag2 = tag  # same value
+                servers = registry.active_servers()
+                if not servers:
+                    continue
+                probe_queries = ("*", "specialist", "[instructions]", "[skills]", "[rules]", "[triggers]")
+                results = await asyncio.gather(*(
+                    mnemos_client.post_json_async(
+                        s, "/search", {"query": q, "tags": [tag], "limit": 60},
+                        timeout=15.0,
+                    ) for s in servers for q in probe_queries
+                ))
+                server_names = [s["name"] for s in servers for _ in probe_queries]
+                sections: dict[str, list[dict[str, Any]]] = {
+                    "instructions": [], "skills": [], "rules": [], "triggers": [],
+                }
+                seen: set[str] = set()
+                for s_name, (code, data) in zip(server_names, results):
+                    if code != 200:
+                        continue
+                    for it in (data if isinstance(data, list) else []):
+                        mid = it.get("id")
+                        if mid and mid in seen:
+                            continue
+                        if mid:
+                            seen.add(mid)
+                        kind = _section_of(it.get("title", ""))
+                        if kind == "meta":
+                            continue
+                        if kind in sections:
+                            sections[kind].append({
+                                "title": (it.get("title") or "")[:140],
+                                "source_url": (it.get("source_url") or ""),
+                                "excerpt": (it.get("content") or "")[:200000],
+                                "id": it.get("id"),
+                                "server": s_name,
+                            })
+                if any(sections.values()):
+                    store.put_profile_cache(name, {
+                        "specialist": name,
+                        "slug": name.lower().replace("@gcw: ", "gcw-").replace(" ", "-"),
+                        "meta": {"role": name},
+                        "sections": sections, "errors": [],
+                        "indexed": True,
+                    })
+        except Exception:  # noqa — background loop must never die
+            pass
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    task = asyncio.create_task(_profile_cache_refresher())
     yield
+    task.cancel()
 
 
 COLUMN_RU = {
@@ -627,66 +685,114 @@ async def unarchive_task(task_id: str, request: Request) -> dict[str, Any]:
 
 
 # -------------------------------------------------------- specialist profile
+@app.get("/api/specialists/profile")
+async def specialist_profile_q(name: str, refresh: bool = False) -> dict[str, Any]:
+    """Query-param variant (slash-safe for names like SRE/DevOps)."""
+    return await specialist_profile(name=name, refresh=refresh)
+
+
 @app.get("/api/specialists/{name}/profile")
-async def specialist_profile(name: str) -> dict[str, Any]:
-    """Specialist composition from memory (cross-system): instructions,
-    skills, rules, triggers. Records are indexed into mnemos by
-    scripts/sync-gcw-profiles.py with the tag specialist:<slug> — any
-    store holding the index serves the profile, no GCW checkout needed.
+async def specialist_profile(name: str, refresh: bool = False) -> dict[str, Any]:
+    """Specialist composition (instructions/skills/rules/triggers).
+
+    Served from the DB cache instantly (populated by the background
+    refresh loop or scripts/sync-gcw-profiles.py); pass ?refresh=1 to
+    force a re-read from active memory servers.
     """
-    slug = name.lower().replace("@gcw: ", "gcw-").replace(" ", "-")
+    slug = (name.lower().replace("@gcw: ", "gcw-")
+            .replace(" ", "-").replace("/", "-"))
+
+    if not refresh:
+        cached = store.get_profile_cache(name)
+        if cached:
+            return {"ok": True, "cached": True, "updated_at": cached["updated_at"],
+                    **cached["profile"]}
+
+    # slow path: search memory servers for the index tag.
+    # A single probe query misses records (hybrid scoring quirks), so run
+    # several probe queries and merge by id.
     tag = f"specialist:{slug}"
+    legacy_tag = tag.replace("-", "/", 2) if "/" not in tag else tag
+    tags_probe = [tag, legacy_tag]
     servers = registry.active_servers()
+    probe_queries = ("*", "specialist", "[instructions]", "[skills]", "[rules]", "[triggers]", "[meta]")
     results = await asyncio.gather(*(
         mnemos_client.post_json_async(
-            s, "/search", {"query": "*", "tags": [tag], "limit": 50},
+            s, "/search", {"query": q, "tags": [t], "limit": 60},
             timeout=15.0,
-        ) for s in servers
+        )
+        for s in servers for q in probe_queries for t in tags_probe
     ))
+    server_names = [s["name"] for s in servers for q in probe_queries for t in tags_probe]
+    packed = list(zip(server_names, results))
     sections: dict[str, list[dict[str, Any]]] = {
-        "instructions": [], "skills": [], "rules": [], "triggers": [],
+        "instructions": [], "skills": [], "rules": [], "triggers": [], "other": [],
     }
     meta: dict[str, Any] = {"role": name, "slug": slug}
     errors = []
-    for s, (code, data) in zip(servers, results):
+    seen: set[str] = set()
+    for s_name, (code, data) in packed:
         if code != 200:
-            errors.append({"server": s["name"], "status": code})
+            errors.append({"server": s_name, "status": code})
             continue
         for it in (data if isinstance(data, list) else []):
-            kind = it.get("memory_type") or _section_of(it.get("title", ""))
+            mid = it.get("id")
+            if mid and mid in seen:
+                continue
+            if mid:
+                seen.add(mid)
+            kind = _section_of(it.get("title", ""))
             entry = {
-                "title": (it.get("title") or "")[:120],
-                "source_url": (it.get("source_url") or "") or "",
-                "excerpt": (it.get("content") or "")[:400],
+                "title": (it.get("title") or "")[:140],
+                "source_url": (it.get("source_url") or ""),
+                "excerpt": (it.get("content") or "")[:200000],
                 "id": it.get("id"),
-                "server": s["name"],
+                "server": s_name,
             }
-            if kind in sections:
+            if kind in sections and kind != "other":
                 sections[kind].append(entry)
             elif kind == "meta":
                 meta.update(_parse_meta_excerpt(it.get("content") or ""))
             else:
-                sections.setdefault("other", []).append(entry)
-    return {
-        "ok": not errors or any(sections.values()),
+                sections["other"].append(entry)
+
+    profile = {
         "specialist": name, "slug": slug, "meta": meta,
         "sections": sections, "errors": errors,
         "indexed": any(sections.values()),
     }
+    if profile["indexed"]:
+        store.put_profile_cache(name, profile)
+    return {"ok": True, "cached": False, **profile}
+
+
+@app.post("/api/specialists/refresh-all")
+async def specialists_refresh_all(request: Request) -> dict[str, Any]:
+    """Prime/refresh all profile caches now (used right after sync)."""
+    _guard_write(request)
+    specialists = sorted({s for t in store.board()["tasks"] for s in (t.get("specialists") or [])})
+    refreshed = 0
+    for name in specialists:
+        try:
+            await specialist_profile(name=name, refresh=True)
+            refreshed += 1
+        except Exception:
+            pass
+    return {"ok": True, "refreshed": refreshed}
 
 
 def _section_of(title: str) -> str:
     tl = title.lower()
-    if "instruction" in tl or "инструкц" in tl:
-        return "instructions"
-    if "skill" in tl:
-        return "skills"
-    if "rule" in tl or "правил" in tl:
-        return "rules"
-    if "trigger" in tl or "триггер" in tl:
-        return "triggers"
-    if "meta" in tl or "profile" in tl:
+    if tl.startswith("[meta]"):
         return "meta"
+    if tl.startswith("[instructions]"):
+        return "instructions"
+    if tl.startswith("[skills]"):
+        return "skills"
+    if tl.startswith("[rules]"):
+        return "rules"
+    if tl.startswith("[triggers]"):
+        return "triggers"
     return "other"
 
 
@@ -697,52 +803,6 @@ def _parse_meta_excerpt(text: str) -> dict[str, Any]:
             k, _, v = line.partition(":")
             out[k.strip().lower()] = v.strip()[:200]
     return out
-
-
-@app.get("/api/tasks/{task_id}/history")
-async def task_history(task_id: str) -> dict[str, Any]:
-    """Unified timeline for a task: board events + linked-memories timeline.
-
-    Board events come from the store audit log; memory entries (checkpoints,
-    decisions, learnings from mnemos) are pulled from all active servers for
-    the task's linked memory ids. Single uniform shape for the UI timeline:
-    {ts, kind, title, detail, source}.
-    """
-    task = store.task(task_id)
-    if task is None:
-        raise HTTPException(404, "task not found")
-
-    events: list[dict[str, Any]] = [
-        {
-            "ts": e["ts"],
-            "kind": "board",
-            "title": e["kind"],
-            "detail": _human_event(e),
-            "source": "board",
-        }
-        for e in store.task_events(task_id)
-    ]
-
-    # memory timeline for linked ids
-    mem_items: list[dict[str, Any]] = []
-    ids: list[str] = task.get("memory_ids") or []
-    if ids:
-        servers = registry.active_servers()
-        results = await asyncio.gather(
-            *(mnemos_client.resolve_memories(s, ids) for s in servers)
-        )
-        for s, r in zip(servers, results):
-            for mid, card in r["items"].items():
-                mem_items.append({
-                    "ts": card.get("created_at") or "",
-                    "kind": "memory",
-                    "title": card.get("title") or mid[:8],
-                    "detail": (card.get("excerpt") or "")[:200],
-                    "source": f"{s['name']} · {card.get('status') or ''}".strip(" ·"),
-                })
-    mem_items.sort(key=lambda x: x["ts"] or "", reverse=True)
-
-    return {"ok": True, "task": task_id, "events": events, "memories": mem_items}
 
 
 def _human_event(e: dict[str, Any]) -> str:

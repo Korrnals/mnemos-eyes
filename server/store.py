@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS memory_servers (
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS profile_cache (
+    specialist TEXT PRIMARY KEY,
+    updated_at TEXT NOT NULL,
+    json       TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS notifications (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     ts       TEXT NOT NULL,
@@ -585,3 +590,28 @@ class Store:
             for k in ("agents", "specialists", "memory_ids", "mnemos_tags"):
                 t[k] = _loads(t[k])
         return rows
+
+    # -------------------------------------------------------- profile cache
+    def get_profile_cache(self, specialist: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT json, updated_at FROM profile_cache WHERE specialist=?",
+                (specialist,),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            data = json.loads(row["json"])
+        except (TypeError, ValueError):
+            return None
+        return {"updated_at": row["updated_at"], "profile": data}
+
+    def put_profile_cache(self, specialist: str, profile: dict[str, Any]) -> None:
+        with self._lock, self._conn() as db:
+            db.execute(
+                """INSERT INTO profile_cache (specialist, updated_at, json)
+                       VALUES (?,?,?)
+                   ON CONFLICT(specialist) DO UPDATE SET
+                       updated_at=excluded.updated_at, json=excluded.json""",
+                (specialist, _now(), json.dumps(profile, ensure_ascii=False)),
+            )

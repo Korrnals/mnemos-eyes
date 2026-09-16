@@ -445,14 +445,14 @@ function renderPulse(data) {
     box.appendChild(body);
     el.appendChild(box);
   }
-  // first project expanded by default
-  const first = el.querySelector(".pulse-project");
-  if (first) first.classList.add("open");
+  // no project expanded by default — collapsed groups, first 4 sessions
+  // visible when expanded (body max-height + own scroll)
 }
 
 // ── session/memory card modal (pulse items) ─────────────────────
 async function openMemoryCard(item) {
   const d = $("#dd-modal"), b = $("#dd-backdrop");
+  ddRemember("знание", item.title || item.id, "память mnemos · " + (item.server || ""), () => openMemoryCard(item));
   $("#dd-kind").textContent = "знание";
   $("#dd-title").textContent = item.title || item.id;
   $("#dd-sub").textContent = "память mnemos · " + (item.server || "");
@@ -1155,7 +1155,7 @@ async function openSpecialistModal(name) {
   const slug = name.replace("@GCW: ", "gcw-").replace(/\s+/g, "-").toLowerCase();
   const [actRes, profRes] = await Promise.allSettled([
     api(`/api/agents/${encodeURIComponent(slug)}/activity?limit=12`),
-    api(`/api/specialists/${encodeURIComponent(name)}/profile`),
+    api(`/api/specialists/profile?name=${encodeURIComponent(name)}`),
   ]);
   const memories = actRes.status === "fulfilled" ? (actRes.value.memories || []) : [];
   const profile = profRes.status === "fulfilled" ? profRes.value : null;
@@ -1367,6 +1367,41 @@ function refineDraft(name, problem, memories) {
   ].join("\n");
 }
 
+// maximize toggle for all modals
+function wireMax(btnId, modalId) {
+  const btn = document.querySelector(btnId);
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    document.querySelector(modalId).classList.toggle("max");
+    btn.textContent = document.querySelector(modalId).classList.contains("max") ? "⤡" : "⤢";
+  });
+}
+wireMax("#modal-max", "#task-modal");
+wireMax("#srv-max", "#srv-modal");
+wireMax("#dd-max", "#dd-modal");
+
+// Back-button stack for the drill modal (tag/agent → memory card → …)
+const ddHistory = [];
+let ddCurrent = null;
+function ddRemember(kind, title, sub, render) {
+  if (ddCurrent) ddStack.push(ddCurrent);
+  ddCurrent = { kind, title, sub, render };
+  updateDdBack();
+}
+const ddStack = [];
+function updateDdBack() {
+  const b = $("#dd-back");
+  if (b) b.hidden = ddStack.length === 0;
+}
+$("#dd-back").addEventListener("click", () => {
+  const prev = ddStack.pop();
+  if (prev) {
+    ddCurrent = prev;
+    prev.render();
+    updateDdBack();
+  }
+});
+
 // ------------------------------------------------------- context menu
 const ctxTargets = { store: null, group: null, task: null, memory: null };
 
@@ -1413,12 +1448,29 @@ function moveTaskTo(id, col) {
     .catch((err) => { toast("err", `${id}: перемещение не удалось`, err.message); refreshBoard(); });
 }
 
+const ACTION_PAST = {
+  enable: "хранилище подключено", disable: "хранилище отключено",
+  test: "проверка связи", sync: "синхронизация выполнена", reload: "перезагружено",
+  pause: "хранилище на паузе", resume: "пауза снята",
+};
 async function srvActionAndWait(name, action) {
   try {
-    await api("/api/memories/servers/" + encodeURIComponent(name) + "/action", {
+    const r = await api("/api/memories/servers/" + encodeURIComponent(name) + "/action", {
       method: "POST", body: JSON.stringify({ action }),
     });
-  } catch (err) { console.error(err); }
+    const verb = ACTION_PAST[action] || action;
+    if (action === "test") {
+      toast(r.ok ? "ok" : "err", name + ": " + (r.ok ? "связь в порядке" : "связи нет"),
+        r.ok ? (r.probe.latency_ms + " ms" + (r.probe.auth ? "" : " · без токена")) : (r.probe.error || "HTTP " + r.probe.http_status));
+    } else if (action === "sync") {
+      toast(r.ok ? "ok" : "err", name + ": синхронизация",
+        r.ok ? "выполнена · " + (r.stats && r.stats.memories_total != null ? r.stats.memories_total + " памятей" : "ok") : "хранилище недоступно");
+    } else {
+      toast("ok", name + ": " + verb);
+    }
+  } catch (err) {
+    toast("err", name + ": " + (ACTION_PAST[action] || action), err.message);
+  }
   await loadMemServers(); refreshStores();
 }
 
@@ -1511,6 +1563,7 @@ function showDdModal(kindLabel, title, sub) {
 function closeDdModal() {
   const d = $("#dd-modal"), b = $("#dd-backdrop");
   b.classList.remove("open"); d.classList.remove("open");
+  ddStack.length = 0; ddCurrent = null; updateDdBack();
   setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
 }
 $("#dd-close").addEventListener("click", closeDdModal);
@@ -1532,6 +1585,7 @@ function ddItem({ title, meta, excerpt, onClick }) {
 
 async function openTagDrill(tag) {
   const d = $("#dd-modal"), b = $("#dd-backdrop");
+  ddRemember("тег", "#" + tag, "все задачи и знания, связанные с этим тегом (по всем серверам памяти)", () => openTagDrill(tag));
   $("#dd-kind").textContent = "тег";
   $("#dd-title").textContent = "#" + tag;
   $("#dd-sub").textContent = "все задачи и знания, связанные с этим тегом (по всем серверам памяти)";
@@ -1582,6 +1636,7 @@ async function openTagDrill(tag) {
 
 async function openAgentActivity(agent) {
   const d = $("#dd-modal"), b = $("#dd-backdrop");
+  ddRemember("агент", "⚒ " + agent, "задачи агента на борде + последние знания из памяти (по всем серверам)", () => openAgentActivity(agent));
   $("#dd-kind").textContent = "агент";
   $("#dd-title").textContent = "⚒ " + agent;
   $("#dd-sub").textContent = "задачи агента на борде + последние знания из памяти (по всем серверам)";
