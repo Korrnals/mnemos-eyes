@@ -1,12 +1,20 @@
 import { Link } from "react-router";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TagBadge } from "@/components/TagBadge/TagBadge";
+import {
+  formatConfidence,
+  formatTimestamp,
+  memorySnippet,
+  memoryTitle,
+} from "@/components/memory/memoryDisplay";
+import { statusBadgeVariant } from "@/components/memory/memoryBadges";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import type { Memory } from "@/gateway/types";
 
 /**
- * Memory list item card.
- * TODO(T5): confidence dot (gold), staggered entrance per motion budget,
- * scroll typography for the excerpt.
+ * List-view representation of one memory (component-inventory §4): auto-title,
+ * 120-char snippet of the effective content, tags, confidence dot, timestamp.
+ * The title is the link target (single accessible name per card).
  */
 export interface MemoryCardProps {
   memory: Memory;
@@ -16,27 +24,40 @@ export interface MemoryCardProps {
 export function MemoryCard({ memory, className }: MemoryCardProps) {
   return (
     <Card className={className}>
-      <CardHeader>
-        <CardTitle className="font-scroll text-base">
-          <Link
-            to={`/memories/${memory.id}`}
-            className="hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
-          >
-            {memory.id}
-          </Link>
-        </CardTitle>
+      <CardHeader className="gap-1">
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-scroll text-base font-semibold leading-tight">
+            <Link
+              to={`/memories/${memory.id}`}
+              className="hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+            >
+              {memoryTitle(memory)}
+            </Link>
+          </h3>
+          <Badge variant={statusBadgeVariant(memory.status)}>{memory.status}</Badge>
+        </div>
         <p className="text-xs text-foreground-secondary">
-          {memory.agent ?? "unknown agent"} · {memory.created_at}
+          {memory.agent || "unknown agent"} · {memory.project} ·{" "}
+          <time dateTime={memory.created_at}>{formatTimestamp(memory.created_at)}</time>
         </p>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="space-y-3">
         <p className="line-clamp-3 font-scroll text-sm leading-relaxed text-foreground">
-          {memory.content}
+          {memorySnippet(memory)}
         </p>
-        <div className="flex flex-wrap gap-1" aria-label="tags">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge variant="outline">{memory.memory_type}</Badge>
           {(memory.tags ?? []).map((tag) => (
             <TagBadge key={tag} tag={tag} />
           ))}
+          {typeof memory.confidence === "number" ? (
+            <span
+              className="ml-auto text-xs text-confidence"
+              title={`confidence ${memory.confidence}`}
+            >
+              {formatConfidence(memory.confidence)}
+            </span>
+          ) : null}
         </div>
       </CardContent>
     </Card>

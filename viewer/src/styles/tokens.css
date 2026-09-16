@@ -159,6 +159,7 @@
   --duration-normal: 250ms;
   --duration-slow: 400ms;
   --duration-iris: 3000ms; /* breathing cycle */
+  --duration-stagger: 40ms; /* T5: search-result entrance stagger step (design-system.md §8.2) */
 
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0, 0, 0.2, 1);

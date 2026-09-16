@@ -1,20 +1,52 @@
-import { Outlet } from "react-router";
+import { Suspense, useCallback, useState } from "react";
+import { Outlet, useLocation } from "react-router";
+import { RefreshCw } from "lucide-react";
+import { EmptyState } from "@/components/EmptyState/EmptyState";
+import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
+import { Button } from "@/components/ui/button";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { routeTitle } from "./navItems";
 
 /**
- * App shell (architecture.md §2 layout/): sidebar + top bar + main slot.
- * Feature routes render into <Outlet/> inside a per-route Suspense boundary
- * provided by App.tsx.
+ * App shell (component-inventory §1): persistent sidebar + top bar + main
+ * slot. Wraps the outlet in a Suspense boundary (page skeleton fallback) and
+ * an ErrorBoundary (EmptyState error fallback). Collapse state lives here so
+ * it survives route changes.
  */
 export function Shell() {
+  const [collapsed, setCollapsed] = useState(false);
+  const toggle = useCallback(() => setCollapsed((value) => !value), []);
+  const location = useLocation();
+  const title = routeTitle(location.pathname);
+
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
-      <Sidebar />
+      <Sidebar collapsed={collapsed} onToggle={toggle} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar />
-        <main id="main" className="flex-1 overflow-y-auto p-6">
-          <Outlet />
+        <TopBar title={title} />
+        <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto p-6">
+          <ErrorBoundary
+            fallback={(error, reset) => (
+              <EmptyState
+                variant="error"
+                title="This view fell into the well"
+                message={error.message}
+                action={
+                  <Button variant="outline" onClick={reset}>
+                    <RefreshCw className="size-4" aria-hidden="true" /> Try again
+                  </Button>
+                }
+              />
+            )}
+          >
+            <Suspense
+              fallback={<MemoryCardSkeleton count={3} className="mx-auto max-w-3xl" />}
+            >
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
     </div>
