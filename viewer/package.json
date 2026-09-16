@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "codegen": "bash scripts/codegen.sh"
+    "codegen": "bash scripts/codegen.sh",
+    "codegen:offline": "bash scripts/codegen.sh --from-snapshot"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",
@@ -43,6 +44,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.12.0",
+    "openapi-typescript": "^7.13.0",
     "postcss": "^8.5.28",
     "prettier": "^3.9.7",
     "tailwindcss": "^3.4.19",

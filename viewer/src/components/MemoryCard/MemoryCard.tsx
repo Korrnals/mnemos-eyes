@@ -34,7 +34,7 @@ export function MemoryCard({ memory, className }: MemoryCardProps) {
           {memory.content}
         </p>
         <div className="flex flex-wrap gap-1" aria-label="tags">
-          {memory.tags.map((tag) => (
+          {(memory.tags ?? []).map((tag) => (
             <TagBadge key={tag} tag={tag} />
           ))}
         </div>

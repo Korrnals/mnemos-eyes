@@ -33,7 +33,8 @@ Dev requests go to same-origin `/api/*`; the Vite dev-proxy forwards them to
 | `npm run typecheck` | `tsc -b` over app + node configs                                |
 | `npm run test`      | Vitest (smoke + lib foundation tests)                           |
 | `npm run format`    | Prettier write                                                  |
-| `npm run codegen`   | Regenerate `src/types/openapi.d.ts` from mnemos `/openapi.json` |
+| `npm run codegen`   | Fetch mnemos `/openapi.json` into the committed `openapi-snapshot.json` and regenerate `src/types/openapi.d.ts` from it |
+| `npm run codegen:offline` | Regenerate `src/types/openapi.d.ts` from the committed snapshot — no live mnemos needed |
 
 ## Status
 
