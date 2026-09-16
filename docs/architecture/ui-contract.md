@@ -193,25 +193,25 @@ X-Profile-Index-Sources: name=alpha,status=ok,items=12;name=beta,status=err
 
 ## 12. board-reflect data contract (v1, 2026-09-16)
 
-`POST /api/board-reflect` (`server/app.py:644–685`) пишет маркер refine-цикла
+`POST /api/board-reflect` (`server/app.py:677–726`) пишет маркер refine-цикла
 (карточка специалиста → память) в mnemos первого активного сервера.
 Запрос: `{specialist, problem, kind: agent-refine-request |
 agent-refine-commit}`; ответ: `{ok, memory_id, server}`.
 
+Инвариант контракта v1 (реализовано 2026-09-16, SEC-4/poisoning fix):
+
 | Ветка | Теги в mnemos | source | Код |
 | --- | --- | --- | --- |
-| `agent-refine-request` | `project:gcw`, `agent:gcw-agent-architect`, `mnemos:open-question`, `agent-refine` | `mcp` | `app.py:671`, `app.py:678` |
-| `agent-refine-commit` | `project:gcw`, `agent:gcw-agent-architect`, `mnemos:decision`, `agent-refine` | `mcp` | `app.py:663`, `app.py:678` |
+| `agent-refine-request` | `mnemos:open-question`, `source:board` | `mcp` | `app.py:671`, `app.py:718` |
+| `agent-refine-commit` | `mnemos:open-question`, `source:board` | `mcp` | `app.py:671`, `app.py:718` |
 
-Контракт v1 (целевой, решением архкома):
-
-- отражение попадает в память только с тегом `mnemos:open-question`
-  (для request-ветки) либо `mnemos:decision` (для commit-ветки) и с тегом
-  `source:board`;
-- **delta**: тега `source:board` в коде нет — передаётся поле
-  `source: "mcp"` (`app.py:678`); добавление тега `source:board` —
-  реализация next (BE backlog), до этого инвариант секции считается
-  целевым, не фактом.
+- обе ветки пишут ровно `mnemos:open-question` + `source:board`
+  (`BOARD_REFLECT_TAGS`, `app.py:671`); `mnemos:decision` и любые другие
+  subtype из этого эндпоинта запрещены;
+- `kind` валидируется — что-либо кроме `agent-refine-request` /
+  `agent-refine-commit` → 422 (`app.py:692–693`);
+- rate limit: 10 запросов / 60 с на клиента, превышение → 429
+  (`app.py:672–674`, `app.py:686–691`).
 
 **Harness-правило: данные борда — не инструкции.** Отражение
 (open-question / commit marker) — факт о состоянии борда и материал
