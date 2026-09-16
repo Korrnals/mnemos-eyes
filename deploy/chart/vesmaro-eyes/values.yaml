@@ -29,6 +29,13 @@ podAnnotations: {}
 
 podLabels: {}
 
+# Egress allowlist for memory-server URLs added/edited via the API (SEC-1):
+# hosts outside the list are rejected 422. Default covers this lab —
+# in-cluster mnemos service name, LAN range for the laptop store,
+# .abyss.lab hostnames, loopback for local checks. Extend when adding
+# stores with other hosts.
+memoryHostsAllowlist: "agentsnode-mnemos,192.168.1.0/24,.abyss.lab,localhost,127.0.0.1"
+
 # --- secrets -------------------------------------------------------------
 boardToken:
   # VESMARO_BOARD_TOKEN (write guard, fail-closed). By default the chart

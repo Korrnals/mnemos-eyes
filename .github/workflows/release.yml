@@ -14,7 +14,26 @@ permissions:
   packages: write
 
 jobs:
+  verify:
+    # Gate before any publish: version sync + full pytest контур +
+    # the standalone security verifier.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install -r server/requirements.txt -r requirements-dev.txt
+      - name: Version sync check
+        run: bash scripts/sync-version.sh --check
+      - name: pytest
+        run: python -m pytest tests/ -q
+      - name: Security verifier
+        run: python scripts/verify_security_sprint1.py
+
   build-push-release:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,6 +60,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          file: ./Containerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

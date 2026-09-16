@@ -762,9 +762,10 @@ body {
    already-iris "+" attach button — they ripple via fill, not border */
 :is(.ctx-item, .mem-hit button):hover { background: var(--color-iris-dim); }
 
-/* keyboard focus ring everywhere except text inputs — those signal focus
-   via the shared iris border + glow (:focus rules above), WCAG 2.4.11/2.4.13 */
-:is(button, select, [tabindex]):focus-visible {
+/* keyboard focus ring everywhere, text inputs included — their :focus
+   iris-border was removed with the unified-states pass, so the ring is
+   the only keyboard-focus signal left (WCAG 2.4.7/2.4.11) */
+:is(button, select, input, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--color-iris-bright);
   outline-offset: 2px;
 }

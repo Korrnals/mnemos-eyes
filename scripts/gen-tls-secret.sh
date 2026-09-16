@@ -42,7 +42,7 @@ if [[ "$MODE" == "--print-only" ]]; then
   exit 0
 fi
 
-if [[ "$MODE" != "--apply" && -n "$MODE" ]]; then
+if [[ "$MODE" != "apply" && "$MODE" != "--apply" ]]; then
   echo "unknown mode: $MODE (use --print-only or --check)" >&2
   exit 2
 fi

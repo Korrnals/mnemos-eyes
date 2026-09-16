@@ -1,0 +1,5 @@
+# QA contour (QA-1): pytest harness for tests/.
+# Runtime deps (fastapi, starlette, pydantic, pyyaml) come from
+# server/requirements.txt — this file carries the test tooling only.
+pytest>=8.0
+httpx>=0.27

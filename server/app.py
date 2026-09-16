@@ -508,12 +508,14 @@ async def memory_servers() -> MemoryServersOut:
     }
 
 
-def _validate_server_spec(body: ServerSpec) -> tuple[str, str]:
+async def _validate_server_spec(body: ServerSpec) -> tuple[str, str]:
     """SEC-1 boundary: validate url (scheme + host egress policy) and
     token_ref (no plain:, file: only under provisioned dirs) BEFORE any
     network activity or persistence. Raises 422 on violation."""
     try:
-        url = validate_memory_url(body.url)
+        # getaddrinfo inside validate_memory_url is a blocking syscall;
+        # keep the event loop free while DNS resolves (or times out)
+        url = await asyncio.to_thread(validate_memory_url, body.url)
         token_ref = validate_token_ref(body.token_ref)
     except ValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -523,7 +525,7 @@ def _validate_server_spec(body: ServerSpec) -> tuple[str, str]:
 @app.post("/api/memories/servers", status_code=201)
 async def add_memory_server(body: ServerSpec, request: Request) -> MemoryServerOut:
     _guard_write(request)
-    url, token_ref = _validate_server_spec(body)
+    url, token_ref = await _validate_server_spec(body)
     existing = store.get_server(body.name)
     if existing is None:
         # verify reachability before first save (honest, non-blocking).
@@ -547,7 +549,7 @@ async def add_memory_server(body: ServerSpec, request: Request) -> MemoryServerO
 @app.patch("/api/memories/servers/{name}")
 async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> MemoryServerOut:
     _guard_write(request)
-    url, token_ref = _validate_server_spec(body)
+    url, token_ref = await _validate_server_spec(body)
     if store.get_server(name) is None:
         raise HTTPException(404, f"server '{name}' not found")
     row = registry.add_or_update({
@@ -893,7 +895,10 @@ async def notifications(after_id: int = 0, limit: int = 50,
 
 
 @app.post("/api/notifications/read")
-async def notifications_read(body: NotificationReadBody | None = None) -> NotificationReadOut:
+async def notifications_read(
+    request: Request, body: NotificationReadBody | None = None
+) -> NotificationReadOut:
+    _guard_write(request)
     # no body or {"id": null} marks ALL as read (previous contract kept)
     store.mark_read(body.id if body else None)
     return {"ok": True, "unread": store.unread_count()}

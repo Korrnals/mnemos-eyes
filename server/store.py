@@ -14,6 +14,7 @@ and a memory speak the same lifecycle language.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import threading
 import time
@@ -242,7 +243,9 @@ class Store:
         env = payload.get("env", "unknown")
         if env not in VALID_ENVS:
             raise ValueError(f"invalid env: {env}")
-        task_id = payload.get("id") or f"t-{int(time.time()*1000)}"
+        # random suffix: two creates in the same millisecond must not
+        # collide on the tasks.id UNIQUE constraint (QA-1 regression)
+        task_id = payload.get("id") or f"t-{int(time.time()*1000)}-{secrets.token_hex(2)}"
         now = _now()
         with self._lock, self._conn() as db:
             pos = db.execute(
