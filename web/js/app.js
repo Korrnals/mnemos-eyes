@@ -11,11 +11,36 @@ const state = {
 };
 
 // ------------------------------------------------------------------ helpers
+// SEC-3 fail-closed write guard: mutating requests must carry the board
+// token. It lives in localStorage per browser; a 401 on a mutation asks
+// once and retries (token value ships in k8s secret vesmaro-eyes-board-token).
+const BOARD_TOKEN_KEY = "vesmaro.boardToken";
+
+function boardToken() {
+  return localStorage.getItem(BOARD_TOKEN_KEY) || "";
+}
+
+function askBoardToken() {
+  const t = prompt(
+    "Мутации борда защищены токеном (fail-closed).\n" +
+    "Возьмите значение секрета vesmaro-eyes-board-token и вставьте сюда —\n" +
+    "браузер запомнит его:\n" +
+    "kubectl -n kube-agents get secret vesmaro-eyes-board-token \\\n" +
+    "  -o jsonpath='{.data.VESMARO_BOARD_TOKEN}' | base64 -d",
+  );
+  if (t && t.trim()) localStorage.setItem(BOARD_TOKEN_KEY, t.trim());
+  return boardToken();
+}
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
+  const method = (opts.method || "GET").toUpperCase();
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const token = boardToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401 && method !== "GET") {
+    if (askBoardToken()) return api(path, opts);
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch {}
