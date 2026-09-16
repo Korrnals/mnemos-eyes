@@ -164,18 +164,10 @@ function taskCard(t) {
     taskContextMenu(e, t);
   });
   card.addEventListener("click", (e) => {
-    const tag = e.target.closest(".tagchip");
-    if (tag) {
-      e.stopPropagation();
-      openTagDrill(tag.dataset.tag);
-      return;
-    }
-    const av = e.target.closest("[data-agent]");
-    if (av && av.dataset.agent) {
-      e.stopPropagation();
-      openAgentActivity(av.dataset.agent);
-      return;
-    }
+    // tag/agent cross-links are owned by the single delegated document
+    // listener (see "cross-links" section) — don't open the task for them
+    const link = e.target.closest(".tagchip[data-tag], [data-agent]");
+    if (link && (link.dataset.tag || link.dataset.agent)) return;
     openTask(t.id);
   });
   return card;
@@ -651,14 +643,19 @@ function tlItem(x) {
     </div>`;
 }
 
-function wireCrossLinks(root, t) {
-  root.addEventListener("click", (e) => {
-    const tag = e.target.closest(".tagchip");
-    if (tag && tag.dataset.tag) { openTagDrill(tag.dataset.tag); return; }
-    const ag = e.target.closest("[data-agent]");
-    if (ag && ag.dataset.agent) { openAgentActivity(ag.dataset.agent); }
-  });
-}
+// ── cross-links: one delegated document click listener ─────────────
+// Cards and modal bodies are re-rendered constantly: per-element handlers
+// die with their nodes, and re-wiring persistent roots (#modal-meta,
+// #dd-body) stacked duplicate listeners. Tag/agent chips therefore go
+// through a single document-level listener, scoped to the containers that
+// render cross-link chips — pulse/roster rows keep their whole-row clicks.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#board, #modal-meta, #dd-body")) return;
+  const tag = e.target.closest(".tagchip[data-tag]");
+  if (tag && tag.dataset.tag) { openTagDrill(tag.dataset.tag); return; }
+  const ag = e.target.closest("[data-agent]");
+  if (ag && ag.dataset.agent) openAgentActivity(ag.dataset.agent);
+});
 
 function memoryCard(m) {
   const div = document.createElement("div");

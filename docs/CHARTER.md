@@ -1,42 +1,61 @@
-# mnemos-eyes — Project Charter
+# vesmaro-eyes — Project Charter
 
-> Authoritative record of agreed decisions for the mnemos GUI companion.
-> Owner: `@GCW: Tech Lead`. Design system owned by `@GCW: Senior Frontend Developer`.
-> Status: **Design phase** (no app code yet).
+> Авторитетная запись согласованных решений по GUI-компаньону mnemos.
+> Владелец: `@GCW: Tech Lead`. Дизайн-система — `@GCW: Senior Frontend Developer`.
+> Продукт: **vesmaro-eyes**. Репозиторий: **mnemos-eyes**
+> (`github.com/Korrnals/mnemos-eyes`; запланирован переезд в org `vesmaro` —
+> задача RB-1 на борде, статус blocked).
+> Status: **борд v1.0.0 задеплоен** и живёт на `http://vesmaro.abyss.lab`;
+> релиз `ghcr.io/korrnals/vesmaro-eyes:1.0.0` в ghcr. Это не design phase.
+> Следующий этап разработки — **L1 viewer** (см. §7: Phase 2 «L1 scaffold»
+> после закрытия Phase 1 «стабилизация»).
 
 ---
 
 ## 1. Purpose & vision
 
-`mnemos-eyes` is a **graphical interface to the mnemos long-term memory engine**.
-It lets a human _see into_ the memory the agents accumulate: search it, read it,
-understand where each fact came from, and watch the memory live.
+`vesmaro-eyes` — **графический интерфейс и операционный кокпит движка
+долгосрочной памяти mnemos**. Он позволяет человеку _заглянуть в_ память,
+которую накапливают агенты: искать, читать, понимать происхождение каждого
+факта и наблюдать память вживую.
 
-Design north star: **"a gaze into oneself — into one's own thoughts"**
-(_взгляд в себя, в свои мысли_). Calm, beautiful, lore-driven, never distracting.
+Design north star: **«взгляд в себя — в свои мысли»**. Спокойно, красиво,
+lore-driven, никогда не отвлекает.
 
 ---
 
 ## 2. Scope
 
+### Живёт сейчас: task board (v1.0.0)
+
+Первым деливераблом стал **борд задач** (pivot — [ADR 0004](decisions/0004-task-board-v0.md)):
+канбан, зеркалящий state machine mnemos (`open → in-progress → blocked →
+resolved → done`), карточки с harness/specialist-провенансом, мульти-серверная
+память (по отдельности или merged в кластеры), SSE live updates. Задеплоен
+в кластер (`http://vesmaro.abyss.lab`). По [ADR 0006](decisions/0006-two-frontends-fate.md)
+(принят комитетом, на ратификации) борд заморожен по фичам: только bug-fix
+и a11y-фиксы, новые фичи — в L1.
+
 ### MVP = **L1 — Read-only Viewer**
 
-The first release is a **viewer**, not an editor. It must let the user:
+Следующий релиз — **viewer**, а не редактор. Он должен уметь:
 
-- **Search** memory: full-text (FTS5) + semantic (vector), with a unified search bar.
-- **Browse** memory items: content, tags, provenance/source, confidence, timestamps.
-- **Inspect tags** and the tag contract.
-- **View status / health**: counts, store health, pipeline status.
-- **Cluster graph**: visualize related memories.
-- **A2A sessions**: list and inspect agent-to-agent sessions.
-- **Traces**: view captured traces / compaction state.
+- **Search** памяти: full-text (FTS5) + semantic (vector), единая строка поиска.
+- **Browse** записей памяти: контент, теги, provenance/source, confidence, таймстемпы.
+- **Inspect тегов** и tag-контракта.
+- **View status / health**: счётчики, здоровье стора, состояние пайплайна.
+- **Cluster graph**: визуализация связанных воспоминаний.
+- **A2A sessions**: список и разбор agent-to-agent сессий.
+- **Traces**: просмотр захваченных трейсов / состояния компакции.
 
 ### Out of MVP (later milestones)
 
-- **L2 — Curator**: edit / merge / delete memories, manage tags, approve pipeline output.
-- **L3 — Operator**: trigger pipeline runs, manage policies/schedules, DLQ, ingest.
+- **L2 — Curator**: правка / merge / удаление памяти, управление тегами,
+  одобрение вывода пайплайна.
+- **L3 — Operator**: запуск пайплайна, политики/расписания, DLQ, ingest.
+- Отложено решением архкома (2026-09-16): борд-фичи, Tauri, L2/L3, i18n.
 
-The L2/L3 roadmap is owned jointly with `@GCW: Product Architect` if scope grows.
+Роадмап L2/L3 принадлежит совместно с `@GCW: Product Architect`, если скоуп растёт.
 
 ---
 
@@ -44,19 +63,32 @@ The L2/L3 roadmap is owned jointly with `@GCW: Product Architect` if scope grows
 
 | # | Decision | Rationale |
 | --- | --- | --- |
-| **D1** | **Separate repo** `mnemos-eyes`, sibling to `mnemos`. | Clean separation of concerns; UI evolves independently of the engine. |
-| **D2** | **Name** = `mnemos-eyes`. Internal lore may reference _Mnemosyne / Anamnesis_. | Ecosystem cohesion with `mnemos` beat a standalone name. |
-| **D3** | **MVP = L1 read-only viewer.** | Prove value fast; lowest risk; no destructive ops in v1. |
-| **D4** | **Stack = React + TypeScript + Vite + TanStack Query + Tailwind/shadcn.** | Mature, fast, design-flexible, large talent/tooling pool. |
-| **D5** | **Web-first now, Tauri 2.0 native shell later.** | Web SPA ships fastest; Tauri adds desktop + mobile + local-first reusing ~90% of the frontend. |
-| **D6** | **Isolated data-layer abstraction** (`MemoryGateway` interface with `HttpAdapter` and future `TauriAdapter`). | Defers the "web vs native" lock-in; same UI code in both modes. |
-| **D7** | **Types auto-generated** from mnemos `/openapi.json` via `openapi-typescript`. | Single source of truth; no hand-drift between API and UI types. |
-| **D8** | **Auth mandatory; 2FA (TOTP) for remote/mobile access.** | See §5 — local-only desktop relies on OS + optional app-lock; 2FA justified once the memory is reachable over the network. |
-| **D9** | **Design is lore-driven** (eye / iris / well, "взгляд в себя"), beautiful but non-distracting, with light "living" animation. | Differentiator; matches the memory metaphor. |
+| **D1** | **Отдельный репозиторий** `mnemos-eyes` (`github.com/Korrnals/mnemos-eyes`), sibling к `mnemos`. Переезд в org `vesmaro` запланирован (RB-1, blocked — план, не свершившийся факт). | Чистое разделение ответственности; UI эволюционирует независимо от движка. |
+| **D2** | **Имя продукта** = `vesmaro-eyes`; имя репозитория = `mnemos-eyes` (переименование — в волне ребрендинга, RB-1). Внутренний lore может ссылаться на _Mnemosyne / Anamnesis_. | Связность экосистемы с `mnemos` важнее отдельного имени. |
+| **D3** | **MVP = L1 read-only viewer.** | Быстрое доказательство ценности; минимальный риск; никаких деструктивных операций в v1. |
+| **D4** | **Стек L1 = React + TypeScript + Vite + TanStack Query + Tailwind/shadcn.** | Зрелый, быстрый, гибкий в дизайне, большой пул талантов и инструментария. |
+| **D5** | **Web-first сейчас, Tauri 2.0 native shell позже** (отложено архкомом). | Web SPA выходит быстрее; Tauri добавляет desktop + mobile + local-first, переиспользуя ~90% фронтенда. |
+| **D6** | **Изолированная абстракция слоя данных** (`MemoryGateway` с `HttpAdapter` и будущим `TauriAdapter`). | Снимает lock-in «web vs native»; один и тот же UI-код в обоих режимах. |
+| **D7** | **Типы генерируются автоматически** из `/openapi.json` mnemos через `openapi-typescript`. | Единый источник истины; никакого ручного дрифта между API и UI-типами. |
+| **D8** | **Auth обязателен; 2FA (TOTP) для remote/mobile-доступа.** | См. §5 — локальный desktop опирается на ОС + опциональный app-lock; 2FA оправдана, как только память доступна по сети. |
+| **D9** | **Дизайн lore-driven** (глаз / ирис / колодец, «взгляд в себя»), красивый, но не отвлекающий, с лёгкой «живой» анимацией. | Дифференциатор; совпадает с метафорой памяти. |
+
+Журнал решений: [`docs/decisions/`](decisions/) — ADR 0001–0008.
+Статусы честно: ADR 0004 (board pivot), 0005 (harness identity) — **Accepted**;
+ADR 0006 (судьба двух фронтендов), 0007 (merged views vs mesh), 0008 (стек
+бэкенда борда) — **приняты комитетом, ожидают ратификации владельца**
+(поручение №5 архкома 2026-09-16).
 
 ---
 
 ## 4. Architecture (high level)
+
+Текущее состояние (борд v1.0.0): vanilla ES-modules SPA (`web/`, zero build)
++ FastAPI board server (`server/`, SQLite WAL на примонтированном томе) +
+узкий серверный прокси к одному или нескольким mnemos API — см. README,
+раздел Architecture.
+
+Целевая архитектура L1 (React):
 
 ```text
 ┌─────────────────────────────────────────────┐
@@ -73,64 +105,78 @@ The L2/L3 roadmap is owned jointly with `@GCW: Product Architect` if scope grows
 └─────────────────┘         └──────────────────────┘
 ```
 
-- **Phase 1:** `HttpAdapter` only → mnemos HTTP API.
-- **Phase 2:** add `TauriAdapter` → Rust core reads the store in-process
-  (no API exposed to the network).
+- **Сначала:** только `HttpAdapter` → mnemos HTTP API.
+- **Позже:** добавить `TauriAdapter` → Rust core читает стор in-process
+  (API не выставляется в сеть).
 
-Detailed frontend architecture + folder structure: owned by
-`@GCW: Senior Frontend Developer` (see `docs/architecture.md`, to be authored).
+Детальная фронтенд-архитектура и структура папок — у
+`@GCW: Senior Frontend Developer` (см. [`docs/architecture.md`](architecture.md)
+и [`docs/architecture/ui-contract.md`](architecture/ui-contract.md)).
 
 ---
 
 ## 5. Auth & security posture
 
-- **All access is authenticated.** No anonymous read, even on loopback.
-- **2FA (TOTP)** is **required for remote/mobile access** (phone → home mnemos server).
-- **Local desktop (Tauri)** may rely on OS-level protection + an optional in-app lock.
-- The **definitive threat model** is delegated to `@GCW: Senior Security Engineer`
-  before any auth code is written.
+- **Весь доступ аутентифицирован.** Никакого анонимного чтения, даже на loopback.
+- **2FA (TOTP)** обязательна для **remote/mobile-доступа** (телефон → домашний mnemos).
+- **Локальный desktop (Tauri)** может опираться на защиту ОС + опциональный in-app lock.
+- Текущая поза борда — **LAN-trust** ([ADR 0004](decisions/0004-task-board-v0.md)):
+  борд-сервер — единственный держатель mnemos-токенов; находки ревью SEC-1..4
+  в трекере; SEC-3 закрывается переходом на Helm + ingress вместо hostNetwork
+  (задача SRE-1), write-guard — fail-closed.
+- **Окончательный threat model** — у `@GCW: Senior Security Engineer`
+  до написания любого auth-кода.
 
 ---
 
 ## 6. Prerequisites on `mnemos` (backend work)
 
-These are tracked as separate PRs in the `mnemos` repo, owned by
-`@GCW: Senior System Engineer` and `@GCW: Senior Security Engineer`:
+Трекаются отдельными PR в репо `mnemos`, владельцы —
+`@GCW: Senior System Engineer` и `@GCW: Senior Security Engineer`:
 
-1. **CORS** support (configurable allow-list) — required for a browser SPA.
-2. **AuthN/AuthZ** layer (token-based; TOTP 2FA for remote).
-3. **`/openapi.json`** stable + documented (already served by FastAPI) — feeds
-   `openapi-typescript` codegen.
-4. (Phase 2) A **read API surface** clean enough for the `TauriAdapter` to bypass
-   when reading SQLite directly.
+1. **CORS** (конфигурируемый allow-list) — нужен для прямого браузерного
+   доступа к mnemos API из SPA L1.
+2. **AuthN/AuthZ** (токены `mnk_…`; TOTP 2FA для remote) — живёт в mnemos;
+   борд ходит под выделенным токеном (`totp_required=0`), секрет — только
+   в k8s secret.
+3. **`/openapi.json`** стабильный и документированный (FastAPI отдаёт) —
+   кормит кодогенерацию `openapi-typescript`; OpenAPI-схемы board API —
+   часть Gate 1→2 (§7).
+4. (Phase Tauri) **read API surface**, достаточный для `TauriAdapter`,
+   читающего SQLite напрямую.
 
-> ⚠️ Until CORS + auth land in `mnemos`, the SPA can only run against a local
-> dev proxy. This is the **gating dependency** for a real browser deployment.
+> Борд обходит CORS серверным прокси (bearer остаётся server-side) — поэтому
+> CORS не блокирует текущий деплой, но остаётся условием прямого доступа
+> браузерного L1 к mnemos API.
 
 ---
 
 ## 7. Roadmap
 
-| Phase | Deliverable | Owner |
+Каркас Phase 1–4 — решение №5 архкома от 2026-09-16
+([протокол](architecture/archcom-2026-09-16-archcom-session1.md)):
+стабилизация → L1 scaffold → mesh → конвергенция.
+
+| Phase | Deliverable | Gate на вход |
 | --- | --- | --- |
-| **P0** | Charter + design brief + decisions (this doc set) | `@GCW: Tech Lead` |
-| **P0.1** | Frontend architecture + design system spec (docs only) | `@GCW: Senior Frontend Developer` |
-| **P0.2** | mnemos CORS + auth/2FA threat model | `@GCW: Senior System Engineer` + `@GCW: Senior Security Engineer` |
-| **P1** | L1 viewer MVP (web) | `@GCW: Senior Frontend Developer` |
-| **P2** | Tauri 2.0 shell (desktop + mobile) | `@GCW: Senior Frontend Developer` + `@GCW: SRE/DevOps` |
-| **P3** | L2 curator features | TBD with `@GCW: Product Architect` |
+| **Phase 1 — стабилизация** (текущая: ветка `feat/sprint-1-stabilization`) | Приоритет спринта: SEC-1/2 → BE-1/4 → FE-1 → QA-1 → SRE-1 | — |
+| **Phase 2 — L1 scaffold** | Каркас L1 viewer (React+TS+Vite); OpenAPI-схемы board API + контракт-тесты (TL + QA) | **Gate 1→2** = OpenAPI-схемы + QA-1 контракт-тесты + SRE-1 закрыл SEC-3 |
+| **Phase 3 — mesh** | Федерация mnemos-mesh (MSH-1); борд-мерж остаётся query-агрегацией, монополия борд-мерж API до появления query-API у mesh (ADR 0007) | **Gate 2→3** = L1 потребляет `/api/memories/*`; второй мерж-слой = veto |
+| **Phase 4 — конвергенция** | Сведение двух фронтендов по конвергенционному гейту ADR 0006 | **Gate 3→4** = «mesh query-API ∨ L1 parity по daily loop владельца — что раньше» |
+
+Deferrals (архком): борд-фичи, Tauri, L2/L3, i18n.
 
 ---
 
 ## 8. Reference: prior art
 
-The old `ai-brain` prototype (`../ai-brain/src/ai_brain/web/`) is **reference only**,
-not a code base to reuse. Useful signals to mine:
+Старый прототип `ai-brain` (`../ai-brain/src/ai_brain/web/`) — **только
+референс**, не кодовая база для переиспользования. Полезные сигналы:
 
-- **Information architecture**: dashboard, memories, raw, knowledge, tags, watcher,
-  graph, jobs, add — a feature map to cherry-pick from for L1/L2/L3.
-- **Design tokens**: a GitHub-style dark/light CSS-variable system (starting point,
-  not the final lore-driven aesthetic).
-- **i18n**: RU/EN toggle pattern.
+- **Information architecture**: dashboard, memories, raw, knowledge, tags,
+  watcher, graph, jobs, add — карта фич для выборки в L1/L2/L3.
+- **Design tokens**: GitHub-style система CSS-переменных dark/light
+  (стартовая точка, не финальная lore-driven эстетика).
+- **i18n**: паттерн переключателя RU/EN.
 
-Do **not** port its vanilla-JS code; we start clean on the agreed stack.
+Код на vanilla JS **не портируем**; стартуем чисто на согласованном стеке.

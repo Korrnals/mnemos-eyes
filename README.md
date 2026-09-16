@@ -131,6 +131,17 @@ TLS are the pre-conditions for anything beyond a trusted LAN (see
 [ADR 0004](docs/decisions/0004-task-board-v0.md) and the security review
 findings in the tracker: SEC-1..4).
 
+## Image & releases
+
+Published automatically on tag push `v*` via
+[`.github/workflows/release.yml`](.github/workflows/release.yml):
+image build → push to ghcr (package auto-links to this repo) → GitHub
+Release with generated notes.
+
+```bash
+docker pull ghcr.io/korrnals/vesmaro-eyes:latest   # public, no login needed
+```
+
 ## Docs
 
 - 📜 [Charter](docs/CHARTER.md) · 🗂 [ADR log](docs/decisions/) ·
