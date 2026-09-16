@@ -21,7 +21,7 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import mnemos_client
 from .memory_registry import ServerRegistry, resolve_token, write_config_template
@@ -152,7 +152,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.1.0", lifespan=lifespan)
 
 
 # --------------------------------------------------------------------- models
@@ -181,6 +181,20 @@ class TaskPatch(BaseModel):
     mnemos_tags: list[str] | None = None
 
 
+def _validate_agents(agents: list[str]) -> None:
+    """ADR 0005 (BE-5): ``agents`` are execution harnesses (zcode, hermes,
+    ...); role-like slugs are specialists and belong in ``specialists``.
+    Enforced identically on create AND patch, server-side, so every client
+    inherits the rule. Raises HTTP 422."""
+    bad = [a for a in agents if a.startswith("gcw-") or a.startswith("@")]
+    if bad:
+        raise HTTPException(
+            422,
+            f"agents must be harnesses (zcode, hermes, ...), not roles: {bad}; "
+            "use specialists for @GCW roles",
+        )
+
+
 class MoveBody(BaseModel):
     col: str
     position: int | None = None
@@ -205,6 +219,137 @@ class GroupSpec(BaseModel):
     name: str = Field(min_length=1, max_length=60, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     title: str = ""
     description: str = ""
+
+
+# OpenAPI response contract (arch-committee mandate #1). All models allow
+# extra fields so serialization never drops keys the SPA reads; required
+# fields are only those the store provably always returns.
+class _ApiModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class TaskOut(_ApiModel):
+    id: str
+    col: str
+    position: int
+    title: str
+    summary: str
+    spec: str
+    agents: list[str]
+    specialists: list[str]
+    env: str
+    project: str
+    memory_ids: list[str]
+    mnemos_tags: list[str]
+    created_at: str
+    updated_at: str
+    archived: int = 0
+
+
+class BoardOut(_ApiModel):
+    columns: list[str]
+    tasks: list[TaskOut]
+    counts: dict[str, int]
+
+
+class OkOut(_ApiModel):
+    ok: bool
+
+
+class OkNoteOut(_ApiModel):
+    ok: bool
+    note: str = ""
+
+
+class TaskMemoriesOut(_ApiModel):
+    items: dict[str, Any]
+    unresolved: list[dict[str, Any]]
+    sources: dict[str, str]
+
+
+class GroupOut(_ApiModel):
+    name: str
+    title: str = ""
+    description: str = ""
+    created_at: str = ""
+    servers: list[str] = []
+
+
+class MemoryServerOut(_ApiModel):
+    """Public server shape (``_server_public``) — token values never present."""
+    name: str
+    url: str
+    group_name: str
+    description: str = ""
+    enabled: bool = True
+    state: str = "idle"
+    token_ref: str = ""
+    has_token: bool = False
+    ok: bool | None = None
+    latency_ms: float | None = None
+    probe_status: int | None = None
+
+
+class MemoryServersOut(_ApiModel):
+    ok: bool
+    servers: list[MemoryServerOut]
+    groups: list[GroupOut]
+
+
+class ServerActionOut(_ApiModel):
+    ok: bool
+    server: MemoryServerOut | None = None
+
+
+class GroupsOut(_ApiModel):
+    ok: bool
+    groups: list[GroupOut]
+
+
+class GroupSaveOut(_ApiModel):
+    ok: bool
+    group: GroupOut
+
+
+class GroupMemberBody(_ApiModel):
+    server: str = Field(min_length=1)
+    op: str = "add"  # add | remove
+
+
+class GroupMemberOut(_ApiModel):
+    ok: bool
+    server: MemoryServerOut | None = None
+
+
+class ReflectOut(_ApiModel):
+    ok: bool
+    memory_id: str | None = None
+    server: str
+
+
+class NotificationOut(_ApiModel):
+    id: int
+    category: str
+    title: str
+    message: str = ""
+    task_id: str | None = None
+    ts: str
+    read: bool
+
+
+class NotificationsOut(_ApiModel):
+    ok: bool
+    unread: int
+    items: list[NotificationOut]
+
+
+class NotificationReadBody(_ApiModel):
+    id: int | None = None  # None marks ALL as read
+
+
+class NotificationReadOut(_ApiModel):
+    ok: bool
+    unread: int
 
 
 # ------------------------------------------------------------------ board API
@@ -236,28 +381,35 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/api/board")
-async def board() -> dict[str, Any]:
+async def board() -> BoardOut:
     return store.board()
 
 
 @app.post("/api/tasks", status_code=201)
-async def create_task(body: TaskCreate, request: Request) -> dict[str, Any]:
+async def create_task(body: TaskCreate, request: Request) -> TaskOut:
     _guard_write(request)
     if body.col not in VALID_STATUSES:
         raise HTTPException(422, f"invalid col: {body.col}")
-    # harness validation: agents must be execution harnesses, not roles
-    bad = [a for a in body.agents if a.startswith("gcw-") or a.startswith("@")]
-    if bad:
-        raise HTTPException(422, f"agents must be harnesses (zcode, hermes, ...), not roles: {bad}; use specialists for @GCW roles")
-    task = store.create_task(body.model_dump())
+    _validate_agents(body.agents)  # ADR 0005: harnesses only
+    # store raises ValueError on unknown env/col — surface as 422, not 500
+    try:
+        task = store.create_task(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task})
     return task
 
 
 @app.patch("/api/tasks/{task_id}")
-async def patch_task(task_id: str, body: TaskPatch, request: Request) -> dict[str, Any]:
+async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut:
     _guard_write(request)
-    task = store.update_task(task_id, body.model_dump(exclude_none=True))
+    if body.agents is not None:
+        _validate_agents(body.agents)  # ADR 0005 (BE-5): same rule as create
+    # store raises ValueError on unknown env — surface as 422, not 500
+    try:
+        task = store.update_task(task_id, body.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if task is None:
         raise HTTPException(404, "task not found")
     _broadcast({"kind": "task.updated", "task": task})
@@ -265,7 +417,7 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> dict[st
 
 
 @app.post("/api/tasks/{task_id}/move")
-async def move_task(task_id: str, body: MoveBody, request: Request) -> dict[str, Any]:
+async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
     _guard_write(request)
     try:
         task = store.move_task(task_id, body.col, body.position)
@@ -278,7 +430,7 @@ async def move_task(task_id: str, body: MoveBody, request: Request) -> dict[str,
 
 
 @app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str, request: Request) -> dict[str, Any]:
+async def delete_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request)
     if not store.delete_task(task_id):
         raise HTTPException(404, "task not found")
@@ -287,7 +439,7 @@ async def delete_task(task_id: str, request: Request) -> dict[str, Any]:
 
 
 @app.get("/api/tasks/{task_id}/memories")
-async def task_memories(task_id: str, scope: str = "") -> dict[str, Any]:
+async def task_memories(task_id: str, scope: str = "") -> TaskMemoriesOut:
     """Resolve task memory links against a server, a group, or all servers."""
     task = store.task(task_id)
     if task is None:
@@ -340,7 +492,7 @@ def _server_public(s: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/api/memories/servers")
-async def memory_servers() -> dict[str, Any]:
+async def memory_servers() -> MemoryServersOut:
     rows = registry.servers()
     probes = await asyncio.gather(*(mnemos_client.ping(s) for s in rows))
     by_name = {p["server"]: p for p in probes}
@@ -369,7 +521,7 @@ def _validate_server_spec(body: ServerSpec) -> tuple[str, str]:
 
 
 @app.post("/api/memories/servers", status_code=201)
-async def add_memory_server(body: ServerSpec, request: Request) -> dict[str, Any]:
+async def add_memory_server(body: ServerSpec, request: Request) -> MemoryServerOut:
     _guard_write(request)
     url, token_ref = _validate_server_spec(body)
     existing = store.get_server(body.name)
@@ -393,7 +545,7 @@ async def add_memory_server(body: ServerSpec, request: Request) -> dict[str, Any
 
 
 @app.patch("/api/memories/servers/{name}")
-async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> dict[str, Any]:
+async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> MemoryServerOut:
     _guard_write(request)
     url, token_ref = _validate_server_spec(body)
     if store.get_server(name) is None:
@@ -407,7 +559,7 @@ async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> d
 
 
 @app.post("/api/memories/servers/{name}/action")
-async def memory_server_action(name: str, body: ServerAction, request: Request) -> dict[str, Any]:
+async def memory_server_action(name: str, body: ServerAction, request: Request) -> ServerActionOut:
     _guard_write(request)
     row = store.get_server(name)
     if row is None:
@@ -453,7 +605,7 @@ async def memory_server_action(name: str, body: ServerAction, request: Request) 
 
 
 @app.delete("/api/memories/servers/{name}")
-async def delete_memory_server(name: str, request: Request) -> dict[str, Any]:
+async def delete_memory_server(name: str, request: Request) -> OkNoteOut:
     """Remove from the board registry. The memory store itself is untouched."""
     _guard_write(request)
     if not registry.delete(name):
@@ -468,12 +620,12 @@ async def memory_server_history(name: str) -> dict[str, Any]:
 
 
 @app.get("/api/memories/groups")
-async def memory_groups() -> dict[str, Any]:
+async def memory_groups() -> GroupsOut:
     return {"ok": True, "groups": registry.groups()}
 
 
 @app.post("/api/memories/groups")
-async def save_memory_group(body: GroupSpec, request: Request) -> dict[str, Any]:
+async def save_memory_group(body: GroupSpec, request: Request) -> GroupSaveOut:
     _guard_write(request)
     g = registry.save_group(body.name, body.title, body.description)
     _broadcast({"kind": "server.changed", "server": f"group:{body.name}"})
@@ -481,7 +633,7 @@ async def save_memory_group(body: GroupSpec, request: Request) -> dict[str, Any]
 
 
 @app.delete("/api/memories/groups/{name}")
-async def delete_memory_group(name: str, request: Request) -> dict[str, Any]:
+async def delete_memory_group(name: str, request: Request) -> OkNoteOut:
     _guard_write(request)
     if name == "default":
         raise HTTPException(422, "cannot delete the default group")
@@ -607,11 +759,11 @@ async def group_info(name: str) -> dict[str, Any]:
 
 
 @app.post("/api/memories/groups/{name}/members")
-async def group_membership(name: str, body: dict[str, Any], request: Request) -> dict[str, Any]:
+async def group_membership(name: str, body: GroupMemberBody, request: Request) -> GroupMemberOut:
     """Add/remove a server to/from a group: body {server, op: 'add'|'remove'}."""
     _guard_write(request)
-    server = body.get("server", "")
-    op = body.get("op", "add")
+    server = body.server
+    op = body.op
     if store.get_server(server) is None:
         raise HTTPException(404, f"server '{server}' not found")
     if op == "add":
@@ -675,7 +827,7 @@ _reflect_limiter = RateLimiter(limit=_REFLECT_RATE_LIMIT, window=_REFLECT_RATE_W
 
 
 @app.post("/api/board-reflect")
-async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
+async def board_reflect(body: ReflectBody, request: Request) -> ReflectOut:
     """Refine cycle persistence: write the request/commit-marker into mnemos
     memory tagged ``mnemos:open-question`` + ``source:board`` ONLY (SEC-4:
     board data is not instructions — harnesses must not treat these records
@@ -691,7 +843,6 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
         )
     if body.kind not in ("agent-refine-request", "agent-refine-commit"):
         raise HTTPException(422, f"unknown kind: {body.kind}")
-    from .mnemos_client import post_json
 
     servers = registry.active_servers()
     if not servers:
@@ -712,7 +863,10 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
         )
         title = f"agent-refine request: {body.specialist}"
 
-    code, body_resp = post_json(server, "/memories", {
+    # BE-4: must stay async — a sync httpx call here would freeze the event
+    # loop and stall every concurrent request (e.g. GET /api/board) for the
+    # full mnemos round-trip.
+    code, body_resp = await mnemos_client.post_json_async(server, "/memories", {
         "content": content[:4000],
         "title": title[:120],
         "tags": list(BOARD_REFLECT_TAGS),
@@ -729,7 +883,7 @@ async def board_reflect(body: ReflectBody, request: Request) -> dict[str, Any]:
 # ----------------------------------------------------------- notifications
 @app.get("/api/notifications")
 async def notifications(after_id: int = 0, limit: int = 50,
-                        unread_only: bool = False) -> dict[str, Any]:
+                        unread_only: bool = False) -> NotificationsOut:
     return {
         "ok": True,
         "unread": store.unread_count(),
@@ -739,9 +893,9 @@ async def notifications(after_id: int = 0, limit: int = 50,
 
 
 @app.post("/api/notifications/read")
-async def notifications_read(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    nid = (body or {}).get("id")
-    store.mark_read(int(nid) if nid else None)
+async def notifications_read(body: NotificationReadBody | None = None) -> NotificationReadOut:
+    # no body or {"id": null} marks ALL as read (previous contract kept)
+    store.mark_read(body.id if body else None)
     return {"ok": True, "unread": store.unread_count()}
 
 
@@ -760,7 +914,7 @@ async def archive() -> dict[str, Any]:
 
 
 @app.post("/api/tasks/{task_id}/archive")
-async def archive_task(task_id: str, request: Request) -> dict[str, Any]:
+async def archive_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request)
     if not store.archive_task(task_id):
         raise HTTPException(404, "task not found or already archived")
@@ -769,7 +923,7 @@ async def archive_task(task_id: str, request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/tasks/{task_id}/unarchive")
-async def unarchive_task(task_id: str, request: Request) -> dict[str, Any]:
+async def unarchive_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request)
     if not store.unarchive_task(task_id):
         raise HTTPException(404, "task not found or not archived")

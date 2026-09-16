@@ -67,27 +67,6 @@ async def post_json_async(server: dict[str, Any], path: str, body: dict[str, Any
         return resp.status_code, {"detail": "mnemos returned non-JSON"}
 
 
-def post_json(server: dict[str, Any], path: str, body: dict[str, Any],
-              timeout: float = 15.0) -> tuple[int, Any]:
-    """POST JSON to one mnemos server (sync helper, used sparingly)."""
-    url = f"{server['url']}{path}"
-    try:
-        with httpx.Client(timeout=timeout, headers=_headers(server)) as client:
-            resp = client.post(url, json=body)
-    except httpx.HTTPError as exc:
-        return 503, {"detail": f"{server['name']}: unreachable ({exc.__class__.__name__})"}
-    if resp.status_code >= 400:
-        try:
-            data: Any = resp.json()
-        except ValueError:
-            data = {"detail": resp.text[:300]}
-        return resp.status_code, data
-    try:
-        return resp.status_code, resp.json()
-    except ValueError:
-        return resp.status_code, {"detail": "mnemos returned non-JSON"}
-
-
 # ------------------------------------------------------------------ probes
 async def ping(server: dict[str, Any]) -> dict[str, Any]:
     """Cheap liveness probe: GET /health (no vectorize, no search).
