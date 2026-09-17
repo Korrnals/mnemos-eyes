@@ -52,6 +52,8 @@
   /* ── Typography ───────────────────────────────────────────────── */
   --font-ui:     "Inter", "Helvetica Neue", system-ui, sans-serif;
   --font-scroll: "Lora", "Georgia", serif;
+  /* UI-8: agent report bodies render in <pre> — system mono stack. */
+  --font-mono:   ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
 
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;

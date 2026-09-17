@@ -137,7 +137,65 @@ body {
   font-size: var(--text-sm); font-weight: var(--weight-medium);
   color: var(--color-text-primary); line-height: 1.35;
 }
-.task-chips { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+/* UI-7: status badge — derived from the column, archived flag overrides.
+   Status → token semantics: open neutral · in-progress iris · blocked amber
+   (warning) · resolved teal (tag-project family, AA-tuned both themes) ·
+   done green (success) · withdrawn/archived neutral-dashed. */
+.status-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; font-weight: var(--weight-semibold);
+  letter-spacing: .05em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-base);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.status-badge::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+.status-open { color: var(--color-text-secondary); border-color: var(--color-border); }
+.status-in-progress {
+  color: var(--color-iris-bright);
+  border-color: var(--color-border-iris);
+  background: color-mix(in srgb, var(--color-iris) 12%, transparent);
+}
+.status-blocked {
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+.status-resolved {
+  color: var(--color-tag-project);
+  border-color: color-mix(in srgb, var(--color-tag-project) 38%, transparent);
+  background: color-mix(in srgb, var(--color-tag-project) 14%, transparent);
+}
+.status-done {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+/* Withdrawn/archived: muted look via neutral fg + dashed border.
+   Deliberately not --color-text-muted: it drops to ~2.6:1 at badge size,
+   below the 4.5:1 AA floor for 10px text in both themes. */
+.status-withdrawn, .status-archived {
+  color: var(--color-text-secondary);
+  border-style: dashed;
+  border-color: var(--color-border);
+}
+.status-withdrawn::before, .status-archived::before { background: var(--color-text-muted); }
+
+/* UI-7: compact groups in the small card — hairline separators, one row
+   per group, same order as the modal sections (Теги→Сервер→Агент→Специалисты) */
+.task-group {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1);
+  margin-top: var(--space-2); padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  min-width: 0;
+}
+.task-group .task-tagrow { margin-top: 0; }
+.task-sec-empty { font-size: var(--text-xs); color: var(--color-text-secondary); }
 .chip {
   font-size: var(--text-xs); line-height: 1;
   padding: 3px 8px; border-radius: var(--radius-full);
@@ -451,11 +509,23 @@ body {
 
 /* ── Task card: richer, grouped ──────────────────────────────────── */
 .task-top { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 2px; }
-.task-age { margin-left: auto; font-size: 10px; color: var(--color-text-muted); }
+.task-top .status-badge { margin-left: auto; }
+.task-age { font-size: 10px; color: var(--color-text-muted); }
 .task-title { cursor: pointer; }
-.task-tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--space-2); }
-.task-foot { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
-.task-agents { display: flex; gap: 3px; }
+.task-tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--space-2); align-items: center; }
+
+/* UI-7: labeled sections in the task modal side panel */
+.task-sec {
+  margin-top: var(--space-4); padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.task-sec:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.task-sec-label {
+  margin: 0 0 var(--space-2); font-size: var(--text-xs);
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--color-text-secondary); font-weight: var(--weight-semibold);
+}
+.modal-status { display: inline-flex; margin-right: var(--space-2); }
 .mini-avatar {
   width: 18px; height: 18px; border-radius: 50%; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
@@ -495,6 +565,57 @@ body {
 /* Section tabs inside task modal */
 .tsec { display: none; }
 .tsec.active { display: block; }
+
+/* ── UI-8: agent reports tab ─────────────────────────────────────── */
+.report-item {
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  padding: var(--space-3); margin-bottom: var(--space-2);
+}
+.report-item.superseded { opacity: .55; }
+.report-head {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: var(--space-2); margin-bottom: var(--space-2);
+}
+.report-head .tl-ts { margin-left: auto; }
+.report-head .report-resume { margin-left: var(--space-2); }
+.tl-badge.report-kind.report-intermediate { color: var(--color-text-secondary); }
+.tl-badge.report-kind.report-final { color: var(--color-success); border-color: var(--color-success); }
+.tl-badge.report-final-mark { color: var(--color-success); border-color: var(--color-success); }
+.tl-badge.report-superseded-mark { color: var(--color-text-muted); border-style: dashed; }
+.report-body {
+  margin: 0; font-family: var(--font-mono); font-size: var(--text-xs);
+  line-height: 1.6; color: var(--color-text-primary); white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--color-scroll-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md); padding: var(--space-3);
+  max-height: 320px; overflow-y: auto;
+}
+
+/* ── UI-9: archive browser v2 ────────────────────────────────────── */
+.arch-controls {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.arch-controls .f-text { flex: 1 1 200px; max-width: 280px; }
+.arch-item .arch-item-actions {
+  margin-top: var(--space-2); display: flex; justify-content: flex-end;
+}
+.arch-item .arch-unarchive { font-size: var(--text-xs); padding: var(--space-1) var(--space-3); }
+.arch-pager {
+  display: flex; align-items: center; justify-content: center;
+  gap: var(--space-3); margin-top: var(--space-3);
+}
+.arch-page-info { font-size: var(--text-xs); color: var(--color-text-muted); }
+.arch-pager .mbtn[disabled] { opacity: .35; cursor: not-allowed; }
+.arch-detail-actions { margin-top: var(--space-3); display: flex; justify-content: flex-end; }
+
+/* BE-9: plugin-level shared material chip on specialist cards */
+.chip-shared {
+  color: var(--color-tag-type);
+  border-style: dashed;
+}
 
 /* ── Filter bar ──────────────────────────────────────────────────── */
 .filterbar {

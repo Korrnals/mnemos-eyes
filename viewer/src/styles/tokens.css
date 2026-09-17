@@ -19,26 +19,32 @@
   --color-iris: #1a8a96; /* primary iris accent */
   --color-iris-bright: #22b5c4; /* focused / hover iris */
   --color-iris-glow: #22b5c440; /* iris halo / ambient glow (40% opacity) */
+  /* Solid iris fills carrying inverse text (primary button, search submit).
+   * AA-derived aliases of iris/iris-bright: dark keeps iris/iris-bright, light
+   * shifts to iris-bright so --color-text-inverse clears 4.5:1 (T7 audit). */
+  --color-iris-solid: #1a8a96;
+  --color-iris-solid-hover: #22b5c4;
 
   /* Confidence accent (amber / gold — warmth, value) */
   --color-confidence: #c9933a; /* high-confidence memory highlight */
   --color-confidence-dim: #7a5520; /* muted confidence */
 
-  /* Semantic status */
-  --color-success: #2a8a5c;
+  /* Semantic status — values raised to WCAG 2.2 AA (≥4.5:1 on the surfaces
+   * they appear on, incl. the /15 badge tints); names unchanged (T7 audit). */
+  --color-success: #3aa070;
   --color-warning: #b8852a;
-  --color-error: #a83232;
+  --color-error: #e07575;
   --color-info: #1a8a96; /* same as iris — informational = curious */
 
   /* Text */
   --color-text-primary: #e8eaf2; /* main reading text */
   --color-text-secondary: #8a90a8; /* labels, captions, timestamps */
-  --color-text-muted: #4a5068; /* disabled, placeholder */
+  --color-text-muted: #8087a8; /* placeholder, footers; ≥4.5:1 on elevated */
   --color-text-inverse: #0d0f14; /* text on light surfaces */
 
   /* Border / separator */
-  --color-border-subtle: #1e2438;
-  --color-border: #2a3050;
+  --color-border-subtle: #1e2438; /* decorative separators only */
+  --color-border: #666e90; /* ≥3:1 on base/well/elevated (WCAG 1.4.11) */
   --color-border-iris: #1a8a9640; /* iris-tinted focus ring */
 
   /* Scroll / memory content surface */
@@ -57,8 +63,10 @@
   --color-iris: #1a8a96;
   --color-iris-bright: #136e79;
   --color-iris-glow: #1a8a9620;
+  --color-iris-solid: #136e79; /* light: iris alone fails AA under inverse text */
+  --color-iris-solid-hover: #0f5f6a;
 
-  --color-confidence: #b07a28;
+  --color-confidence: #8a5a17; /* ≥4.5:1 on white/elevated (T7 audit) */
   --color-confidence-dim: #e8c98a;
 
   --color-success: #1d6e48;
@@ -68,11 +76,11 @@
 
   --color-text-primary: #1a1e2e;
   --color-text-secondary: #4a5268;
-  --color-text-muted: #9298b0;
+  --color-text-muted: #636a80; /* ≥4.5:1 on elevated (T7 audit) */
   --color-text-inverse: #f5f6f8;
 
-  --color-border-subtle: #dee1ea;
-  --color-border: #c8ccd8;
+  --color-border-subtle: #dee1ea; /* decorative separators only */
+  --color-border: #828aa2; /* ≥3:1 on base/well/elevated (WCAG 1.4.11) */
   --color-border-iris: #1a8a9640;
 
   --color-scroll-bg: #fafbfc;

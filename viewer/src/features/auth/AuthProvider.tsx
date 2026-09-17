@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useReducer } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AuthClient, clearToken, getToken, onUnauthorized } from "@/gateway/auth";
 import { isApiError, toError } from "@/lib/errors";
 import { AuthContext } from "./AuthContext";
 import type { AuthContextValue } from "./AuthContext";
 import { authReducer, initialAuthState } from "./authState";
+import { refetchAfterLogin } from "./refetchAfterLogin";
 
 /**
  * Owns the auth state machine (authState.ts) and the wire client. Subscribes
@@ -32,6 +34,7 @@ export function AuthProvider({
   client,
 }: AuthProviderProps) {
   const authClient = useMemo(() => client ?? new AuthClient(), [client]);
+  const queryClient = useQueryClient();
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
   const sessionExpired = state.sessionExpired;
 
@@ -76,6 +79,8 @@ export function AuthProvider({
             dispatch({ type: "CHALLENGE", challengeId: result.challenge_id });
           } else {
             dispatch({ type: "SUCCESS" });
+            // Session established — retry the queries that 401'd earlier.
+            void refetchAfterLogin(queryClient);
           }
         } catch (error) {
           dispatch({ type: "FAILURE", message: toError(error).message });
@@ -87,6 +92,8 @@ export function AuthProvider({
         try {
           await authClient.verify(state.challengeId, code);
           dispatch({ type: "SUCCESS" });
+          // Phase-2 success invalidates the cache just like a direct login.
+          void refetchAfterLogin(queryClient);
         } catch (error) {
           dispatch({ type: "FAILURE", message: toError(error).message });
         }
@@ -101,7 +108,7 @@ export function AuthProvider({
       openOverlay: () => dispatch({ type: "OPEN_OVERLAY" }),
       closeOverlay: () => dispatch({ type: "CLOSE_OVERLAY" }),
     }),
-    [state, adapterMode, endpoint, authClient],
+    [state, adapterMode, endpoint, authClient, queryClient],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

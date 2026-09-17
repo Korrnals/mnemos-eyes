@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
   <title>vesmaro-eyes — task board</title>
-  <link rel="stylesheet" href="/styles/fonts.css?v=1.1.2" />
-  <link rel="stylesheet" href="/styles/tokens.css?v=1.1.2" />
-  <link rel="stylesheet" href="/styles/board.css?v=1.1.2" />
+  <link rel="stylesheet" href="/styles/fonts.css?v=1.1.3" />
+  <link rel="stylesheet" href="/styles/tokens.css?v=1.1.3" />
+  <link rel="stylesheet" href="/styles/board.css?v=1.1.3" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230d0f14' stroke='%231a8a96' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='5.5' fill='%2322b5c4'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -65,6 +65,15 @@
       <section class="board-wrap">
         <div class="filterbar" id="filterbar">
           <input type="search" id="f-text" class="f-text" placeholder="поиск по задачам…" aria-label="фильтр задач" />
+          <select id="f-status" class="f-sel" aria-label="статус">
+            <option value="">статус: все</option>
+            <option value="open">открыта</option>
+            <option value="in-progress">в работе</option>
+            <option value="blocked">заблокирована</option>
+            <option value="resolved">решена</option>
+            <option value="done">готова</option>
+            <option value="withdrawn">снята</option>
+          </select>
           <select id="f-project" class="f-sel" aria-label="проект"><option value="">проект: все</option></select>
           <select id="f-agent" class="f-sel" aria-label="агент"><option value="">агент: все</option></select>
           <select id="f-env" class="f-sel" aria-label="среда"><option value="">среда: все</option></select>
@@ -115,7 +124,9 @@
     <div class="modal-head">
       <span class="drawer-col" id="modal-col">open</span>
       <span class="modal-id" id="modal-id"></span>
+      <span class="chip chip-env" id="modal-env" title="среда исполнения"></span>
       <div class="modal-btns">
+        <span class="modal-status" id="modal-status"></span>
         <button class="mbtn" id="modal-back" title="назад" hidden>← Назад</button>
         <button class="mbtn" id="modal-max" title="развернуть">⤢</button>
         <button class="drawer-close" id="modal-close" aria-label="Закрыть">×</button>
@@ -128,10 +139,14 @@
       <section class="drawer-section modal-main">
         <div class="modal-tabs">
           <button class="mtab active" data-tab="overview" data-sec="overview">Обзор · память</button>
+          <button class="mtab" data-tab="reports" data-sec="reports">Отчёты</button>
           <button class="mtab" data-tab="history" data-sec="history">История · чекпоинты</button>
         </div>
         <div class="tsec active" data-sec="overview">
           <div id="modal-memories" class="drawer-memories"></div>
+        </div>
+        <div class="tsec" data-sec="reports">
+          <div id="modal-reports"></div>
         </div>
         <div class="tsec" data-sec="history">
           <div id="modal-history"></div>
@@ -210,6 +225,25 @@
     <div id="dd-body"></div>
   </div>
 
+  <!-- ── Archive entry detail modal (UI-9, read-only) ──────────── -->
+  <div class="modal-backdrop" id="arch-backdrop" hidden></div>
+  <div class="modal" id="arch-modal" hidden role="dialog" aria-label="Архивная запись">
+    <div class="modal-head">
+      <span class="drawer-col" id="arch-kind">архив</span>
+      <div class="modal-btns">
+        <span class="modal-status" id="arch-status"></span>
+        <button class="mbtn" id="arch-max" title="развернуть">⤢</button>
+        <button class="drawer-close" id="arch-close" aria-label="Закрыть">×</button>
+      </div>
+    </div>
+    <h1 class="drawer-title" id="arch-title"></h1>
+    <p class="drawer-summary" id="arch-summary"></p>
+    <div id="arch-body"></div>
+    <div class="arch-detail-actions">
+      <button class="btn" id="arch-restore" type="button">Вернуть из архива</button>
+    </div>
+  </div>
+
   <!-- ── New task draft modal (UI-6) ───────────────────────────── -->
   <div class="modal-backdrop" id="draft-backdrop" hidden></div>
   <div class="modal" id="draft-modal" hidden role="dialog" aria-modal="true" aria-label="Новая задача — черновик">
@@ -240,6 +274,6 @@
     </section>
   </div>
 
-  <script type="module" src="/js/app.js?v=1.1.2"></script>
+  <script type="module" src="/js/app.js?v=1.1.3"></script>
 </body>
 </html>

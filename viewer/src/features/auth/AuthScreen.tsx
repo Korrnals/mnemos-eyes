@@ -28,11 +28,16 @@ export function AuthScreen() {
   const inChallenge = state.phase === "challenge";
   const busy = state.phase === "authenticating";
 
-  // Focus the first interactive field whenever the form (re)appears.
+  // Focus the first interactive field whenever the form (re)appears, and
+  // return focus to the invoking control when the overlay closes (WCAG
+  // 2.4.3 — the user resumes where they opened the dialog).
   useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     surfaceRef.current
       ?.querySelector<HTMLElement>("[data-autofocus]")
       ?.focus();
+    return () => previouslyFocused?.focus();
   }, [inChallenge]);
 
   // Minimal focus trap: cycle Tab within the overlay surface.
@@ -44,7 +49,7 @@ export function AuthScreen() {
     }
     if (event.key !== "Tab") return;
     const focusables = surfaceRef.current?.querySelectorAll<HTMLElement>(
-      'button, input, [href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
     );
     if (!focusables || focusables.length === 0) return;
     const first = focusables[0];

@@ -34,6 +34,10 @@ class TestSchemasPresent:
         "TaskCreate", "TaskPatch", "TaskOut", "BoardOut", "OkOut",
         "MemoryServerOut", "MemoryServersOut", "GroupOut", "ReflectOut",
         "NotificationOut", "NotificationsOut",
+        "SpecialistProfileOut", "RefreshAllOut",
+        # BE-10 / BE-11
+        "ReportCreate", "ReportOut", "ReportCreatedOut", "ReportsOut",
+        "ArchiveOut", "UnarchiveOut",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -47,6 +51,31 @@ class TestSchemasPresent:
                      "mnemos_tags", "created_at", "updated_at"}
         assert must_have <= props
         assert must_have <= required, "SPA reads these unconditionally"
+
+    def test_task_out_declares_status_field(self, spec):
+        """BE-10: every task carries the workflow status."""
+        out = _components(spec)["TaskOut"]
+        props = set(out.get("properties", {}))
+        required = set(out.get("required", []))
+        assert "status" in props
+        assert "status" in required, "store always returns status post-migration"
+        assert "archived_from" in props
+
+    def test_report_out_declares_contract_fields(self, spec):
+        """BE-11a: reports expose id/kind/agent/body/superseded/created_at."""
+        out = _components(spec)["ReportOut"]
+        props = set(out.get("properties", {}))
+        must_have = {"id", "task_id", "kind", "agent", "body", "superseded",
+                     "created_at"}
+        assert must_have <= props
+
+    def test_archive_out_declares_pagination_contract(self, spec):
+        """BE-11b: archive exposes total/limit/offset plus the legacy keys."""
+        out = _components(spec)["ArchiveOut"]
+        props = set(out.get("properties", {}))
+        must_have = {"ok", "count", "total", "limit", "offset", "items",
+                     "projects"}
+        assert must_have <= props
 
 
 class TestKeyRoutesReferenceSchemas:
@@ -79,3 +108,21 @@ class TestKeyRoutesReferenceSchemas:
     def test_notifications(self, spec):
         assert _ref_name(_response_schema(spec, "/api/notifications", "get")) \
             == "NotificationsOut"
+
+    def test_task_reports(self, spec):
+        post = spec["paths"]["/api/tasks/{task_id}/reports"]["post"]
+        assert _ref_name(post["requestBody"]["content"]
+                         ["application/json"]["schema"]) == "ReportCreate"
+        assert _ref_name(_response_schema(
+            spec, "/api/tasks/{task_id}/reports", "post", "201")) \
+            == "ReportCreatedOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/tasks/{task_id}/reports", "get")) == "ReportsOut"
+
+    def test_archive(self, spec):
+        assert _ref_name(_response_schema(spec, "/api/archive", "get")) \
+            == "ArchiveOut"
+
+    def test_unarchive(self, spec):
+        assert _ref_name(_response_schema(
+            spec, "/api/tasks/{task_id}/unarchive", "post")) == "UnarchiveOut"

@@ -40,7 +40,7 @@ export function splitHighlight(text: string, terms: string[]): HighlightPart[] {
 export function highlight(text: string, terms: string[]): ReactNode {
   return splitHighlight(text, terms).map((part, index) =>
     part.highlighted ? (
-      <mark key={index} className="rounded-sm bg-iris-dim text-iris-bright">
+      <mark key={index} className="rounded-sm bg-iris/15 text-iris-bright">
         {part.text}
       </mark>
     ) : (

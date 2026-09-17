@@ -112,7 +112,7 @@ function BackLink() {
   return (
     <Link
       to="/sessions"
-      className="inline-flex items-center gap-1 text-sm text-foreground-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+      className="inline-flex min-h-6 items-center gap-1 text-sm text-foreground-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
     >
       <ArrowLeft className="size-4" aria-hidden="true" /> All sessions
     </Link>

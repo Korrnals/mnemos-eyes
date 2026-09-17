@@ -59,10 +59,10 @@ export function MemoriesPage() {
         Memories
       </h1>
 
-      {/* Filters (inventory §4: status / project / limit as URL params) */}
+      {/* Filters (inventory §4: status / project / limit as URL params).
+       * Deliberately not role="search" — it filters the list, it does not search. */}
       <form
         className="flex flex-wrap items-end gap-3"
-        role="search"
         aria-label="Filter memories"
         onSubmit={(event) => event.preventDefault()}
       >

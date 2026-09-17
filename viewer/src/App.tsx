@@ -43,7 +43,7 @@ const TracesPage = lazy(() =>
 
 function RouteFallback() {
   return (
-    <div className="space-y-4" aria-busy="true">
+    <div role="status" aria-label="Loading view" aria-busy="true" className="space-y-4">
       <Skeleton className="h-8 w-48" />
       <Skeleton className="h-40 w-full" />
     </div>
