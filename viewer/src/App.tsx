@@ -3,6 +3,10 @@ import { Route, Routes } from "react-router";
 import { Shell } from "@/layout/Shell";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AuthScreen } from "@/features/auth/AuthScreen";
+import { AuthProvider } from "@/features/auth/AuthProvider";
+import { useAuth } from "@/features/auth/AuthContext";
+import { MNEMOS_ADAPTER, MNEMOS_BASE_URL } from "@/gateway/adapterConfig";
 
 import { SearchPage } from "@/features/search/SearchPage"; // eager — only eagerly loaded chunk (§3)
 
@@ -50,8 +54,28 @@ function RouteFallback() {
  * Router root (architecture.md §3). The `/clusters` route from the spec is
  * intentionally NOT registered: cluster graph is deferred to L2 (ADR 0003
  * D12) and its nav slot stays hidden.
+ *
+ * T6: the whole tree sits under AuthProvider; the sign-in overlay renders on
+ * top of (not instead of) the read-only pages, so a permissive loopback
+ * deployment stays browsable after dismissing it.
  */
 export default function App() {
+  return (
+    <AuthProvider adapterMode={MNEMOS_ADAPTER} endpoint={MNEMOS_BASE_URL}>
+      <AppRoutes />
+      <AuthOverlay />
+    </AuthProvider>
+  );
+}
+
+/** Renders the sign-in overlay whenever the auth state machine opens it. */
+function AuthOverlay() {
+  const { state } = useAuth();
+  if (!state.overlayOpen) return null;
+  return <AuthScreen />;
+}
+
+function AppRoutes() {
   return (
     <Routes>
       <Route element={<Shell />}>

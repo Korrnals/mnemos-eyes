@@ -194,9 +194,14 @@ export class AuthClient {
   }
 }
 
-/** Pull the session token out of an anonymous auth response object. */
+/**
+ * Pull the session token out of an anonymous auth response object.
+ * Field names observed across mnemos deployments: `session` (live 4.1.0:
+ * `{ session, expires_at }`), plus the generic `token` / `access_token` /
+ * `session_token` spellings.
+ */
 function extractToken(body: Record<string, unknown>): string | null {
-  for (const key of ["token", "access_token", "session_token"]) {
+  for (const key of ["session", "token", "access_token", "session_token"]) {
     const value = body[key];
     if (typeof value === "string" && value.length > 0) return value;
   }

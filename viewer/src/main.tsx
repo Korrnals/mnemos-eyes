@@ -7,6 +7,7 @@ import { queryClient } from "@/lib/queryClient";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { HttpAdapter } from "@/gateway/HttpAdapter";
 import { MockAdapter } from "@/gateway/MockAdapter";
+import { MNEMOS_ADAPTER, MNEMOS_BASE_URL } from "@/gateway/adapterConfig";
 import { ThemeProvider } from "@/components/theme-provider";
 import App from "@/App";
 
@@ -21,13 +22,12 @@ import "@/styles/global.css";
  * Phase 2 swaps the adapter below for `new TauriAdapter()` — zero component
  * changes.
  *
- * `VITE_MNEMOS_ADAPTER=mock` selects the in-memory MockAdapter for UI
- * development without a live mnemos; the default is the HTTP adapter.
+ * Adapter selection lives in gateway/adapterConfig.ts: the code default is
+ * the HTTP adapter; `.env.development` flips dev boxes to the MockAdapter so
+ * UI development works without a live mnemos.
  */
-const BASE_URL = import.meta.env.VITE_MNEMOS_API_URL ?? "/api";
-const ADAPTER = import.meta.env.VITE_MNEMOS_ADAPTER ?? "http";
 const gateway =
-  ADAPTER === "mock" ? new MockAdapter() : new HttpAdapter(BASE_URL);
+  MNEMOS_ADAPTER === "mock" ? new MockAdapter() : new HttpAdapter(MNEMOS_BASE_URL);
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
