@@ -85,6 +85,10 @@ const STATUS_LABELS = {
 
 function taskStatus(t) {
   if (t.archived) return "archived";
+  // BE-10: the server now carries the workflow status as a field (synced
+  // with the column on move; PATCH status is independent and may hold
+  // `withdrawn`). Older backends send no field — derive from the column.
+  if (t.status && STATUS_LABELS[t.status]) return t.status;
   return STATUS_LABELS[t.col] ? t.col : "open";
 }
 
@@ -101,7 +105,11 @@ function statusBadge(t) {
 const filter = { text: "", project: "", agent: "", env: "", tag: "", status: "" };
 
 async function refreshBoard() {
-  state.board = await api("/api/board");
+  // BE-10: the status filter runs server-side (?status=). Old backends
+  // ignore the unknown query param, and taskMatches() below keeps the
+  // client-side check as the fallback.
+  const qs = filter.status ? `?status=${encodeURIComponent(filter.status)}` : "";
+  state.board = await api("/api/board" + qs);
   renderBoard();
   renderRail();
   refreshFilterOptions();
@@ -228,18 +236,25 @@ function taskCard(t) {
 
 function wireFilters() {
   $("#f-text").addEventListener("input", (e) => { filter.text = e.target.value.trim(); renderBoard(); });
-  for (const [id, key] of [["#f-project","project"],["#f-agent","agent"],["#f-env","env"],["#f-tag","tag"],["#f-status","status"]]) {
+  for (const [id, key] of [["#f-project","project"],["#f-agent","agent"],["#f-env","env"],["#f-tag","tag"]]) {
     $(id).addEventListener("change", (e) => {
       filter[key] = e.target.value;
       e.target.classList.toggle("active", !!e.target.value);
       renderBoard();
     });
   }
-  $("#f-clear").addEventListener("click", () => {
+  // UI-8/BE-10: status is a server-side filter — refetch the board with
+  // ?status= (client-side taskMatches stays as fallback for old backends).
+  $("#f-status").addEventListener("change", async (e) => {
+    filter.status = e.target.value;
+    e.target.classList.toggle("active", !!filter.status);
+    await refreshBoard();
+  });
+  $("#f-clear").addEventListener("click", async () => {
     Object.assign(filter, { text: "", project: "", agent: "", env: "", tag: "", status: "" });
     $("#f-text").value = "";
     for (const id of ["#f-project","#f-agent","#f-env","#f-tag","#f-status"]) { $(id).value = ""; $(id).classList.remove("active"); }
-    renderBoard();
+    await refreshBoard();
   });
 }
 
@@ -296,7 +311,10 @@ function renderBoard() {
   }
   const fc = $("#f-count"), fb = $("#f-clear");
   const any = filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status;
-  fc.textContent = any ? `${visibleTotal} из ${board.tasks.length}` : "";
+  // BE-10: with ?status= the server already filtered tasks[], so the
+  // denominator comes from counts (always the whole board).
+  const totalAll = Object.values(board.counts || {}).reduce((a, b) => a + b, 0) || board.tasks.length;
+  fc.textContent = any ? `${visibleTotal} из ${totalAll}` : "";
   fb.hidden = !any;
 }
 
@@ -606,6 +624,7 @@ async function openTask(taskId) {
   // reset tabs to Overview
   setTaskTab("overview");
   showTaskModal();
+  loadTaskReports(t);   // UI-8: lazy — one GET when the modal opens
   try {
     const scope = scopeParam();
     const url = `/api/tasks/${encodeURIComponent(t.id)}/memories${scope ? `?scope=${encodeURIComponent(scope)}` : ""}`;
@@ -723,6 +742,84 @@ function tlItem(x) {
     </div>`;
 }
 
+// ── UI-8: agent reports tab ────────────────────────────────────────
+// GET /api/tasks/{id}/reports (BE-11a): chronological history, each item
+// {id, kind: intermediate|final, agent, body, superseded, created_at}.
+// Loaded lazily when the modal opens; 404 (old backend / task gone)
+// degrades to the empty state.
+const reportsTabBtn = () => document.querySelector('.mtab[data-tab="reports"]');
+
+async function loadTaskReports(t) {
+  const holder = $("#modal-reports");
+  const tab = reportsTabBtn();
+  if (tab) tab.textContent = "Отчёты";
+  if (!holder) return;
+  holder.innerHTML = `<div class="column-empty">загрузка отчётов…</div>`;
+  try {
+    const d = await api(`/api/tasks/${encodeURIComponent(t.id)}/reports`);
+    if (state.activeTask !== t) return;
+    renderTaskReports(holder, tab, t, d.items || []);
+  } catch (err) {
+    if (state.activeTask !== t) return;
+    if (/^404/.test(err.message || "")) {
+      renderTaskReports(holder, tab, t, []);
+    } else {
+      holder.innerHTML = `<div class="column-empty">отчёты недоступны: ${esc(err.message)}</div>`;
+    }
+  }
+}
+
+function renderTaskReports(holder, tab, t, items) {
+  if (tab) tab.textContent = items.length ? `Отчёты · ${items.length}` : "Отчёты";
+  if (!items.length) {
+    holder.innerHTML = `<div class="column-empty">отчётов пока нет — они появятся, когда агенты отчитаются о работе над задачей</div>`;
+    return;
+  }
+  holder.innerHTML = "";
+  // server returns oldest-first — keep the chronology
+  for (const r of items) holder.appendChild(reportItem(t, r, true));
+}
+
+function reportItem(t, r, allowResume) {
+  const div = document.createElement("div");
+  div.className = "report-item" + (r.superseded ? " superseded" : "");
+  const kindLabel = r.kind === "final" ? "финальный" : "промежуточный";
+  const isLiveFinal = r.kind === "final" && !r.superseded;
+  div.innerHTML = `
+    <div class="report-head">
+      <span class="tl-badge report-kind report-${esc(r.kind)}">${esc(kindLabel)}</span>
+      ${isLiveFinal ? `<span class="tl-badge report-final-mark">итоговый</span>` : ""}
+      ${r.superseded ? `<span class="tl-badge report-superseded-mark">заменён более поздним финальным</span>` : ""}
+      ${r.agent ? `<span class="chip chip-agent" data-agent="${esc(r.agent)}" title="агент-автор отчёта">⚒ ${esc(r.agent)}</span>` : ""}
+      <span class="tl-ts">${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</span>
+      ${isLiveFinal && allowResume ? `<button class="btn report-resume" type="button">Вернуть в работу</button>` : ""}
+    </div>
+    <pre class="report-body">${esc(r.body || "")}</pre>`;
+  const btn = div.querySelector(".report-resume");
+  if (btn) {
+    // BE-10: status is a field — PATCH status=in-progress, never a move:
+    // the task stays in its column while the workflow status flips.
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/tasks/${encodeURIComponent(t.id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "in-progress" }),
+        });
+        t.status = "in-progress";
+        const badge = $("#modal-status");
+        if (badge && state.activeTask === t) badge.innerHTML = statusBadge(t);
+        renderBoard();
+        toast("ok", `${t.id}: возвращена в работу`, "статус in-progress · колонка не менялась");
+      } catch (err) {
+        toast("err", "Не удалось вернуть в работу", err.message);
+        btn.disabled = false;
+      }
+    });
+  }
+  return div;
+}
+
 // ── cross-links: one delegated document click listener ─────────────
 // Cards and modal bodies are re-rendered constantly: per-element handlers
 // die with their nodes, and re-wiring persistent roots (#modal-meta,
@@ -730,7 +827,7 @@ function tlItem(x) {
 // through a single document-level listener, scoped to the containers that
 // render cross-link chips — pulse/roster rows keep their whole-row clicks.
 document.addEventListener("click", (e) => {
-  if (!e.target.closest("#board, #modal-meta, #dd-body")) return;
+  if (!e.target.closest("#board, #modal-meta, #modal-reports, #arch-body, #dd-body")) return;
   const tag = e.target.closest(".tagchip[data-tag]");
   if (tag && tag.dataset.tag) { openTagDrill(tag.dataset.tag); return; }
   const ag = e.target.closest("[data-agent]");
@@ -1283,65 +1380,250 @@ async function refreshArchiveTeaser() {
   } catch { /* ignore */ }
 }
 
+// UI-9: archive browser v2 (BE-11b) — server-side q/status/col/agent/
+// project filters, limit/offset pagination over `items`, `total` for the
+// pager. Click a row → read-only detail card; the row button unarchives.
+const ARCH_LIMIT = 20;
+const archiveBrowser = { q: "", status: "", col: "", agent: "", project: "", offset: 0, total: 0 };
+
+function archQuery() {
+  const p = new URLSearchParams();
+  for (const k of ["q", "status", "col", "agent", "project"]) {
+    if (archiveBrowser[k]) p.set(k, archiveBrowser[k]);
+  }
+  p.set("limit", String(ARCH_LIMIT));
+  p.set("offset", String(archiveBrowser.offset));
+  return p.toString();
+}
+
 async function openArchiveModal() {
-  let d;
-  try { d = await api("/api/archive"); }
-  catch (err) { toast("err", "Архив недоступен", err.message); return; }
   const modal = $("#dd-modal"), back = $("#dd-backdrop");
   $("#dd-kind").textContent = "архив";
-  $("#dd-title").textContent = `Архив задач (${d.count})`;
-  $("#dd-sub").textContent = "сгруппировано по проектам · клик по задаче — вернуть на доску";
+  $("#dd-title").textContent = "Архив задач";
+  $("#dd-sub").textContent = "поиск и фильтры · клик по записи — карточка · кнопка — вернуть на доску";
   back.hidden = false; modal.hidden = false;
   modalOpened("dd-modal", closeDdModal);
   requestAnimationFrame(() => { back.classList.add("open"); modal.classList.add("open"); });
 
   const body = $("#dd-body");
-  body.innerHTML = "";
-  if (!Object.keys(d.projects).length) {
-    body.innerHTML = `<div class="column-empty">архив пуст</div>`;
+  body.innerHTML = `
+    <div class="arch-controls" role="group" aria-label="фильтры архива">
+      <input type="search" id="arch-q" class="f-text" placeholder="поиск по названию и summary…" aria-label="поиск в архиве" />
+      <select id="arch-status" class="f-sel" aria-label="статус в архиве">
+        <option value="">статус: все</option>
+        ${Object.entries(STATUS_LABELS).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}
+      </select>
+      <select id="arch-col" class="f-sel" aria-label="колонка архивной задачи">
+        <option value="">колонка: все</option>
+        ${Object.entries(COLUMN_TITLES).map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}
+      </select>
+      <select id="arch-agent" class="f-sel" aria-label="агент в архиве"><option value="">агент: все</option></select>
+      <select id="arch-project" class="f-sel" aria-label="проект в архиве"><option value="">проект: все</option></select>
+      <button class="f-clear" id="arch-reset" title="сбросить фильтры архива" aria-label="сбросить фильтры архива" hidden>×</button>
+    </div>
+    <div id="arch-list" class="dd-list"></div>
+    <div class="arch-pager" id="arch-pager"></div>`;
+
+  // q with debounce; selects refetch immediately; both reset the page
+  let deb = null;
+  $("#arch-q").addEventListener("input", (e) => {
+    clearTimeout(deb);
+    deb = setTimeout(() => {
+      archiveBrowser.q = e.target.value.trim();
+      archiveBrowser.offset = 0;
+      loadArchive();
+    }, 300);
+  });
+  for (const [id, key] of [["#arch-status","status"],["#arch-col","col"],["#arch-agent","agent"],["#arch-project","project"]]) {
+    $(id).addEventListener("change", (e) => {
+      archiveBrowser[key] = e.target.value;
+      e.target.classList.toggle("active", !!e.target.value);
+      archiveBrowser.offset = 0;
+      loadArchive();
+    });
+  }
+  $("#arch-reset").addEventListener("click", () => {
+    Object.assign(archiveBrowser, { q: "", status: "", col: "", agent: "", project: "", offset: 0 });
+    for (const id of ["#arch-q","#arch-status","#arch-col","#arch-agent","#arch-project"]) {
+      const el = $(id);
+      el.value = "";
+      el.classList.remove("active");
+    }
+    loadArchive();
+  });
+  await loadArchive();
+}
+
+async function loadArchive() {
+  const list = $("#arch-list"), pager = $("#arch-pager"), reset = $("#arch-reset");
+  if (!list) return;
+  list.innerHTML = `<div class="column-empty">загрузка…</div>`;
+  if (pager) pager.innerHTML = "";
+  if (reset) reset.hidden = !(archiveBrowser.q || archiveBrowser.status || archiveBrowser.col || archiveBrowser.agent || archiveBrowser.project);
+  let d;
+  try { d = await api("/api/archive?" + archQuery()); }
+  catch (err) {
+    list.innerHTML = `<div class="column-empty">архив недоступен: ${esc(err.message)}</div>`;
     return;
   }
-  for (const [proj, tasks] of Object.entries(d.projects)) {
-    const box = document.createElement("div");
-    box.className = "pulse-project open";
-    box.innerHTML = `
-      <div class="pulse-proj-head">
-        <span class="caret">▶</span>
-        <span class="chip tagchip tag-project" style="cursor:default">${esc(proj)}</span>
-        <span class="pulse-proj-count">${tasks.length}</span>
-      </div>
-      <div class="pulse-proj-body"></div>`;
-    const inner = box.querySelector(".pulse-proj-body");
-    for (const t of tasks) {
-      const month = (t.updated_at || "").slice(0, 7);
-      const item = document.createElement("div");
-      item.className = "dd-item";
-      item.dataset.id = t.id;
-      item.innerHTML = `
-        <div class="dd-item-title">${esc(t.id)} · ${esc(t.title)}</div>
-        <div class="dd-item-meta">
-          <span class="chip">${esc(COLUMN_TITLES[t.col] || t.col)}</span>
-          <span class="chip">${esc(month || "")}</span>
-          <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env || "")}</span>
-        </div>`;
-      item.addEventListener("click", async () => {
-        if (!confirm(`Вернуть ${t.id} на доску?`)) return;
-        try {
-          await api(`/api/tasks/${encodeURIComponent(t.id)}/unarchive`, { method: "POST" });
-          toast("ok", `${t.id}: возвращена из архива`);
-          closeDdModal();
-          await refreshBoard(); refreshArchiveTeaser();
-        } catch (err) { toast("err", "Не удалось вернуть", err.message); }
-      });
-      inner.appendChild(item);
-    }
-    box.querySelector(".pulse-proj-head").addEventListener("click", (e) => {
-      if (e.target.closest(".dd-item")) return;
-      box.classList.toggle("open");
+  archiveBrowser.total = d.total ?? d.count ?? 0;
+  // clamp the page after the matching set shrank (e.g. after unarchive)
+  if (archiveBrowser.offset > 0 && archiveBrowser.offset >= archiveBrowser.total) {
+    archiveBrowser.offset = Math.max(0, archiveBrowser.total - ARCH_LIMIT);
+    return loadArchive();
+  }
+
+  // agent/project select options come from the FULL matching set — the
+  // projects grouping is computed server-side before pagination
+  const fill = (selId, values, label) => {
+    const sel = $(selId);
+    if (!sel) return;
+    const cur = sel.value;
+    const uniq = [...new Set(values.filter(Boolean))].sort();
+    sel.innerHTML = `<option value="">${label}: все</option>`
+      + uniq.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    if (uniq.includes(cur)) sel.value = cur;
+    sel.classList.toggle("active", !!sel.value);
+  };
+  const projEntries = Object.entries(d.projects || {});
+  const allRows = projEntries.flatMap(([, ts]) => ts);
+  fill("#arch-agent", allRows.flatMap((t) => t.agents || []), "агент");
+  fill("#arch-project", projEntries.map(([p]) => p).filter((p) => p !== "без проекта"), "проект");
+
+  const items = d.items || [];
+  if (!items.length) {
+    list.innerHTML = `<div class="column-empty">${archiveBrowser.total ? "на этой странице пусто" : "в архиве ничего не найдено"}</div>`;
+  } else {
+    list.innerHTML = "";
+    for (const t of items) list.appendChild(archiveRow(t));
+  }
+
+  if (pager) {
+    const total = archiveBrowser.total;
+    const from = archiveBrowser.offset + 1;
+    const to = archiveBrowser.offset + items.length;
+    pager.innerHTML = `
+      <button class="mbtn" id="arch-prev" type="button" ${archiveBrowser.offset > 0 ? "" : "disabled"}>← назад</button>
+      <span class="arch-page-info">${total ? `${from}–${to} из ${total}` : "0"}</span>
+      <button class="mbtn" id="arch-next" type="button" ${to < total ? "" : "disabled"}>вперёд →</button>`;
+    $("#arch-prev")?.addEventListener("click", () => {
+      archiveBrowser.offset = Math.max(0, archiveBrowser.offset - ARCH_LIMIT);
+      loadArchive();
     });
-    body.appendChild(box);
+    $("#arch-next")?.addEventListener("click", () => {
+      archiveBrowser.offset += ARCH_LIMIT;
+      loadArchive();
+    });
   }
 }
+
+function archiveRow(t) {
+  const item = document.createElement("div");
+  item.className = "dd-item arch-item";
+  item.dataset.id = t.id;
+  item.innerHTML = `
+    <div class="dd-item-title">${esc(t.id)} · ${esc(t.title)}</div>
+    <div class="dd-item-meta">
+      ${statusBadge(t)}
+      <span class="chip">${esc(COLUMN_TITLES[t.col] || t.col)}</span>
+      <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env || "")}</span>
+      ${t.project ? `<span class="chip tagchip tag-project" style="cursor:default">◈ ${esc(t.project)}</span>` : ""}
+      ${(t.agents || []).slice(0, 3).map((a) => `<span class="chip chip-agent" title="агент-исполнитель">⚒ ${esc(a)}</span>`).join("")}
+      ${t.updated_at ? `<span class="chip">${esc(t.updated_at.slice(0, 10))}</span>` : ""}
+    </div>
+    <div class="arch-item-actions">
+      <button class="btn arch-unarchive" type="button">Вернуть из архива</button>
+    </div>`;
+  item.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    openArchDetail(t);
+  });
+  item.querySelector(".arch-unarchive").addEventListener("click", () => unarchiveTask(t.id));
+  return item;
+}
+
+async function unarchiveTask(id) {
+  try {
+    // BE-11b: the server restores the task to its pre-archive column.
+    await api(`/api/tasks/${encodeURIComponent(id)}/unarchive`, { method: "POST" });
+    toast("ok", `${id}: возвращена из архива`, "задача снова на доске");
+    await refreshBoard();
+    refreshArchiveTeaser();
+    if ($("#arch-list")) loadArchive(); // keep the browser open for batch restores
+  } catch (err) {
+    toast("err", "Не удалось вернуть из архива", err.message);
+  }
+}
+
+// read-only detail card of one archived entry (UI-9): meta, spec, reports
+let archDetail = null;
+
+function openArchDetail(t) {
+  archDetail = t;
+  $("#arch-kind").textContent = "архив";
+  $("#arch-status").innerHTML = statusBadge(t);
+  $("#arch-title").textContent = t.title || t.id;
+  $("#arch-summary").textContent = t.summary || "";
+  const tags = (t.mnemos_tags || []).map((tag) => tagChip(tag)).join("");
+  $("#arch-body").innerHTML = `
+    <div class="dd-section">
+      <h2 style="margin:0 0 8px">Метаданные</h2>
+      <div class="drawer-meta">
+        <span class="chip">${esc(t.id)}</span>
+        <span class="chip">колонка: ${esc(COLUMN_TITLES[t.col] || t.col)}</span>
+        ${t.archived_from ? `<span class="chip">вернётся в: ${esc(COLUMN_TITLES[t.archived_from] || t.archived_from)}</span>` : ""}
+        <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env || "")}</span>
+        ${t.project ? `<span class="chip tagchip tag-project" style="cursor:default">◈ ${esc(t.project)}</span>` : ""}
+        ${(t.agents || []).map((a) => `<span class="chip chip-agent" data-agent="${esc(a)}" title="активность агента">⚒ ${esc(a)}</span>`).join("")}
+        ${(t.specialists || []).map((s) => `<span class="chip chip-spec">${esc(s)}</span>`).join("")}
+        ${t.updated_at ? `<span class="chip">обновлено ${esc(t.updated_at.slice(0, 10))}</span>` : ""}
+      </div>
+      ${tags ? `<div class="task-tagrow">${tags}</div>` : ""}
+    </div>
+    ${t.spec ? `<div class="dd-section"><h2 style="margin:0 0 8px">Спецификация</h2><pre class="drawer-spec">${esc(t.spec)}</pre></div>` : ""}
+    <div class="dd-section">
+      <h2 style="margin:0 0 8px">Отчёты агентов</h2>
+      <div id="arch-reports"><div class="column-empty">загрузка отчётов…</div></div>
+    </div>`;
+  const d = $("#arch-modal"), b = $("#arch-backdrop");
+  b.hidden = false; d.hidden = false;
+  modalOpened("arch-modal", closeArchModal);
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+  // BE-11a: archived tasks keep their report history
+  api(`/api/tasks/${encodeURIComponent(t.id)}/reports`)
+    .then((r) => {
+      const holder = $("#arch-reports");
+      if (!holder) return;
+      const items = r.items || [];
+      if (!items.length) {
+        holder.innerHTML = `<div class="column-empty">отчётов нет</div>`;
+        return;
+      }
+      holder.innerHTML = "";
+      for (const rep of items) holder.appendChild(reportItem(t, rep, false));
+    })
+    .catch(() => {
+      const holder = $("#arch-reports");
+      if (holder) holder.innerHTML = `<div class="column-empty">отчётов нет</div>`;
+    });
+}
+
+function closeArchModal() {
+  const d = $("#arch-modal"), b = $("#arch-backdrop");
+  b.classList.remove("open"); d.classList.remove("open");
+  modalClosed("arch-modal");
+  archDetail = null;
+  setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
+}
+$("#arch-close").addEventListener("click", closeArchModal);
+$("#arch-backdrop").addEventListener("click", closeArchModal);
+$("#arch-restore").addEventListener("click", async () => {
+  if (!archDetail) return;
+  const id = archDetail.id;
+  await unarchiveTask(id);
+  closeArchModal();
+});
+wireMax("#arch-max", "#arch-modal");
 
 // memory items always open OVERLAY (never a new tab) — global style
 function openMemoryOverlay(memoryId) {
@@ -1386,6 +1668,12 @@ async function openSpecialistModal(name) {
   const nTrig = (sec.triggers || []).length;
   const nOther = (sec.other || []).length;
   const indexed = profile?.indexed;
+  // BE-9: plugin-level material shared by every agent of the plugin lives
+  // in profile.shared (summary like "+2 plugin skills, +3 plugin rules").
+  const shared = profile?.shared || {};
+  const sharedChip = shared.summary
+    ? `<span class="chip chip-shared" title="общий материал плагина ${esc(shared.plugin || "")} — доступен каждому агенту плагина">${esc(shared.summary)}</span>`
+    : "";
 
   $("#dd-body").innerHTML = `
     <div class="dd-section">
@@ -1396,6 +1684,7 @@ async function openSpecialistModal(name) {
         <span class="srv-stat-chip">правила: <b>${nRules}</b></span>
         <span class="srv-stat-chip">триггеры: <b>${nTrig}</b></span>
         ${nOther ? `<span class="srv-stat-chip">прочее: <b>${nOther}</b></span>` : ""}
+        ${sharedChip}
       </div>
     </div>
 

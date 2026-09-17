@@ -139,10 +139,14 @@
       <section class="drawer-section modal-main">
         <div class="modal-tabs">
           <button class="mtab active" data-tab="overview" data-sec="overview">Обзор · память</button>
+          <button class="mtab" data-tab="reports" data-sec="reports">Отчёты</button>
           <button class="mtab" data-tab="history" data-sec="history">История · чекпоинты</button>
         </div>
         <div class="tsec active" data-sec="overview">
           <div id="modal-memories" class="drawer-memories"></div>
+        </div>
+        <div class="tsec" data-sec="reports">
+          <div id="modal-reports"></div>
         </div>
         <div class="tsec" data-sec="history">
           <div id="modal-history"></div>
@@ -219,6 +223,25 @@
     <h1 class="drawer-title" id="dd-title"></h1>
     <p class="drawer-summary" id="dd-sub"></p>
     <div id="dd-body"></div>
+  </div>
+
+  <!-- ── Archive entry detail modal (UI-9, read-only) ──────────── -->
+  <div class="modal-backdrop" id="arch-backdrop" hidden></div>
+  <div class="modal" id="arch-modal" hidden role="dialog" aria-label="Архивная запись">
+    <div class="modal-head">
+      <span class="drawer-col" id="arch-kind">архив</span>
+      <div class="modal-btns">
+        <span class="modal-status" id="arch-status"></span>
+        <button class="mbtn" id="arch-max" title="развернуть">⤢</button>
+        <button class="drawer-close" id="arch-close" aria-label="Закрыть">×</button>
+      </div>
+    </div>
+    <h1 class="drawer-title" id="arch-title"></h1>
+    <p class="drawer-summary" id="arch-summary"></p>
+    <div id="arch-body"></div>
+    <div class="arch-detail-actions">
+      <button class="btn" id="arch-restore" type="button">Вернуть из архива</button>
+    </div>
   </div>
 
   <!-- ── New task draft modal (UI-6) ───────────────────────────── -->
