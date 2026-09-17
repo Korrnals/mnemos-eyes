@@ -44,17 +44,20 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch {}
-    throw new Error(`${res.status}: ${detail}`);
+    const err = new Error(`${res.status}: ${detail}`);
+    err.status = res.status; // UI-15: callers branch on 423 (Locked, >24h)
+    throw err;
   }
   return res.json();
 }
 
+// UI-16: unknown env renders as a bare "—" badge (title still explains it).
 const ENV_LABELS = {
   cluster: "ai-agent cluster",
   laptop: "laptop",
   local: "local",
   cloud: "cloud",
-  unknown: "env —",
+  unknown: "—",
 };
 
 function esc(s) {
@@ -101,8 +104,53 @@ function statusBadge(t) {
   return `<span class="status-badge status-${s}" role="img" aria-label="статус: ${esc(label)}">${esc(label)}</span>`;
 }
 
+// ── UI-13: task priority (BE contract: critical|high|normal|low, default
+// normal). Degrade: old backends send no field → no badge, no sort change.
+// "normal" is intentionally not rendered — it is the default, a badge for
+// it would be noise on every card.
+const PRIORITY_LABELS = {
+  critical: "критический",
+  high: "высокий",
+  normal: "обычный",
+  low: "низкий",
+};
+const PRIORITY_RANK = { critical: 0, high: 1, normal: 2, low: 3 };
+
+function priorityBadge(t) {
+  const p = t && t.priority;
+  if (!p || p === "normal") return "";
+  const label = PRIORITY_LABELS[p] || p;
+  return `<span class="priority-badge priority-${esc(p)}" role="img" aria-label="приоритет: ${esc(label)}">${esc(label)}</span>`;
+}
+
+// Creation date, «создана DD.MM» — from created_at, empty when absent.
+function createdShort(t) {
+  if (!t || !t.created_at) return "";
+  const d = new Date(t.created_at);
+  if (isNaN(d.getTime())) return "";
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Project of a task: explicit field wins, else the project:* mnemos tag.
+function taskProject(t) {
+  return t.project || (t.mnemos_tags || []).find((x) => x.startsWith("project:"))?.slice(8) || "";
+}
+
+// UI-13/14: order inside project groups — priority (critical→low), then
+// board position, then the server order (sort is stable).
+function priorityComparator(a, b) {
+  const ra = PRIORITY_RANK[a.priority] ?? PRIORITY_RANK.normal;
+  const rb = PRIORITY_RANK[b.priority] ?? PRIORITY_RANK.normal;
+  if (ra !== rb) return ra - rb;
+  const pa = a.position ?? 0;
+  const pb = b.position ?? 0;
+  return pa - pb;
+}
+
 // ------------------------------------------------------------- filters
-const filter = { text: "", project: "", agent: "", env: "", tag: "", status: "" };
+// UI-13: priority is a client-side filter; on old backends every task is
+// implicitly "normal" (server default), so the select still behaves.
+const filter = { text: "", project: "", agent: "", env: "", tag: "", status: "", priority: "" };
 
 async function refreshBoard() {
   // BE-10: the status filter runs server-side (?status=). Old backends
@@ -117,6 +165,7 @@ async function refreshBoard() {
 
 function taskMatches(t) {
   if (filter.status && taskStatus(t) !== filter.status) return false;
+  if (filter.priority && (t.priority || "normal") !== filter.priority) return false;
   if (filter.project && t.project !== filter.project
       && !(t.mnemos_tags || []).includes("project:" + filter.project)) return false;
   if (filter.agent && !(t.agents || []).includes(filter.agent)) return false;
@@ -185,7 +234,7 @@ function taskCard(t) {
   card.dataset.id = t.id;
   card.style.setProperty("--i", String(Math.floor(Math.random() * 5)));
 
-  const proj = t.project || (t.mnemos_tags || []).find((x) => x.startsWith("project:"))?.slice(8) || "";
+  const proj = taskProject(t);
 
   // UI-7: compact groups, same order as the modal sections
   // (Теги → Сервер → Агент → Специалисты), separated by hairlines.
@@ -197,13 +246,16 @@ function taskCard(t) {
   const group = (ariaLabel, html) =>
     `<div class="task-group" role="group" aria-label="${esc(ariaLabel)}">${html}</div>`;
   const empty = `<span class="task-sec-empty">—</span>`;
+  const created = createdShort(t);
 
   card.innerHTML = `
     <div class="task-top">
       <span class="task-id">${esc(t.id)}</span>
       ${proj ? `<span class="chip tagchip tag-project" data-tag="project:${esc(proj)}" title="проект">${esc(proj)}</span>` : ""}
       <span class="chip chip-env" title="среда исполнения">${esc(ENV_LABELS[t.env] || t.env)}</span>
+      ${priorityBadge(t)}
       ${statusBadge(t)}
+      ${created ? `<span class="task-created" title="создана ${esc((t.created_at || "").slice(0, 10))}">создана ${esc(created)}</span>` : ""}
       <span class="task-age" title="обновлено ${esc(t.updated_at || "")}">${esc(ageOf(t.updated_at))}</span>
     </div>
     <h3 class="task-title">${esc(t.title)}</h3>
@@ -243,6 +295,21 @@ function wireFilters() {
       renderBoard();
     });
   }
+  // UI-13: client-side priority filter (critical/high/normal/low).
+  $("#f-priority").addEventListener("change", (e) => {
+    filter.priority = e.target.value;
+    e.target.classList.toggle("active", !!e.target.value);
+    renderBoard();
+  });
+  // UI-14: project-grouping toggle — persisted, default on.
+  const gbtn = $("#f-group");
+  const syncGroupBtn = () => gbtn.setAttribute("aria-pressed", groupingEnabled() ? "true" : "false");
+  syncGroupBtn();
+  gbtn.addEventListener("click", () => {
+    localStorage.setItem(GROUPING_KEY, groupingEnabled() ? "off" : "on");
+    syncGroupBtn();
+    renderBoard();
+  });
   // UI-8/BE-10: status is a server-side filter — refetch the board with
   // ?status= (client-side taskMatches stays as fallback for old backends).
   $("#f-status").addEventListener("change", async (e) => {
@@ -251,12 +318,37 @@ function wireFilters() {
     await refreshBoard();
   });
   $("#f-clear").addEventListener("click", async () => {
-    Object.assign(filter, { text: "", project: "", agent: "", env: "", tag: "", status: "" });
+    Object.assign(filter, { text: "", project: "", agent: "", env: "", tag: "", status: "", priority: "" });
     $("#f-text").value = "";
-    for (const id of ["#f-project","#f-agent","#f-env","#f-tag","#f-status"]) { $(id).value = ""; $(id).classList.remove("active"); }
+    for (const id of ["#f-project","#f-agent","#f-env","#f-tag","#f-status","#f-priority"]) {
+      $(id).value = ""; $(id).classList.remove("active");
+    }
     await refreshBoard();
   });
 }
+
+// ── UI-14: project-group accordion state (persisted) ────────────────
+// vesmaro.groups = JSON array of collapsed project names, shared by all
+// columns; vesmaro.grouping = "off" disables grouping (default on).
+const GROUPS_KEY = "vesmaro.groups";
+const GROUPING_KEY = "vesmaro.grouping";
+
+function groupingEnabled() {
+  return localStorage.getItem(GROUPING_KEY) !== "off";
+}
+function collapsedSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(GROUPS_KEY) || "[]")); }
+  catch { return new Set(); }
+}
+function saveCollapsed(set) {
+  localStorage.setItem(GROUPS_KEY, JSON.stringify([...set]));
+}
+
+// UI-16: honest column subtitles for the two acceptance columns.
+const COLUMN_SUBTITLES = {
+  resolved: "ждёт приёмки",
+  done: "принято",
+};
 
 function renderBoard() {
   const board = state.board;
@@ -264,6 +356,8 @@ function renderBoard() {
   const el = $("#board");
   el.innerHTML = "";
   let visibleTotal = 0;
+  const anyFilter = filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status || filter.priority;
+  const doGroup = groupingEnabled();
   for (const col of board.columns) {
     const all = board.tasks.filter((t) => t.col === col);
     const tasks = all.filter(taskMatches);
@@ -271,18 +365,61 @@ function renderBoard() {
     const colEl = document.createElement("div");
     colEl.className = "column";
     colEl.dataset.col = col;
-    const filtered = visibleTotal >= 0 && (filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status);
+    const sub = COLUMN_SUBTITLES[col];
     colEl.innerHTML = `
-      <div class="column-head">
-        <span class="column-title">${esc(COLUMN_TITLES[col] || col)}</span>
-        <span class="column-count">${filter && (filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status) ? tasks.length + "/" + all.length : tasks.length}</span>
+      <div class="column-head" ${sub ? `title="${esc((COLUMN_TITLES[col] || col) + " — " + sub)}"` : ""}>
+        <div class="column-head-text">
+          <span class="column-title">${esc(COLUMN_TITLES[col] || col)}</span>
+          ${sub ? `<span class="column-sub">${esc(sub)}</span>` : ""}
+        </div>
+        <span class="column-count">${anyFilter ? tasks.length + "/" + all.length : tasks.length}</span>
       </div>
       <div class="column-body"></div>`;
     const body = $(".column-body", colEl);
     if (!tasks.length) {
       body.innerHTML = `<div class="column-empty">${all.length ? "скрыто фильтром" : "пусто"}</div>`;
+    } else if (doGroup) {
+      // UI-14: groups by project («—» when a task has none), sorted by
+      // priority then position inside each group. Group heads are real
+      // buttons (a11y: aria-expanded); drop-on-column still works because
+      // drag events from the groups bubble to the column handlers below.
+      const byProject = new Map();
+      for (const t of tasks) {
+        const p = taskProject(t) || "—";
+        if (!byProject.has(p)) byProject.set(p, []);
+        byProject.get(p).push(t);
+      }
+      const collapsed = collapsedSet();
+      let gi = 0;
+      for (const [proj, list] of byProject) {
+        list.sort(priorityComparator);
+        const open = !collapsed.has(proj);
+        const bodyId = `colgrp-${col}-${gi++}`;
+        const groupEl = document.createElement("div");
+        groupEl.className = "col-group" + (open ? " open" : "");
+        groupEl.innerHTML = `
+          <button class="col-group-head" type="button" aria-expanded="${open}" aria-controls="${bodyId}"
+                  title="свернуть/развернуть группу «${esc(proj)}»">
+            <span class="caret" aria-hidden="true">▶</span>
+            <span class="col-group-name">${proj === "—" ? "—" : esc(proj)}</span>
+            <span class="col-group-count">${list.length}</span>
+          </button>
+          <div class="col-group-body" id="${bodyId}"></div>`;
+        const groupBody = $(".col-group-body", groupEl);
+        for (const t of list) groupBody.appendChild(taskCard(t));
+        $(".col-group-head", groupEl).addEventListener("click", () => {
+          const nowOpen = !groupEl.classList.contains("open");
+          groupEl.classList.toggle("open", nowOpen);
+          $(".col-group-head", groupEl).setAttribute("aria-expanded", String(nowOpen));
+          const set = collapsedSet();
+          if (nowOpen) set.delete(proj); else set.add(proj);
+          saveCollapsed(set);
+        });
+        body.appendChild(groupEl);
+      }
+    } else {
+      for (const t of tasks) body.appendChild(taskCard(t));
     }
-    for (const t of tasks) body.appendChild(taskCard(t));
     colEl.addEventListener("dragover", (e) => {
       e.preventDefault();
       colEl.classList.add("drag-over");
@@ -310,12 +447,11 @@ function renderBoard() {
     el.appendChild(colEl);
   }
   const fc = $("#f-count"), fb = $("#f-clear");
-  const any = filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status;
   // BE-10: with ?status= the server already filtered tasks[], so the
   // denominator comes from counts (always the whole board).
   const totalAll = Object.values(board.counts || {}).reduce((a, b) => a + b, 0) || board.tasks.length;
-  fc.textContent = any ? `${visibleTotal} из ${totalAll}` : "";
-  fb.hidden = !any;
+  fc.textContent = anyFilter ? `${visibleTotal} из ${totalAll}` : "";
+  fb.hidden = !anyFilter;
 }
 
 // ------------------------------------------------- memory servers & scope
@@ -588,7 +724,8 @@ async function openTask(taskId) {
   state.activeTask = t;
   $("#modal-col").textContent = COLUMN_TITLES[t.col] || t.col;
   $("#modal-id").textContent = t.id;
-  $("#modal-status").innerHTML = statusBadge(t);
+  // UI-13: priority badge sits next to the status in the modal header
+  $("#modal-status").innerHTML = statusBadge(t) + priorityBadge(t);
   $("#modal-env").textContent = ENV_LABELS[t.env] || t.env;
   $("#modal-title").textContent = t.title;
   $("#modal-summary").textContent = t.summary || "";
@@ -604,7 +741,7 @@ async function openTask(taskId) {
       <h3 class="task-sec-label" id="${id}-h">${esc(title)}</h3>
       <div class="drawer-meta" id="${id}">${body || empty}</div>
     </section>`;
-  const proj = t.project || (t.mnemos_tags || []).find((x) => x.startsWith("project:"))?.slice(8) || "";
+  const proj = taskProject(t);
   meta.innerHTML = `
     ${sec("tsec-tags", "Теги",
       `${(proj ? `<span class="chip tagchip tag-project" data-tag="project:${esc(proj)}" title="проект">◈ ${esc(proj)}</span>` : "")
@@ -725,22 +862,44 @@ const KIND_LABEL = {
   "server.added": "хранилище подключено",
 };
 
+// UI-12: timeline items expand inline. Board events carry their detail;
+// memories show the excerpt/content already present in the history
+// payload — no second fetch. Items with nothing to show stay static.
 function tlItem(x) {
   const cls = x.kind === "memory" ? "memory" : "board";
   const badge = x.kind === "memory"
     ? `<span class="tl-badge memory">${esc((x.source || "memory").split(" · ")[0])}</span>`
     : `<span class="tl-badge board">${esc(KIND_LABEL[x.title] || "борд")}</span>`;
   const title = x.kind === "memory" ? x.title : (KIND_LABEL[x.title] || x.title);
+  const body = x.kind === "memory"
+    ? (x.excerpt || x.content || x.detail || "")
+    : (x.detail || "");
+  const expandable = !!body;
+  const headTag = expandable ? "button" : "div";
   return `
-    <div class="tl-item ${cls}">
-      <div class="tl-head">
+    <div class="tl-item ${cls}${expandable ? " expandable" : ""}">
+      <${headTag} class="tl-head"${expandable ? ' type="button" aria-expanded="false"' : ""}>
         <span class="tl-ts">${esc((x.ts || "").replace("T", " ").slice(0, 16))}</span>
         <span class="tl-title">${esc(title)}</span>
         ${badge}
-      </div>
-      ${x.detail ? `<div class="tl-detail">${esc(x.detail)}</div>` : ""}
+        ${expandable ? `<span class="tl-caret" aria-hidden="true">▶</span>` : ""}
+      </${headTag}>
+      ${expandable ? `<div class="tl-detail" hidden>${esc(body)}</div>` : ""}
     </div>`;
 }
+
+// One delegated listener — the timeline re-renders on every task open.
+document.querySelector("#modal-history").addEventListener("click", (e) => {
+  const head = e.target.closest("button.tl-head");
+  if (!head) return;
+  const item = head.closest(".tl-item");
+  const detail = item && item.querySelector(".tl-detail");
+  if (!detail) return;
+  const open = detail.hidden;
+  detail.hidden = !open;
+  head.setAttribute("aria-expanded", String(open));
+  item.classList.toggle("open", open);
+});
 
 // ── UI-8: agent reports tab ────────────────────────────────────────
 // GET /api/tasks/{id}/reports (BE-11a): chronological history, each item
@@ -776,10 +935,108 @@ function renderTaskReports(holder, tab, t, items) {
     return;
   }
   holder.innerHTML = "";
-  // server returns oldest-first — keep the chronology
-  for (const r of items) holder.appendChild(reportItem(t, r, true));
+  // UI-11: compact card list; server returns oldest-first — keep the order
+  const list = document.createElement("div");
+  list.className = "report-list";
+  for (const r of items) list.appendChild(reportCard(t, r));
+  holder.appendChild(list);
 }
 
+// UI-11: first non-empty line of the report body acts as the card heading.
+function reportFirstLine(body) {
+  const line = (body || "").split("\n").map((s) => s.trim()).find(Boolean) || "";
+  return line.length > 120 ? line.slice(0, 119) + "…" : line;
+}
+
+function reportCard(t, r) {
+  const div = document.createElement("div");
+  div.className = "report-card" + (r.superseded ? " superseded" : "");
+  div.tabIndex = 0;
+  div.setAttribute("role", "button");
+  div.setAttribute("aria-label", `отчёт: ${reportFirstLine(r.body) || "пустой отчёт"} — открыть подробно`);
+  const kindLabel = r.kind === "final" ? "финальный" : "промежуточный";
+  const head = reportFirstLine(r.body) || "(пустой отчёт)";
+  div.innerHTML = `
+    <div class="report-card-top">
+      <span class="tl-badge report-kind report-${esc(r.kind)}">${esc(kindLabel)}</span>
+      ${r.kind === "final" && !r.superseded ? `<span class="tl-badge report-final-mark">итоговый</span>` : ""}
+      ${r.agent ? `<span class="chip chip-agent" data-agent="${esc(r.agent)}" title="агент-автор отчёта">⚒ ${esc(r.agent)}</span>` : ""}
+      <span class="tl-ts">${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</span>
+    </div>
+    <div class="report-card-title">${esc(head)}</div>
+    ${r.superseded ? `<div class="report-sup-note">заменён более поздним финальным</div>` : ""}`;
+  const open = () => openReportDetail(t, r);
+  // agent chips are cross-links owned by the delegated document listener
+  div.addEventListener("click", (e) => {
+    if (e.target.closest("[data-agent]")) return;
+    open();
+  });
+  div.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+  });
+  return div;
+}
+
+// UI-11: report detail rides the shared dd-modal (modalOpened/Closed stack).
+function openReportDetail(t, r) {
+  const kindLabel = r.kind === "final" ? "финальный" : "промежуточный";
+  const isLiveFinal = r.kind === "final" && !r.superseded;
+  const head = reportFirstLine(r.body) || "(пустой отчёт)";
+  ddRemember("отчёт", head, `${t.id} · отчёт агента`, () => openReportDetail(t, r));
+  $("#dd-kind").textContent = "отчёт";
+  $("#dd-title").textContent = head;
+  $("#dd-sub").textContent = `${t.id} · отчёт агента · ${(r.created_at || "").replace("T", " ").slice(0, 16)}`;
+  $("#dd-body").innerHTML = `
+    <div class="dd-section">
+      <div class="drawer-meta">
+        <span class="tl-badge report-kind report-${esc(r.kind)}">${esc(kindLabel)}</span>
+        ${isLiveFinal ? `<span class="tl-badge report-final-mark">итоговый</span>` : ""}
+        ${r.superseded ? `<span class="tl-badge report-superseded-mark">заменён более поздним финальным</span>` : ""}
+        ${r.agent ? `<span class="chip chip-agent" data-agent="${esc(r.agent)}" title="агент-автор отчёта">⚒ ${esc(r.agent)}</span>` : ""}
+        <span class="chip">${esc(t.id)}</span>
+        <span class="chip">${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</span>
+      </div>
+    </div>
+    <pre class="report-body report-body-full">${esc(r.body || "")}</pre>
+    <div class="dd-section" id="report-detail-actions"></div>`;
+  if (isLiveFinal) $("#report-detail-actions").appendChild(reportResumeButton(t));
+  const d = $("#dd-modal"), b = $("#dd-backdrop");
+  b.hidden = false; d.hidden = false;
+  modalOpened("dd-modal", closeDdModal);
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+}
+
+// Shared «Вернуть в работу» action (UI-8 inline + UI-11 detail modal).
+// BE-10: status is a field — PATCH status=in-progress, never a move: the
+// task stays in its column while the workflow status flips.
+function reportResumeButton(t) {
+  const btn = document.createElement("button");
+  btn.className = "btn report-resume";
+  btn.type = "button";
+  btn.textContent = "Вернуть в работу";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await api(`/api/tasks/${encodeURIComponent(t.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "in-progress" }),
+      });
+      const live = (state.board?.tasks || []).find((x) => x.id === t.id);
+      if (live) live.status = "in-progress";
+      const badge = $("#modal-status");
+      const at = state.activeTask;
+      if (badge && at && at.id === t.id) badge.innerHTML = statusBadge(at) + priorityBadge(at);
+      renderBoard();
+      toast("ok", `${t.id}: возвращена в работу`, "статус in-progress · колонка не менялась");
+    } catch (err) {
+      toast("err", "Не удалось вернуть в работу", err.message);
+      btn.disabled = false;
+    }
+  });
+  return btn;
+}
+
+// Full inline report (archive detail keeps the expanded form — UI-9).
 function reportItem(t, r, allowResume) {
   const div = document.createElement("div");
   div.className = "report-item" + (r.superseded ? " superseded" : "");
@@ -792,31 +1049,9 @@ function reportItem(t, r, allowResume) {
       ${r.superseded ? `<span class="tl-badge report-superseded-mark">заменён более поздним финальным</span>` : ""}
       ${r.agent ? `<span class="chip chip-agent" data-agent="${esc(r.agent)}" title="агент-автор отчёта">⚒ ${esc(r.agent)}</span>` : ""}
       <span class="tl-ts">${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</span>
-      ${isLiveFinal && allowResume ? `<button class="btn report-resume" type="button">Вернуть в работу</button>` : ""}
     </div>
     <pre class="report-body">${esc(r.body || "")}</pre>`;
-  const btn = div.querySelector(".report-resume");
-  if (btn) {
-    // BE-10: status is a field — PATCH status=in-progress, never a move:
-    // the task stays in its column while the workflow status flips.
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      try {
-        await api(`/api/tasks/${encodeURIComponent(t.id)}`, {
-          method: "PATCH",
-          body: JSON.stringify({ status: "in-progress" }),
-        });
-        t.status = "in-progress";
-        const badge = $("#modal-status");
-        if (badge && state.activeTask === t) badge.innerHTML = statusBadge(t);
-        renderBoard();
-        toast("ok", `${t.id}: возвращена в работу`, "статус in-progress · колонка не менялась");
-      } catch (err) {
-        toast("err", "Не удалось вернуть в работу", err.message);
-        btn.disabled = false;
-      }
-    });
-  }
+  if (isLiveFinal && allowResume) div.querySelector(".report-head").appendChild(reportResumeButton(t));
   return div;
 }
 
@@ -953,6 +1188,10 @@ if (document.querySelector("#modal-back")) document.querySelector("#modal-back")
 });
 $("#modal-close").addEventListener("click", closeTaskModal);
 $("#modal-backdrop").addEventListener("click", closeTaskModal);
+// UI-15: edit the open task from the modal header
+$("#modal-edit").addEventListener("click", () => {
+  if (state.activeTask) openEditModal(state.activeTask);
+});
 
 // ── modal stack: single Escape handler pops only the topmost modal ──
 // Modals layer (task card → dd overlay → …). Every open/close funnels
@@ -1257,6 +1496,140 @@ $("#draft-form").addEventListener("submit", async (e) => {
     btn.textContent = "Отправить черновик";
   }
 });
+
+// ------------------------------------------------ edit task (UI-15)
+// Content fields only (title/summary/spec/project/env/priority/tags/
+// specialists/memory_ids). col/status/position/archived are intentionally
+// absent. PATCH older than 24h → 423 Locked → the lock state offers
+// force=true (confirm-gated). Old backends without the priority field:
+// the select is disabled and the field is not sent.
+let editTask = null;
+let editDraft = { memory_ids: [] };
+
+function openEditModal(t) {
+  editTask = t;
+  editDraft = { memory_ids: [...(t.memory_ids || [])] };
+  $("#edit-id").textContent = t.id;
+  $("#edit-title").value = t.title || "";
+  $("#edit-summary").value = t.summary || "";
+  $("#edit-spec").value = t.spec || "";
+  $("#edit-project").value = taskProject(t);
+  // project suggestions from the current board
+  $("#edit-project-list").innerHTML = [...new Set((state.board?.tasks || []).map(taskProject).filter(Boolean))]
+    .sort().map((p) => `<option value="${esc(p)}"></option>`).join("");
+  const envSel = $("#edit-env");
+  if (t.env && !envSel.querySelector(`option[value="${CSS.escape(t.env)}"]`)) {
+    envSel.insertAdjacentHTML("beforeend", `<option value="${esc(t.env)}">${esc(t.env)}</option>`);
+  }
+  envSel.value = t.env || "unknown";
+  const prioSel = $("#edit-priority");
+  prioSel.value = t.priority || "normal";
+  prioSel.disabled = t.priority === undefined; // old backend: field unknown
+  prioSel.title = t.priority === undefined
+    ? "бэкенд не отдаёт priority — значение не отправляется" : "";
+  $("#edit-tags").value = (t.mnemos_tags || []).join(", ");
+  $("#edit-specs").value = (t.specialists || []).join(", ");
+  renderEditMemIds();
+  $("#edit-lock").hidden = true;
+  $("#edit-note").textContent = "";
+  $("#edit-submit").disabled = false;
+  const d = $("#edit-modal"), b = $("#edit-backdrop");
+  b.hidden = false; d.hidden = false;
+  modalOpened("edit-modal", closeEditModal);
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+  $("#edit-title").focus();
+}
+
+function closeEditModal() {
+  const d = $("#edit-modal"), b = $("#edit-backdrop");
+  b.classList.remove("open"); d.classList.remove("open");
+  modalClosed("edit-modal");
+  editTask = null;
+  setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
+}
+
+function renderEditMemIds() {
+  const el = $("#edit-mem-ids");
+  el.innerHTML = "";
+  if (!(editDraft.memory_ids || []).length) {
+    el.innerHTML = `<span class="task-sec-empty">памятей нет</span>`;
+    return;
+  }
+  for (const id of editDraft.memory_ids) {
+    const chip = document.createElement("span");
+    chip.className = "chip chip-mem edit-mem-chip";
+    chip.title = id;
+    chip.innerHTML = `◉ ${esc(id)} <button type="button" class="edit-mem-rm" aria-label="убрать память ${esc(id)}">×</button>`;
+    chip.querySelector("button").addEventListener("click", () => {
+      editDraft.memory_ids = editDraft.memory_ids.filter((x) => x !== id);
+      renderEditMemIds();
+    });
+    el.appendChild(chip);
+  }
+}
+
+async function saveEdit(force) {
+  if (!editTask) return;
+  const t = editTask;
+  const title = $("#edit-title").value.trim();
+  if (!title) {
+    toast("err", "Название обязательно", "пустую задачу сохранить нельзя — как в черновике");
+    $("#edit-title").focus();
+    return;
+  }
+  const splitList = (v) => v.split(",").map((s) => s.trim()).filter(Boolean);
+  const memAdd = $("#edit-mem-add").value.trim();
+  if (memAdd) {
+    for (const id of splitList(memAdd)) {
+      if (!editDraft.memory_ids.includes(id)) editDraft.memory_ids.push(id);
+    }
+    renderEditMemIds();
+    $("#edit-mem-add").value = "";
+  }
+  const patch = {
+    title,
+    summary: $("#edit-summary").value.trim(),
+    spec: $("#edit-spec").value.trim(),
+    project: $("#edit-project").value.trim(),
+    env: $("#edit-env").value || "unknown",
+    mnemos_tags: splitList($("#edit-tags").value),
+    specialists: splitList($("#edit-specs").value),
+    memory_ids: [...editDraft.memory_ids],
+  };
+  if (t.priority !== undefined) patch.priority = $("#edit-priority").value || "normal";
+  if (force) patch.force = true;
+  const btn = $("#edit-submit");
+  btn.disabled = true;
+  btn.textContent = "Сохранение…";
+  try {
+    await api(`/api/tasks/${encodeURIComponent(t.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    toast("ok", `${t.id}: сохранено`, force ? "изменено принудительно (force)" : "содержание задачи обновлено");
+    closeEditModal();
+    await refreshBoard();
+    if (state.activeTask && state.activeTask.id === t.id) openTask(t.id);
+  } catch (err) {
+    if (err.status === 423) {
+      $("#edit-lock").hidden = false;
+      $("#edit-note").textContent = "Сервер: правка задач старше 24 часов — только принудительно.";
+    } else {
+      $("#edit-note").textContent = "Ошибка: " + err.message;
+    }
+    btn.disabled = false;
+    btn.textContent = "Сохранить";
+  }
+}
+
+$("#edit-close").addEventListener("click", closeEditModal);
+$("#edit-backdrop").addEventListener("click", closeEditModal);
+$("#edit-form").addEventListener("submit", (e) => { e.preventDefault(); saveEdit(false); });
+$("#edit-force").addEventListener("click", () => {
+  if (!confirm("Задача старше 24 часов. Изменить принудительно (force=true)?")) return;
+  saveEdit(true);
+});
+wireMax("#edit-max", "#edit-modal");
 
 // ------------------------------------------------------------------ toasts
 function toast(kind, title, message, ms = 4000) {
@@ -2126,6 +2499,7 @@ function taskContextMenu(e, t) {
   ctxOpen(e.clientX, e.clientY, t.id + " · " + t.title.slice(0, 30), COLUMN_TITLES[t.col] || t.col);
   ctxSec("Задача");
   ctxAdd("Открыть карточку", "⤢", () => openTask(t.id));
+  ctxAdd("Редактировать", "✎", () => openEditModal(t));
   if (t.col !== "done") ctxAdd("В «готово»", "✓", () => moveTaskTo(t.id, "done"));
   if (t.col !== "blocked") ctxAdd("В «блокировано»", "⊘", () => moveTaskTo(t.id, "blocked"));
   if (t.col !== "open") ctxAdd("В «открыто»", "↺", () => moveTaskTo(t.id, "open"));

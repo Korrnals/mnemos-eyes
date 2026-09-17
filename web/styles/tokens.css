@@ -34,6 +34,9 @@
   --color-success:        #2a8a5c;
   --color-warning:        #b8852a;
   --color-error:          #a83232;
+  /* UI-13: brighter error step — base --color-error is ~2.9:1 on dark
+     surfaces, below AA 4.5:1 for 10px badge text ("critical" priority). */
+  --color-error-bright:   #e08585;
   --color-info:           #1a8a96;
 
   /* ── Text ─────────────────────────────────────────────────────── */
@@ -123,6 +126,8 @@
   --color-success:        #1d6e48;
   --color-warning:        #946018;
   --color-error:          #8a2020;
+  /* Light theme: base error is already dark enough for AA at badge size. */
+  --color-error-bright:   #8a2020;
   --color-info:           #1a8a96;
 
   /* FE-5: tag fg values verified ≥4.5:1 against light chip surfaces. */
