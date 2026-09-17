@@ -242,6 +242,23 @@ class Store:
                 ),
             )
 
+    # ----------------------------------------------------------------- meta
+    # Key/value rows in board_meta (seed_version lives there too). Used for
+    # one-shot operational flags such as the reports backfill marker.
+    def get_meta(self, key: str) -> str | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT value FROM board_meta WHERE key=?", (key,)
+            ).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock, self._conn() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO board_meta (key, value) VALUES (?,?)",
+                (key, value),
+            )
+
     # ----------------------------------------------------------------- read
     def board(self, status: str | None = None) -> dict[str, Any]:
         """Board projection. Optional ``status`` filter (BE-10) narrows the
@@ -777,6 +794,104 @@ class Store:
         for r in rows:
             r["superseded"] = bool(r["superseded"])
         return rows
+
+    # ------------------------------------------------- reports backfill
+    BACKFILL_META_KEY = "reports_backfill"
+    BACKFILL_AGENT = "history-backfill"
+
+    def _backfill_body(self, task: dict[str, Any], evs: list[dict[str, Any]],
+                       run_date: str) -> str:
+        """Honest auto-summary of a closed task, built from its audit trail.
+
+        Format: "Автоотчёт из истории событий (бэкфилл <date>): создана <ts>;
+        перемещена open → in-progress → done (последняя <ts>);
+        связанных памятей: N". Without any move events the second fragment
+        reads "перемещений не зафиксировано"."""
+        created_ev = next((e for e in evs if e["kind"] == "task.created"), None)
+        created_ts = created_ev["ts"] if created_ev else task["created_at"]
+        parts = [f"создана {created_ts}"]
+        moves = [e for e in evs if e["kind"] == "task.moved"]
+        if moves:
+            chain = [str(moves[0]["payload"].get("from") or task["col"])]
+            for m in moves:
+                to = str(m["payload"].get("to") or "?")
+                if to != chain[-1]:
+                    chain.append(to)
+            parts.append(
+                f"перемещена {' → '.join(chain)} (последняя {moves[-1]['ts']})")
+        else:
+            parts.append("перемещений не зафиксировано")
+        parts.append(f"связанных памятей: {len(task.get('memory_ids') or [])}")
+        return f"Автоотчёт из истории событий (бэкфилл {run_date}): " + "; ".join(parts)
+
+    def backfill_reports(self) -> int:
+        """One-shot backfill of agent reports for closed tasks (BE-7 wave).
+
+        For every done/resolved task — live or archived (matched via ``col``
+        OR ``archived_from``) — that has NO reports yet, insert exactly one
+        kind="final" report (agent="history-backfill") summarizing the task's
+        audit events. ``created_at`` is the timestamp of the task's LAST
+        event (never "now"), so the report is dated when the work ended.
+
+        Idempotency, two layers:
+        - the ``reports_backfill`` board_meta flag: set when a run completes;
+          a flagged run is a no-op (repeat boots / script runs do nothing);
+        - tasks that already carry ANY report are never touched, even when
+          the flag was cleared by an operator.
+
+        Returns the number of reports created. Everything happens in a
+        single write transaction (flag + inserts), so concurrent invocations
+        cannot double-create.
+        """
+        run_date = datetime.now(timezone.utc).date().isoformat()
+        created = 0
+        with self._lock, self._conn() as db:
+            armed = db.execute(
+                "SELECT value FROM board_meta WHERE key=? AND value='1'",
+                (self.BACKFILL_META_KEY,),
+            ).fetchone()
+            if armed:
+                return 0
+            rows = db.execute(
+                """SELECT id, col, memory_ids, created_at, updated_at FROM tasks
+                   WHERE (col IN ('done','resolved')
+                          OR archived_from IN ('done','resolved'))
+                     AND id NOT IN (SELECT task_id FROM task_reports)
+                   ORDER BY created_at, id"""
+            ).fetchall()
+            candidates = [r["id"] for r in rows]
+            evs_by_task: dict[str, list[dict[str, Any]]] = {}
+            if candidates:
+                marks = ", ".join("?" for _ in candidates)
+                for erow in db.execute(
+                    "SELECT id, ts, kind, task_id, payload FROM events "
+                    f"WHERE task_id IN ({marks}) ORDER BY id ASC",  # noqa: S608 — marks placeholder list
+                    candidates,
+                ):
+                    e = dict(erow)
+                    e["payload"] = _loads(e["payload"])
+                    evs_by_task.setdefault(e["task_id"], []).append(e)
+            for row in rows:
+                task = dict(row)
+                task["memory_ids"] = _loads(task["memory_ids"])
+                evs = evs_by_task.get(task["id"], [])
+                body = self._backfill_body(task, evs, run_date)
+                # date the report with the task's last event; a task with no
+                # audit trail falls back to its own updated_at
+                last_ts = evs[-1]["ts"] if evs else task["updated_at"]
+                db.execute(
+                    "INSERT INTO task_reports "
+                    "(task_id, kind, agent, body, superseded, created_at) "
+                    "VALUES (?,?,?,?,0,?)",
+                    (task["id"], "final", self.BACKFILL_AGENT, body, last_ts),
+                )
+                created += 1
+            # (re)arm the one-shot marker only after a completed run
+            db.execute(
+                "INSERT OR REPLACE INTO board_meta (key, value) VALUES (?, '1')",
+                (self.BACKFILL_META_KEY,),
+            )
+        return created
 
     # -------------------------------------------------------- profile cache
     def get_profile_cache(self, specialist: str) -> dict[str, Any] | None:

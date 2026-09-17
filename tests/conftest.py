@@ -112,6 +112,16 @@ class _FakeMnemosHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._record(b"")
+        fake: FakeMnemos = self.server.fake  # type: ignore[attr-defined]
+        if self.path.startswith("/memories/"):
+            # single-memory card lookup (resolve_memories path); only ids
+            # registered in fake.memory_cards resolve, everything else keeps
+            # the legacy list reply -> unresolved
+            mid = self.path[len("/memories/"):].split("?")[0]
+            card = fake.memory_cards.get(mid)
+            if card is not None:
+                self._reply(200, card)
+                return
         if self.path.startswith("/api/v1/stats"):
             self._reply(200, {"status": "ok", "volume": {"memories_total": 1}})
         elif self.path.startswith("/memories"):
@@ -150,6 +160,9 @@ class FakeMnemos:
         self.fail_memories = False
         self.fail_search = False
         self.mem_count = 0
+        # memory id -> full card dict served by GET /memories/{id}
+        # (BE-7 history tests wire task-linked checkpoints here)
+        self.memory_cards: dict[str, dict] = {}
         self._srv = ThreadingHTTPServer(("127.0.0.1", 0), _FakeMnemosHandler)
         self._srv.daemon_threads = True
         self._srv.fake = self  # type: ignore[attr-defined]
