@@ -125,7 +125,14 @@ class _FakeMnemosHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/v1/stats"):
             self._reply(200, {"status": "ok", "volume": {"memories_total": 1}})
         elif self.path.startswith("/memories"):
-            self._reply(200, [])
+            # AGG-1: with a tags query-param this is the tag LISTING the
+            # task-inbox scanner reads; without it the legacy pulse path
+            # keeps its empty reply
+            from urllib.parse import parse_qs, urlparse
+            if "tags" in parse_qs(urlparse(self.path).query):
+                self._reply(200, fake.listing_results)
+            else:
+                self._reply(200, [])
         else:  # /health and anything else
             self._reply(200, {"status": "ok"})
 
@@ -162,9 +169,12 @@ class FakeMnemos:
         self.fail_memories = False
         self.fail_search = False
         self.mem_count = 0
-        # AGG-1: hits returned by POST /search (task-inbox scanner and any
-        # other tags-filter caller); default [] keeps legacy replies intact
+        # AGG-1: hits returned by POST /search (generic tags-filter callers);
+        # default [] keeps legacy replies intact
         self.search_results: list[dict] = []
+        # AGG-1: GET /memories?tags=... LISTING body (the task-inbox
+        # scanner's primitive); without a tags param /memories replies []
+        self.listing_results: list[dict] = []
         # memory id -> full card dict served by GET /memories/{id}
         # (BE-7 history tests wire task-linked checkpoints here)
         self.memory_cards: dict[str, dict] = {}
@@ -184,11 +194,12 @@ class FakeMnemos:
             return [json.loads(r["body"]) for r in self.requests
                     if r["method"] == "POST" and r["path"] == "/memories"]
 
-    def search_bodies(self) -> list[dict]:
-        """Parsed JSON bodies of all POST /search queries (scanner probes)."""
+    def listing_requests(self) -> list[str]:
+        """Query strings of all GET /memories tag-listing calls."""
         with self.lock:
-            return [json.loads(r["body"]) for r in self.requests
-                    if r["method"] == "POST" and r["path"] == "/search"]
+            return [r["path"].split("?", 1)[1] for r in self.requests
+                    if r["method"] == "GET" and r["path"].startswith("/memories?")
+                    and "tags=" in r["path"]]
 
     def close(self) -> None:
         self._srv.shutdown()

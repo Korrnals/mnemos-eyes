@@ -1,6 +1,6 @@
 """AGG-1 task inbox: mirror upsert/stale semantics, task:queue scan engine
-(POST /search tags primitive), dedup against native tasks' memory_ids,
-adopt flow (201 / 409 / 404) and the refresh endpoint contract
+(GET /memories?tags=... listing primitive), dedup against native tasks'
+memory_ids, adopt flow (201 / 409 / 404) and the refresh endpoint contract
 (guard_write, 5/60s rate limit, per-server error isolation).
 
 Store-level tests run against a fresh tmp-path Store; API-level tests use
@@ -12,20 +12,22 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs
 
 import pytest
 
 from server.store import Store
 from server.task_inbox import record_from_memory
 
-# EXACT drill parity (prod 1.3.0 regression): same body the tag drill sends
-QUEUE_TAG_BODY = {"query": "*", "tags": ["task:queue"], "limit": 25}
+# Listing primitive contract (prod 1.3.1 root cause): GET /memories with a
+# tags query-param is a true listing — parsed back for the request-shape test
+LISTING_QUERY = {"tags": ["task:queue"], "limit": ["200"]}
 
 
 def hit(memory_id: str, title: str = "queue item", content: str = "body",
         tags: list[str] | None = None,
         created: str = "2026-09-01T00:00:00+00:00") -> dict:
-    """One mnemos search hit shaped like a task:queue memory."""
+    """One mnemos /memories listing record shaped like a task:queue memory."""
     return {"id": memory_id, "title": title, "content": content,
             "tags": tags or [], "created_at": created}
 
@@ -147,11 +149,11 @@ class TestMirror:
         assert store.mark_inbox_adopted("nope", "t-x") is False
 
 
-# ------------------------------------------- drill hit shape (prod 1.3.0 fix)
-class TestDrillHitShape:
-    """Prod 1.3.0 regression: search hits come in the drill form —
-    ``created_at`` may be absent or null and ``excerpt`` may exist without
-    full ``content``. The mirror must still take the record."""
+# ----------------------------------------- listing hit shape (defensive parse)
+class TestHitShape:
+    """Prod 1.3.0/1.3.1 regressions: hits may arrive without ``created_at``
+    or with it null, and with an ``excerpt`` field but no full ``content``.
+    The mirror must still take the record."""
 
     def test_hit_without_created_at_is_mirrored(self):
         rec = record_from_memory("srv", {
@@ -195,7 +197,7 @@ class TestDrillHitShape:
 class TestScanEngine:
     def test_refresh_counters_and_query_shape(self, inbox_env, client, auth,
                                               fake_mnemos):
-        fake_mnemos.search_results = [
+        fake_mnemos.listing_results = [
             hit("m1"), hit("m2", tags=["project:mnemos"]),
         ]
         r = client.post("/api/tasks/inbox/refresh", headers=auth)
@@ -206,12 +208,26 @@ class TestScanEngine:
         r2 = client.post("/api/tasks/inbox/refresh", headers=auth)
         assert r2.json()["new"] == 0
         assert r2.json()["found"] == 2
-        # drill-style primitive: POST /search with the task:queue tag filter
-        assert fake_mnemos.search_bodies()[-1] == QUEUE_TAG_BODY
+        # listing primitive (prod 1.3.1 root cause): GET /memories?tags=...
+        assert parse_qs(fake_mnemos.listing_requests()[-1]) == LISTING_QUERY
+
+    def test_full_backlog_listed_beyond_search_cap(self, inbox_env, client,
+                                                   auth, fake_mnemos):
+        """Root-cause regression (prod 1.3.1): the WHOLE task:queue backlog
+        must arrive. The old POST /search primitive returned 1 arbitrary hit
+        of 38; the listing returns all — N=38 > the old 25 cap proves it."""
+        fake_mnemos.listing_results = [
+            hit(f"m-{i:02d}", title=f"queue item {i}", tags=["task:queue"])
+            for i in range(38)
+        ]
+        r = client.post("/api/tasks/inbox/refresh", headers=auth)
+        assert r.json() == {"scanned_servers": 1, "found": 38, "new": 38,
+                            "errors": []}
+        assert client.get("/api/tasks/inbox").json()["count"] == 38
 
     def test_field_mapping_and_excerpt_cap(self, inbox_env, client, auth,
                                            fake_mnemos):
-        fake_mnemos.search_results = [hit(
+        fake_mnemos.listing_results = [hit(
             "m1", content="x" * 500,
             tags=["project:mnemos", "severity:high",
                   "owner:gcw-tech-lead", "task:queue"],
@@ -234,7 +250,7 @@ class TestScanEngine:
 
     def test_owner_slug_mapping_fallbacks(self, inbox_env, client, auth,
                                           fake_mnemos):
-        fake_mnemos.search_results = [
+        fake_mnemos.listing_results = [
             hit("m-known", tags=["owner:gcw-sre-devops"]),
             hit("m-unknown", tags=["owner:custom-agent"]),
             hit("m-noowner"),
@@ -255,7 +271,7 @@ class TestScanEngine:
         })
         inbox_env.registry.set_enabled("qa-dead", True)
         try:
-            fake_mnemos.search_results = [hit("m1")]
+            fake_mnemos.listing_results = [hit("m1")]
             r = client.post("/api/tasks/inbox/refresh", headers=auth)
             assert r.status_code == 200
             body = r.json()
@@ -286,11 +302,11 @@ class TestScanEngine:
                           "errors": []}
         assert store.inbox_refreshed_at() != ""
 
-    def test_drill_form_hits_are_mirrored(self, inbox_env, client, auth,
-                                          fake_mnemos):
+    def test_edge_form_hits_are_mirrored(self, inbox_env, client, auth,
+                                         fake_mnemos):
         """Prod 1.3.0 regression: hits without created_at, with excerpt —
         still mirrored, counters honest."""
-        fake_mnemos.search_results = [{
+        fake_mnemos.listing_results = [{
             "id": "4d20edbf-4f22-4fdc-aabd-5f1c1b584a2e",
             "title": "cluster probe", "tags": ["task:queue", "severity:high"],
             "excerpt": "probe body", "created_at": None,
@@ -311,7 +327,7 @@ class TestScanEngine:
                                               fake_mnemos):
         """Full path: one new record -> refresh -> inbox 1 -> adopt ->
         re-adopt 409 with the same task_id + record deduped out of inbox."""
-        fake_mnemos.search_results = [hit(
+        fake_mnemos.listing_results = [hit(
             "m-e2e", title="e2e work", content="full description",
             tags=["task:queue", "project:mnemos", "severity:high"],
         )]

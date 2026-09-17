@@ -7,8 +7,9 @@ title, an excerpt (first 300 chars of content) and the tags travel into
 the mirror — the board never executes or treats a queue record as an
 instruction.
 
-Query primitive: exactly the one ``GET /api/tags/{tag}/drill`` uses —
-``POST /search`` with a tags filter, via ``mnemos_client.post_json_async``
+Query primitive: ``GET /memories?tags=task:queue`` — a TRUE tag listing
+per the mnemos 4.1.0 OpenAPI (POST /search is a hybrid ranker where "*"
+matches nothing reliably; not a listing), via ``mnemos_client.fetch_json``
 (fully async; the event loop is never blocked). One failing server only
 degrades its own slice: its error is recorded in the scan result and the
 scan continues.
@@ -28,14 +29,16 @@ from .store import Store
 log = logging.getLogger("vesmaro.inbox")
 
 INBOX_TAG = "task:queue"
-# Drill parity (prod 1.3.0 finding): every mnemos caller in this codebase
-# caps /search at 25 hits (mnemos_client.search, tag drill, agent activity)
-# and the drill shape is the only one proven to return task:queue records.
-# A limit above the cap degraded the scan (prod: 9 arbitrary hits instead of
-# the 38-tag listing). Keep this EXACTLY equal to the drill request.
-SCAN_LIMIT = 25
+# Listing primitive (prod 1.3.1 root cause, mnemos 4.1.0 OpenAPI): POST
+# /search is a HYBRID RANKER — "*" does not match everything and ``tags``
+# only filters the ranked results, so a tag sweep via /search loses records
+# (prod: exactly 1 arbitrary hit per store instead of the 38 backlog
+# records; the tag drill shares this defect — backlog ticket, not fixed
+# here). GET /memories supports ``tags`` as a TRUE listing (the same
+# primitive mnemos_list_recent serves) and returns the full Memory[] array.
+SCAN_LIMIT = 200  # one request per scan; offset pagination is a deliberate
+#                  v1 omission — 200 covers any real task:queue backlog
 SCAN_INTERVAL_SECONDS = 300.0
-SCAN_TIMEOUT_SECONDS = 15.0
 EXCERPT_CHARS = 300
 
 # severity:<x> tag → board priority (same map as scripts/import_task_queue.py)
@@ -72,14 +75,14 @@ def _tag_value(tags: list[str], prefix: str) -> str:
 
 
 def record_from_memory(server_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
-    """Mirror record from one mnemos search hit — data fields only (SEC-4).
+    """Mirror record from one mnemos /memories listing hit — data fields
+    only (SEC-4).
 
-    Built for the DRILL hit shape (prod 1.3.0 finding): hits carry
-    ``created_at`` that may be absent or null (→ ``source_created_at=''``,
-    the record is still mirrored) and an ``excerpt`` field that may exist
-    WITHOUT full ``content`` — prefer it, fall back to content, cap at
-    EXCERPT_CHARS. Returns None only for hits without an id (nothing to
-    key the mirror row / dedup on)."""
+    Parsing is defensive about the hit shape: ``created_at`` may be absent
+    or null (→ ``source_created_at=''``, the record is still mirrored) and
+    an ``excerpt`` field may exist WITHOUT full ``content`` — prefer it,
+    fall back to content, cap at EXCERPT_CHARS. Returns None only for hits
+    without an id (nothing to key the mirror row / dedup on)."""
     memory_id = item.get("id")
     if not memory_id:
         log.debug("inbox scan on %s: hit without id skipped", server_name)
@@ -100,18 +103,32 @@ def record_from_memory(server_name: str, item: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _hits_of(body: Any) -> list[dict[str, Any]] | None:
+    """Normalize a GET /memories listing body: a bare list is the contract;
+    ``{items: [...]}`` / ``{results: [...]}`` are accepted defensively.
+    None when the shape is unrecognized (treated as a server error)."""
+    if isinstance(body, list):
+        return [x for x in body if isinstance(x, dict)]
+    if isinstance(body, dict):
+        for key in ("items", "results"):
+            hits = body.get(key)
+            if isinstance(hits, list):
+                return [x for x in hits if isinstance(x, dict)]
+    return None
+
+
 async def refresh_inbox(registry: ServerRegistry, store: Store) -> dict[str, Any]:
-    """One full scan across all active memory servers. Error-isolated per
-    server: a server that fails (HTTP error / unreachable / non-list body)
-    contributes an entry to ``errors`` and nothing else. Returns the scan
-    counters ``{scanned_servers, found, new, errors}`` and stamps the
-    ``task_inbox_refreshed_at`` board_meta marker for the GET endpoint."""
+    """One full scan across all active memory servers: per server a
+    GET /memories?tags=task:queue listing (async, never blocks the loop).
+    Error-isolated per server: a server that fails (HTTP error /
+    unreachable / unrecognized body) contributes an entry to ``errors`` and
+    nothing else. Returns the scan counters ``{scanned_servers, found,
+    new, errors}`` and stamps the ``task_inbox_refreshed_at`` board_meta
+    marker for the GET endpoint."""
     servers = registry.active_servers()
     results = await asyncio.gather(*(
-        mnemos_client.post_json_async(
-            s, "/search",
-            {"query": "*", "tags": [INBOX_TAG], "limit": SCAN_LIMIT},
-            timeout=SCAN_TIMEOUT_SECONDS,
+        mnemos_client.fetch_json(
+            s, "/memories", {"tags": INBOX_TAG, "limit": SCAN_LIMIT},
         ) for s in servers
     ))
     scanned = 0
@@ -119,7 +136,8 @@ async def refresh_inbox(registry: ServerRegistry, store: Store) -> dict[str, Any
     batch: list[dict[str, Any]] = []
     seen: set[str] = set()
     for server, (code, body) in zip(servers, results):
-        if code != 200 or not isinstance(body, list):
+        hits = _hits_of(body)
+        if code != 200 or hits is None:
             errors.append({
                 "server": server["name"],
                 "status": code,
@@ -128,9 +146,8 @@ async def refresh_inbox(registry: ServerRegistry, store: Store) -> dict[str, Any
             })
             continue
         scanned += 1
-        for item in body:
-            rec = record_from_memory(server["name"], item) \
-                if isinstance(item, dict) else None
+        for item in hits:
+            rec = record_from_memory(server["name"], item)
             if rec is None or rec["memory_id"] in seen:
                 continue  # duplicate within one scan: first server wins
             seen.add(rec["memory_id"])
