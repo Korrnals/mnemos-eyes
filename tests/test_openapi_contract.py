@@ -34,6 +34,7 @@ class TestSchemasPresent:
         "TaskCreate", "TaskPatch", "TaskOut", "BoardOut", "OkOut",
         "MemoryServerOut", "MemoryServersOut", "GroupOut", "ReflectOut",
         "NotificationOut", "NotificationsOut",
+        "SpecialistProfileOut", "RefreshAllOut",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)

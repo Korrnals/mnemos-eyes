@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import mnemos_client
 from .memory_registry import ServerRegistry, resolve_token, write_config_template
+from .profiles import build_profile
 from .security import (
     RateLimiter,
     ValidationError,
@@ -86,12 +87,22 @@ def get_scope_servers(scope: str, active_only: bool = False) -> tuple[str, list[
 
 
 async def _profile_cache_refresher() -> None:
-    """Refresh specialist profile caches in the background (every 5 min)."""
+    """Refresh specialist profile caches in the background (every 5 min).
+
+    BE-9: the deterministic filesystem build runs first; the mnemos probe
+    below only serves names the builder cannot resolve. This keeps the
+    scoped (deduplicated) profiles from being clobbered by the flat
+    mnemos index, which duplicates plugin files across specialists.
+    """
     while True:
         await asyncio.sleep(300)
         try:
             for name in {t["specialists"][0] for t in store.board()["tasks"]
                           if t.get("specialists")}:
+                built = await asyncio.to_thread(build_profile, name)
+                if built is not None:
+                    store.put_profile_cache(name, built)
+                    continue
                 tag = f"specialist:{name.lower().replace('@gcw: ', 'gcw-').replace(' ', '-')}"
                 tag2 = tag  # same value
                 servers = registry.active_servers()
@@ -367,6 +378,44 @@ class NotificationReadBody(_ApiModel):
 class NotificationReadOut(_ApiModel):
     ok: bool
     unread: int
+
+
+# Specialist profile contract (BE-9). ``sections`` carry ONLY what the
+# agent's own .md owns or references; plugin-level material available to
+# every agent of the plugin lives in ``shared`` (shared=true, scope=
+# "plugin") so it is never repeated per card. Entry shape keeps the
+# legacy keys (title/source_url/excerpt); id/server come from the legacy
+# mnemos path, path/kind/scope/source from the filesystem builder.
+class ProfileEntry(_ApiModel):
+    title: str = ""
+    source_url: str = ""
+    excerpt: str = ""
+    path: str = ""
+    kind: str = ""
+    shared: bool | None = None   # None = legacy mnemos entry (unknown)
+    scope: str = ""
+    source: str = ""
+    also_in: list[str] = []      # other plugins shipping the same name
+
+
+class SpecialistProfileOut(_ApiModel):
+    ok: bool
+    cached: bool = False
+    specialist: str
+    slug: str
+    meta: dict[str, Any]
+    sections: dict[str, list[ProfileEntry]]
+    shared: dict[str, Any] = {}
+    errors: list[Any] = []
+    indexed: bool = False
+
+
+class RefreshAllOut(_ApiModel):
+    ok: bool
+    refreshed: int  # built + legacy-fallback successes (legacy field)
+    built: int = 0
+    memory_fallback: int = 0
+    failed: int = 0
 
 
 # ------------------------------------------------------------------ board API
@@ -1038,18 +1087,25 @@ async def unarchive_task(task_id: str, request: Request) -> OkOut:
 
 # -------------------------------------------------------- specialist profile
 @app.get("/api/specialists/profile")
-async def specialist_profile_q(name: str, refresh: bool = False) -> dict[str, Any]:
+async def specialist_profile_q(name: str, refresh: bool = False) -> SpecialistProfileOut:
     """Query-param variant (slash-safe for names like SRE/DevOps)."""
     return await specialist_profile(name=name, refresh=refresh)
 
 
 @app.get("/api/specialists/{name}/profile")
-async def specialist_profile(name: str, refresh: bool = False) -> dict[str, Any]:
+async def specialist_profile(name: str, refresh: bool = False) -> SpecialistProfileOut:
     """Specialist composition (instructions/skills/rules/triggers).
 
-    Served from the DB cache instantly (populated by the background
-    refresh loop or scripts/sync-gcw-profiles.py); pass ?refresh=1 to
-    force a re-read from active memory servers.
+    BE-9 semantics: ``sections`` hold only this agent's own files and the
+    skills/instructions its .md explicitly references; plugin-level
+    material available to every agent of the plugin is returned once in
+    ``shared`` (``shared: true``, ``scope: "plugin"``, ``counts`` and a
+    ``summary`` line) instead of being repeated on every card.
+
+    Serving order: SQLite cache (instant, populated by refresh-all or the
+    background loop) → deterministic filesystem build from the GCW plugin
+    tree → legacy mnemos-index search for names the builder cannot
+    resolve. Pass ?refresh=1 to force a rebuild.
     """
     slug = (name.lower().replace("@gcw: ", "gcw-")
             .replace(" ", "-").replace("/", "-"))
@@ -1060,7 +1116,15 @@ async def specialist_profile(name: str, refresh: bool = False) -> dict[str, Any]
             return {"ok": True, "cached": True, "updated_at": cached["updated_at"],
                     **cached["profile"]}
 
-    # slow path: search memory servers for the index tag.
+    # BE-9 fast path: deterministic build from GCW plugin files. No
+    # memory-server round-trip; duplication is structurally impossible
+    # because sections come from explicit per-agent references only.
+    built = await asyncio.to_thread(build_profile, name)
+    if built is not None:
+        store.put_profile_cache(name, built)
+        return {"ok": True, "cached": False, **built}
+
+    # legacy slow path: search memory servers for the index tag.
     # A single probe query misses records (hybrid scoring quirks), so run
     # several probe queries and merge by id.
     tag = f"specialist:{slug}"
@@ -1119,18 +1183,31 @@ async def specialist_profile(name: str, refresh: bool = False) -> dict[str, Any]
 
 
 @app.post("/api/specialists/refresh-all")
-async def specialists_refresh_all(request: Request) -> dict[str, Any]:
-    """Prime/refresh all profile caches now (used right after sync)."""
+async def specialists_refresh_all(request: Request) -> RefreshAllOut:
+    """Prime/refresh all profile caches now (used right after sync).
+
+    BE-9: rebuilds every board specialist from GCW plugin files via the
+    deterministic scoped builder (idempotent upsert — one stable cache
+    row per specialist, repeats never duplicate). Names the builder
+    cannot resolve fall back to the legacy memory-server refresh.
+    """
     _guard_write(request)
     specialists = sorted({s for t in store.board()["tasks"] for s in (t.get("specialists") or [])})
-    refreshed = 0
+    built = memory_fallback = failed = 0
     for name in specialists:
         try:
+            profile = await asyncio.to_thread(build_profile, name)
+            if profile is not None:
+                store.put_profile_cache(name, profile)
+                built += 1
+                continue
             await specialist_profile(name=name, refresh=True)
-            refreshed += 1
+            memory_fallback += 1
         except Exception:
-            pass
-    return {"ok": True, "refreshed": refreshed}
+            failed += 1
+    return {"ok": True, "refreshed": built + memory_fallback,
+            "built": built, "memory_fallback": memory_fallback,
+            "failed": failed}
 
 
 def _section_of(title: str) -> str:
