@@ -1,8 +1,13 @@
-# vesmaro-eyes — task board (podman-compose)
+# vesmaro-eyes — task board (docker / podman compose)
 #
 # Run:    docker compose up -d  (или podman-compose up -d)
-# Stop:   podman-compose down
-# Logs:   podman-compose logs -f eyes
+# Stop:   docker compose down
+# Logs:   docker compose logs -f eyes
+#
+# The image is published on ghcr — public, no login needed
+# (https://github.com/Korrnals?tab=packages). Pin a release with
+# image: ghcr.io/korrnals/vesmaro-eyes:<x.y.z>; build locally instead:
+#   docker build -t vesmaro-eyes:local -f Containerfile .
 #
 # The board DB lives in ./data (bind mount into the project directory),
 # so board state survives rebuilds and is inspectable from the host.
@@ -13,10 +18,7 @@
 
 services:
   eyes:
-    build:
-      context: .
-      dockerfile: Containerfile
-    image: ghcr.io/korrnals/vesmaro-eyes:1.0.0
+    image: ghcr.io/korrnals/vesmaro-eyes:latest
     container_name: vesmaro-eyes
     restart: unless-stopped
     ports:
