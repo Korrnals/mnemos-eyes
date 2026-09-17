@@ -80,8 +80,8 @@ export function SearchBar({
           disabled={isSearching}
           aria-label={isSearching ? "Searching" : "Search"}
           className={cn(
-            "inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-iris text-foreground-inverse",
-            "transition-colors duration-instant hover:bg-iris-bright",
+            "inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-iris-strong text-foreground-inverse",
+            "transition-colors duration-instant hover:bg-iris-strong-hover", // AA in both themes
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright",
             "disabled:pointer-events-none disabled:opacity-60",
             isSearching && "animate-pulse",

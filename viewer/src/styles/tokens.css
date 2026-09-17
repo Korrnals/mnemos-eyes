@@ -19,6 +19,11 @@
   --color-iris: #1a8a96; /* primary iris accent */
   --color-iris-bright: #22b5c4; /* focused / hover iris */
   --color-iris-glow: #22b5c440; /* iris halo / ambient glow (40% opacity) */
+  /* Solid iris fills carrying inverse text (primary button, search submit).
+   * AA-derived aliases of iris/iris-bright: dark keeps iris/iris-bright, light
+   * shifts to iris-bright so --color-text-inverse clears 4.5:1 (T7 audit). */
+  --color-iris-solid: #1a8a96;
+  --color-iris-solid-hover: #22b5c4;
 
   /* Confidence accent (amber / gold — warmth, value) */
   --color-confidence: #c9933a; /* high-confidence memory highlight */
@@ -58,6 +63,8 @@
   --color-iris: #1a8a96;
   --color-iris-bright: #136e79;
   --color-iris-glow: #1a8a9620;
+  --color-iris-solid: #136e79; /* light: iris alone fails AA under inverse text */
+  --color-iris-solid-hover: #0f5f6a;
 
   --color-confidence: #8a5a17; /* ≥4.5:1 on white/elevated (T7 audit) */
   --color-confidence-dim: #e8c98a;
@@ -69,7 +76,7 @@
 
   --color-text-primary: #1a1e2e;
   --color-text-secondary: #4a5268;
-  --color-text-muted: #9298b0;
+  --color-text-muted: #636a80; /* ≥4.5:1 on elevated (T7 audit) */
   --color-text-inverse: #f5f6f8;
 
   --color-border-subtle: #dee1ea; /* decorative separators only */

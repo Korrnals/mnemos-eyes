@@ -28,6 +28,8 @@ export default {
           DEFAULT: "var(--color-iris)",
           bright: "var(--color-iris-bright)",
           glow: "var(--color-iris-glow)",
+          strong: "var(--color-iris-solid)", // AA solid fill under inverse text
+          "strong-hover": "var(--color-iris-solid-hover)",
         },
         // Confidence accent (gold — value signal)
         confidence: {

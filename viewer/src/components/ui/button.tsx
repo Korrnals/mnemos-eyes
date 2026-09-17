@@ -8,7 +8,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-iris text-foreground-inverse hover:bg-iris-bright",
+        default: "bg-iris-strong text-foreground-inverse hover:bg-iris-strong-hover", // AA in both themes
         confidence: "bg-confidence text-foreground-inverse hover:bg-confidence/90",
         outline:
           "border border-border bg-transparent hover:bg-elevated hover:text-foreground",

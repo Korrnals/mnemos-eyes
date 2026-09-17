@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Shell } from "@/layout/Shell";
@@ -12,6 +12,7 @@ import { MOCK_MEMORIES, MOCK_TRACES } from "@/gateway/fixtures";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthProvider } from "@/features/auth/AuthProvider";
 
 /**
  * T7 a11y regression guards (WCAG 2.2 AA fixes). renderToString keeps these
@@ -27,11 +28,11 @@ function renderTree(ui: React.ReactElement, path = "/"): string {
     <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-          <MemoryRouter initialEntries={[path]}>
-            <Routes>
-              <Route path="*" element={ui} />
-            </Routes>
-          </MemoryRouter>
+          <AuthProvider adapterMode="mock" endpoint="/api">
+            {/* No <Routes> wrapper: Shell's <Outlet> may stay empty and App owns
+             * its own routes — only router context is provided here. */}
+            <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
+          </AuthProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </GatewayContext.Provider>,
