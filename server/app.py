@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -835,10 +836,20 @@ class ReflectBody(BaseModel):
 
 
 # Board reflections are DATA, never instructions (SEC-4 poisoning hardening):
-# records written by this endpoint carry exactly these two tags, so agent
-# harnesses treat them as open questions from the board, not as decisions or
-# instructions. mnemos:decision and any other subtype are forbidden here.
-BOARD_REFLECT_TAGS = ["mnemos:open-question", "source:board"]
+# mnemos:decision and any other subtype are forbidden here, so agent
+# harnesses treat these records as open questions from the board, not as
+# directives. The mnemos strict tag contract additionally requires exactly
+# one project:<slug> and one agent:<slug> per memory — the board stamps its
+# own identity (never a specialist slug) to stay attributable without
+# impersonating an agent.
+BOARD_PROJECT_TAG = "project:mnemos-eyes"
+BOARD_AGENT_TAG = "agent:zcode"
+BOARD_REFLECT_TAGS = [
+    BOARD_PROJECT_TAG,
+    BOARD_AGENT_TAG,
+    "mnemos:open-question",
+    "source:board",
+]
 _REFLECT_RATE_LIMIT = 10        # requests per client ...
 _REFLECT_RATE_WINDOW = 60.0     # ... per sliding window (seconds)
 _reflect_limiter = RateLimiter(limit=_REFLECT_RATE_LIMIT, window=_REFLECT_RATE_WINDOW)
@@ -847,10 +858,10 @@ _reflect_limiter = RateLimiter(limit=_REFLECT_RATE_LIMIT, window=_REFLECT_RATE_W
 @app.post("/api/board-reflect")
 async def board_reflect(body: ReflectBody, request: Request) -> ReflectOut:
     """Refine cycle persistence: write the request/commit-marker into mnemos
-    memory tagged ``mnemos:open-question`` + ``source:board`` ONLY (SEC-4:
-    board data is not instructions — harnesses must not treat these records
-    as decisions or directives). Rate limited per client. Returns the
-    created memory id."""
+    memory tagged ``mnemos:open-question`` + ``source:board`` plus the
+    contract-required project/agent stamps (SEC-4: board data is not
+    instructions — harnesses must not treat these records as decisions or
+    directives). Rate limited per client. Returns the created memory id."""
     _guard_write(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _reflect_limiter.acquire(client_ip):
@@ -902,20 +913,37 @@ async def board_reflect(body: ReflectBody, request: Request) -> ReflectOut:
 # (ADR 0006): tracker workflow feature — "the tracker needs itself".
 # Poisoning invariant (ui-contract §12, same SEC-4 rule as board-reflect):
 # records written here carry EXACTLY the three tags below — user-supplied
-# project/tags from the form are metadata inside CONTENT, never memory tags,
-# so no agent:/project: tag can be injected through this endpoint.
-TASK_DRAFT_TAGS = ["mnemos:open-question", "task-draft", "source:board"]
+# project/tags from the form are metadata inside CONTENT, never raw tags.
+# The memory still needs the mnemos strict-contract stamps (exactly one
+# project:<slug> + one agent:<slug>): the slug is sanitized server-side and
+# the agent stamp is the board's own identity, so no specialist slug can be
+# injected through this endpoint. Subtype tags keep the record data, not
+# instructions (SEC-4).
+_DRAFT_PROJECT_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,48}")
 _DRAFT_RATE_LIMIT = 10         # requests per client ...
 _DRAFT_RATE_WINDOW = 60.0      # ... per sliding window (seconds)
 _draft_limiter = RateLimiter(limit=_DRAFT_RATE_LIMIT, window=_DRAFT_RATE_WINDOW)
 
 
+def _draft_tags(project: str) -> list[str]:
+    slug = project.strip().lower().replace("_", "-")
+    if not _DRAFT_PROJECT_SLUG.fullmatch(slug):
+        slug = "mnemos-eyes"
+    return [
+        f"project:{slug}",
+        BOARD_AGENT_TAG,
+        "mnemos:open-question",
+        "task-draft",
+        "source:board",
+    ]
+
+
 @app.post("/api/task-drafts", status_code=201)
 async def create_task_draft(body: TaskDraftBody, request: Request) -> TaskDraftOut:
     """Persist the owner's raw thought as a mnemos draft note (tags pinned
-    to TASK_DRAFT_TAGS) and return the memory coordinates; the SPA then
-    files the "Оформить черновик задачи" chore on the board. Rate limited
-    per client like board-reflect."""
+    to the _draft_tags() contract set) and return the memory coordinates;
+    the SPA then files the "Оформить черновик задачи" chore on the board.
+    Rate limited per client like board-reflect."""
     _guard_write(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _draft_limiter.acquire(client_ip):
@@ -943,7 +971,7 @@ async def create_task_draft(body: TaskDraftBody, request: Request) -> TaskDraftO
     code, body_resp = await mnemos_client.post_json_async(server, "/memories", {
         "content": content[:4000],
         "title": title[:120],
-        "tags": list(TASK_DRAFT_TAGS),
+        "tags": _draft_tags(body.project),
         "source": "mcp",
         "memory_type": "note",
     })

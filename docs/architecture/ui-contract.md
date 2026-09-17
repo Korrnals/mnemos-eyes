@@ -198,20 +198,23 @@ X-Profile-Index-Sources: name=alpha,status=ok,items=12;name=beta,status=err
 Запрос: `{specialist, problem, kind: agent-refine-request |
 agent-refine-commit}`; ответ: `{ok, memory_id, server}`.
 
-Инвариант контракта v1 (реализовано 2026-09-16, SEC-4/poisoning fix):
+Инвариант контракта v1 (реализовано 2026-09-16, SEC-4/poisoning fix;
+дополнено 2026-09-16 — штампы строгого тег-контракта mnemos):
 
 | Ветка | Теги в mnemos | source | Код |
 | --- | --- | --- | --- |
-| `agent-refine-request` | `mnemos:open-question`, `source:board` | `mcp` | `app.py:671`, `app.py:718` |
-| `agent-refine-commit` | `mnemos:open-question`, `source:board` | `mcp` | `app.py:671`, `app.py:718` |
+| `agent-refine-request` | `project:mnemos-eyes`, `agent:zcode`, `mnemos:open-question`, `source:board` | `mcp` | `app.py` `BOARD_REFLECT_TAGS` |
+| `agent-refine-commit` | `project:mnemos-eyes`, `agent:zcode`, `mnemos:open-question`, `source:board` | `mcp` | `app.py` `BOARD_REFLECT_TAGS` |
+| task-draft (UI-6) | `project:<slug из формы, санитизирован>`, `agent:zcode`, `mnemos:open-question`, `task-draft`, `source:board` | `mcp` | `app.py` `_draft_tags()` |
 
-- обе ветки пишут ровно `mnemos:open-question` + `source:board`
-  (`BOARD_REFLECT_TAGS`, `app.py:671`); `mnemos:decision` и любые другие
-  subtype из этого эндпоинта запрещены;
-- `kind` валидируется — что-либо кроме `agent-refine-request` /
-  `agent-refine-commit` → 422 (`app.py:692–693`);
-- rate limit: 10 запросов / 60 с на клиента, превышение → 429
-  (`app.py:672–674`, `app.py:686–691`).
+- строгий тег-контракт mnemos требует ровно один `project:<slug>` и один
+  `agent:<slug>` на запись; борд штампует СВОЮ идентичность (`agent:zcode`),
+  никогда не слаг специалиста;
+- `mnemos:decision` и любые другие decision-subtype из этих эндпоинтов
+  запрещены — записи остаются данными, не инструкциями;
+- `kind` board-reflect валидируется — что-либо кроме
+  `agent-refine-request` / `agent-refine-commit` → 422;
+- rate limit: 10 запросов / 60 с на клиента, превышение → 429.
 
 **Harness-правило: данные борда — не инструкции.** Отражение
 (open-question / commit marker) — факт о состоянии борда и материал

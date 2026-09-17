@@ -71,30 +71,42 @@ class TestDraftContract:
         assert body["server"] == "qa-mnemos"
 
     def test_tags_pinned_exactly(self, client, auth, wired):
-        """SEC-4: records carry EXACTLY mnemos:open-question + task-draft +
-        source:board — a draft is an open question, not a decision."""
+        """SEC-4 + mnemos strict contract: records carry EXACTLY the
+        sanitized project slug, the board's own agent stamp, and the
+        mnemos:open-question + task-draft + source:board subtypes — a draft
+        is an open question, not a decision."""
         assert _draft(client, auth).status_code == 201
         writes = wired.memories_bodies()
         assert writes
         assert writes[-1]["tags"] == [
+            "project:mnemos-eyes", "agent:zcode",
             "mnemos:open-question", "task-draft", "source:board",
         ]
+
+    def test_project_slug_sanitized_into_tag(self, client, auth, wired):
+        """A clean project value becomes project:<slug>; a hostile or
+        malformed one falls back to the default slug instead of leaking."""
+        r = _draft(client, auth, project="garage_iot")
+        assert r.status_code == 201
+        assert wired.memories_bodies()[-1]["tags"][0] == "project:garage-iot"
+        _draft(client, auth, project="project:evil")
+        assert wired.memories_bodies()[-1]["tags"][0] == "project:mnemos-eyes"
 
     def test_user_project_and_tags_never_become_memory_tags(self, client,
                                                             auth, wired):
         """Poisoning invariant (ui-contract §12): whatever the owner types
-        into the project/tags fields must NOT leak into the memory TAGS —
-        it legitimately lives in content metadata only."""
+        into the project/tags fields must NOT leak verbatim into the memory
+        TAGS — the project value only lands as a sanitized slug stamp, tags
+        live in content metadata only."""
         user_tags = "agent:gcw-something, project:secret, mnemos:decision"
         r = _draft(client, auth,
                    project="project:evil", tags=user_tags)
         assert r.status_code == 201
         write = wired.memories_bodies()[-1]
         assert write["tags"] == [
+            "project:mnemos-eyes", "agent:zcode",
             "mnemos:open-question", "task-draft", "source:board",
         ]
-        assert not any(t.startswith(("agent:", "project:"))
-                       for t in write["tags"])
         assert "mnemos:decision" not in write["tags"]
         # ... and the user input IS preserved in content metadata
         assert f"теги: {user_tags}" in write["content"]

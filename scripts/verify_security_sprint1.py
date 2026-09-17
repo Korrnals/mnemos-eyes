@@ -332,8 +332,9 @@ def phase_b() -> None:
         check("B12: board-reflect -> 200", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
         mems = [x for x in fake.requests() if x["path"] == "/memories"]
         payload = json.loads(mems[-1]["body"]) if mems else {}
-        check("B12a: tags are exactly mnemos:open-question + source:board",
-              payload.get("tags") == ["mnemos:open-question", "source:board"],
+        check("B12a: tags are exactly contract stamps + open-question + source:board",
+              payload.get("tags") == ["project:mnemos-eyes", "agent:zcode",
+                                      "mnemos:open-question", "source:board"],
               json.dumps(payload.get("tags")))
         check("B12b: no mnemos:decision anywhere in payload",
               "mnemos:decision" not in json.dumps(payload))

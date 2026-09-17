@@ -49,12 +49,16 @@ class TestReflectContract:
         assert body["server"] == "qa-mnemos"
 
     def test_tags_pinned_exactly(self, client, auth, wired):
-        """SEC-4: records carry EXACTLY mnemos:open-question + source:board
-        — board reflections are data, never decisions or instructions."""
+        """SEC-4 + mnemos strict contract: records carry EXACTLY the board
+        project/agent stamps + mnemos:open-question + source:board — board
+        reflections are data, never decisions or instructions."""
         assert _reflect(client, auth).status_code == 200
         writes = wired.memories_bodies()
         assert writes
-        assert writes[-1]["tags"] == ["mnemos:open-question", "source:board"]
+        assert writes[-1]["tags"] == [
+            "project:mnemos-eyes", "agent:zcode",
+            "mnemos:open-question", "source:board",
+        ]
 
     def test_no_decision_tag_anywhere_in_payload(self, client, auth, wired):
         assert _reflect(client, auth).status_code == 200
