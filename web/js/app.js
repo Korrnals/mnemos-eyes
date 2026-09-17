@@ -72,8 +72,33 @@ const COLUMN_TITLES = {
   done: "готово",
 };
 
+// UI-7: canonical status dictionary = mnemos workflow statuses.
+// v1 derives the status from the board column; the archived flag overrides.
+const STATUS_LABELS = {
+  "open": "открыта",
+  "in-progress": "в работе",
+  "blocked": "заблокирована",
+  "resolved": "решена",
+  "done": "готова",
+  "withdrawn": "снята",
+};
+
+function taskStatus(t) {
+  if (t.archived) return "archived";
+  return STATUS_LABELS[t.col] ? t.col : "open";
+}
+
+// Single badge renderer — used by the small card and the task modal alike.
+// role="img" + aria-label: a plain span ignores aria-label, the img role
+// makes the badge a named object for AT (visible text stays as fallback).
+function statusBadge(t) {
+  const s = taskStatus(t);
+  const label = s === "archived" ? "в архиве" : (STATUS_LABELS[s] || s);
+  return `<span class="status-badge status-${s}" role="img" aria-label="статус: ${esc(label)}">${esc(label)}</span>`;
+}
+
 // ------------------------------------------------------------- filters
-const filter = { text: "", project: "", agent: "", env: "", tag: "" };
+const filter = { text: "", project: "", agent: "", env: "", tag: "", status: "" };
 
 async function refreshBoard() {
   state.board = await api("/api/board");
@@ -83,6 +108,7 @@ async function refreshBoard() {
 }
 
 function taskMatches(t) {
+  if (filter.status && taskStatus(t) !== filter.status) return false;
   if (filter.project && t.project !== filter.project
       && !(t.mnemos_tags || []).includes("project:" + filter.project)) return false;
   if (filter.agent && !(t.agents || []).includes(filter.agent)) return false;
@@ -151,32 +177,34 @@ function taskCard(t) {
   card.dataset.id = t.id;
   card.style.setProperty("--i", String(Math.floor(Math.random() * 5)));
 
-  const chips = [];
-  chips.push(`<span class="chip chip-env" title="среда исполнения">${esc(ENV_LABELS[t.env] || t.env)}</span>`);
-  if ((t.memory_ids || []).length) {
-    chips.push(`<span class="chip chip-mem" title="связанные памяти mnemos">◉ ${t.memory_ids.length}</span>`);
-  }
+  const proj = t.project || (t.mnemos_tags || []).find((x) => x.startsWith("project:"))?.slice(8) || "";
 
-  const allTags = [...(t.mnemos_tags || []), ...(t.specialists || [])];
+  // UI-7: compact groups, same order as the modal sections
+  // (Теги → Сервер → Агент → Специалисты), separated by hairlines.
+  const memCount = (t.memory_ids || []).length;
+  const specialists = t.specialists || [];
+  const allTags = t.mnemos_tags || [];
   const cardTags = allTags.slice(0, 4);
   const more = allTags.length - cardTags.length;
-  const proj = t.project || (t.mnemos_tags || []).find((x) => x.startsWith("project:"))?.slice(8) || "";
+  const group = (ariaLabel, html) =>
+    `<div class="task-group" role="group" aria-label="${esc(ariaLabel)}">${html}</div>`;
+  const empty = `<span class="task-sec-empty">—</span>`;
 
   card.innerHTML = `
     <div class="task-top">
       <span class="task-id">${esc(t.id)}</span>
       ${proj ? `<span class="chip tagchip tag-project" data-tag="project:${esc(proj)}" title="проект">${esc(proj)}</span>` : ""}
+      <span class="chip chip-env" title="среда исполнения">${esc(ENV_LABELS[t.env] || t.env)}</span>
+      ${statusBadge(t)}
       <span class="task-age" title="обновлено ${esc(t.updated_at || "")}">${esc(ageOf(t.updated_at))}</span>
     </div>
     <h3 class="task-title">${esc(t.title)}</h3>
-    <div class="task-chips">${chips.join("")}</div>
-    <div class="task-tagrow">${cardTags.map((tag) => tagChip(tag)).join("")}
+    ${group("Теги", `<div class="task-tagrow">${cardTags.map((tag) => tagChip(tag)).join("")}
       ${more > 0 ? `<span class="chip tagchip tag-other">+${more}</span>` : ""}
-    </div>
-    <div class="task-foot">
-      <span class="task-agents">${miniAvatars(t.agents)}</span>
-      <span class="chip chip-agent" title="агент-исполнитель" data-agent="${esc((t.agents || [])[0] || "")}">⚒ ${esc(t.agents.join(", ") || "—")}</span>
-    </div>`;
+      ${cardTags.length ? "" : empty}</div>`)}
+    ${memCount ? group("Сервер", `<span class="chip chip-mem" title="связанные памяти mnemos">◉ ${memCount}</span>`) : ""}
+    ${group("Агент", `${(t.agents || []).length ? `<span class="chip chip-agent" title="агент-исполнитель" data-agent="${esc(t.agents[0] || "")}">⚒ ${esc(t.agents.join(", "))}</span>${miniAvatars(t.agents)}` : empty}`)}
+    ${specialists.length ? group("Специалисты", specialists.map((s) => `<span class="chip tagchip chip-spec" data-tag="${esc(s)}" title="специалист — связанные задачи и знания">${esc(s)}</span>`).join("")) : ""}`;
 
   card.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("text/task-id", t.id);
@@ -200,7 +228,7 @@ function taskCard(t) {
 
 function wireFilters() {
   $("#f-text").addEventListener("input", (e) => { filter.text = e.target.value.trim(); renderBoard(); });
-  for (const [id, key] of [["#f-project","project"],["#f-agent","agent"],["#f-env","env"],["#f-tag","tag"]]) {
+  for (const [id, key] of [["#f-project","project"],["#f-agent","agent"],["#f-env","env"],["#f-tag","tag"],["#f-status","status"]]) {
     $(id).addEventListener("change", (e) => {
       filter[key] = e.target.value;
       e.target.classList.toggle("active", !!e.target.value);
@@ -208,9 +236,9 @@ function wireFilters() {
     });
   }
   $("#f-clear").addEventListener("click", () => {
-    Object.assign(filter, { text: "", project: "", agent: "", env: "", tag: "" });
+    Object.assign(filter, { text: "", project: "", agent: "", env: "", tag: "", status: "" });
     $("#f-text").value = "";
-    for (const id of ["#f-project","#f-agent","#f-env","#f-tag"]) { $(id).value = ""; $(id).classList.remove("active"); }
+    for (const id of ["#f-project","#f-agent","#f-env","#f-tag","#f-status"]) { $(id).value = ""; $(id).classList.remove("active"); }
     renderBoard();
   });
 }
@@ -228,11 +256,11 @@ function renderBoard() {
     const colEl = document.createElement("div");
     colEl.className = "column";
     colEl.dataset.col = col;
-    const filtered = visibleTotal >= 0 && (filter.text || filter.project || filter.agent || filter.env || filter.tag);
+    const filtered = visibleTotal >= 0 && (filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status);
     colEl.innerHTML = `
       <div class="column-head">
         <span class="column-title">${esc(COLUMN_TITLES[col] || col)}</span>
-        <span class="column-count">${filter && (filter.text || filter.project || filter.agent || filter.env || filter.tag) ? tasks.length + "/" + all.length : tasks.length}</span>
+        <span class="column-count">${filter && (filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status) ? tasks.length + "/" + all.length : tasks.length}</span>
       </div>
       <div class="column-body"></div>`;
     const body = $(".column-body", colEl);
@@ -267,7 +295,7 @@ function renderBoard() {
     el.appendChild(colEl);
   }
   const fc = $("#f-count"), fb = $("#f-clear");
-  const any = filter.text || filter.project || filter.agent || filter.env || filter.tag;
+  const any = filter.text || filter.project || filter.agent || filter.env || filter.tag || filter.status;
   fc.textContent = any ? `${visibleTotal} из ${board.tasks.length}` : "";
   fb.hidden = !any;
 }
@@ -542,24 +570,33 @@ async function openTask(taskId) {
   state.activeTask = t;
   $("#modal-col").textContent = COLUMN_TITLES[t.col] || t.col;
   $("#modal-id").textContent = t.id;
+  $("#modal-status").innerHTML = statusBadge(t);
+  $("#modal-env").textContent = ENV_LABELS[t.env] || t.env;
   $("#modal-title").textContent = t.title;
   $("#modal-summary").textContent = t.summary || "";
   $("#modal-spec").textContent = t.spec || "";
   $("#modal-spec-section").hidden = !t.spec;
 
+  // UI-7: explicit labeled sections (Теги → Сервер → Агент → Специалисты).
+  // role=group + aria-labelledby ties each section to its heading.
   const meta = $("#modal-meta");
+  const empty = `<span class="task-sec-empty">—</span>`;
+  const sec = (id, title, body) => `
+    <section class="task-sec" role="group" aria-labelledby="${id}-h">
+      <h3 class="task-sec-label" id="${id}-h">${esc(title)}</h3>
+      <div class="drawer-meta" id="${id}">${body || empty}</div>
+    </section>`;
+  const proj = t.project || (t.mnemos_tags || []).find((x) => x.startsWith("project:"))?.slice(8) || "";
   meta.innerHTML = `
-    <div class="drawer-meta">
-      ${(t.project ? `<span class="chip tagchip tag-project" data-tag="project:${esc(t.project)}" title="проект">◈ ${esc(t.project)}</span>` : "")}
-      <span class="chip chip-agent" data-agent="${esc((t.agents || [])[0] || "")}" title="активность агента">⚒ ${esc(t.agents.join(", ") || "—")}</span>
-      <span class="chip chip-env">${esc(ENV_LABELS[t.env] || t.env)}</span>
-    </div>
-    <div class="drawer-meta" style="margin-top:8px">
-      ${(t.specialists || []).map((s) => `<span class="chip chip-spec">${esc(s)}</span>`).join("")}
-    </div>
-    <div class="task-tagrow" style="margin-top:8px">
-      ${(t.mnemos_tags || []).map((tag) => tagChip(tag)).join("")}
-    </div>`;
+    ${sec("tsec-tags", "Теги",
+      `${(proj ? `<span class="chip tagchip tag-project" data-tag="project:${esc(proj)}" title="проект">◈ ${esc(proj)}</span>` : "")
+      + (t.mnemos_tags || []).map((tag) => tagChip(tag)).join("")}`)}
+    ${sec("tsec-srv", "Сервер",
+      `<span class="chip chip-mem" title="связанные памяти mnemos">◉ ${(t.memory_ids || []).length}</span>`)}
+    ${sec("tsec-agent", "Агент",
+      (t.agents || []).map((a) => `<span class="chip chip-agent" data-agent="${esc(a)}" title="активность агента">⚒ ${esc(a)}</span>`).join(""))}
+    ${sec("tsec-spec", "Специалисты",
+      (t.specialists || []).map((s) => `<span class="chip chip-spec" title="специалист">${esc(s)}</span>`).join(""))}`;
 
   // cross-navigation inside the modal is handled by the delegated
   // document click listener (tag/agent chips)
@@ -575,6 +612,18 @@ async function openTask(taskId) {
     const resolved = (t.memory_ids || []).length ? await api(url) : { items: {}, unresolved: [], sources: {} };
     const searchHtml = await memorySearchWidget(t);
     if (state.activeTask !== t) return;
+    // UI-7: fill the Сервер section — count, active scope, source servers
+    // (provenance) of the resolved memories.
+    const srcServers = [...new Set(Object.values(resolved.sources || {}).filter(Boolean))];
+    const srvEl = $("#tsec-srv");
+    if (srvEl) {
+      const scopeLabel = state.memScope === "all" ? "все серверы" : state.memScope;
+      srvEl.innerHTML = `
+        <span class="chip chip-mem" title="связанные памяти mnemos">◉ ${(t.memory_ids || []).length}</span>
+        <span class="chip" title="активный скоуп памяти">скоуп: ${esc(scopeLabel)}</span>
+        ${srcServers.map((s) => `<span class="pulse-server" title="сервер-источник памяти">${esc(s)}</span>`).join("")}
+        ${(t.memory_ids || []).length ? "" : `<span class="task-sec-empty">памятей нет</span>`}`;
+    }
     memEl.innerHTML = "";
     for (const mid of t.memory_ids || []) {
       const m = resolved.items[mid];
@@ -605,6 +654,12 @@ async function openTask(taskId) {
     }
   } catch (err) {
     memEl.innerHTML = `<div class="column-empty">память недоступна: ${esc(err.message)}</div>`;
+    const srvEl = $("#tsec-srv");
+    if (srvEl) {
+      srvEl.innerHTML = `
+        <span class="chip chip-mem" title="связанные памяти mnemos">◉ ${(t.memory_ids || []).length}</span>
+        <span class="task-sec-empty">провенанс недоступен: ${esc(err.message)}</span>`;
+    }
   }
   loadTaskHistory(t);
 }
