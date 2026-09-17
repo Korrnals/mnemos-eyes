@@ -34,7 +34,13 @@ from .security import (
     validate_memory_url,
     validate_token_ref,
 )
-from .store import REPORT_KINDS, Store, TASK_STATUSES, VALID_STATUSES
+from .store import (
+    REPORT_KINDS,
+    Store,
+    TASK_STATUSES,
+    TaskLockedError,
+    VALID_STATUSES,
+)
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
 DB_PATH = DATA_DIR / "board.db"
@@ -185,6 +191,9 @@ class TaskCreate(BaseModel):
     col: str = "open"
     # BE-10: optional explicit workflow status; defaults to the col map.
     status: str | None = None
+    # BE-12: priority dictionary value; store validates and defaults to
+    # 'normal' (garbage → ValueError → 422, same boundary as env/status).
+    priority: str = "normal"
     env: str = "unknown"
     agents: list[str] = []
     specialists: list[str] = []
@@ -200,6 +209,11 @@ class TaskPatch(BaseModel):
     # BE-10: full workflow dictionary (incl. `withdrawn`, which has no
     # board column); lives until the next column move — see store.move_task.
     status: str | None = None
+    # BE-12: content edit of a task older than 24h (EDITABLE_FIELDS) is
+    # rejected with 423 unless the request opts in here. Status changes are
+    # workflow transitions and stay free at any age (UI-8 «Вернуть в работу»).
+    force: bool = False
+    priority: str | None = None
     env: str | None = None
     agents: list[str] | None = None
     specialists: list[str] | None = None
@@ -272,6 +286,7 @@ class TaskOut(_ApiModel):
     updated_at: str
     archived: int = 0
     status: str                     # BE-10: workflow dictionary value — store always returns it post-migration
+    priority: str                   # BE-12: priority dictionary value — store always returns it post-migration
     archived_from: str = ""         # BE-11b: pre-archive column
 
 
@@ -563,16 +578,41 @@ async def create_task(body: TaskCreate, request: Request) -> TaskOut:
 
 @app.patch("/api/tasks/{task_id}")
 async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut:
+    """Task PATCH (BE-12).
+
+    - Content fields (EDITABLE_FIELDS: title, summary, spec, project, env,
+      priority, agents, specialists, memory_ids, mnemos_tags) on a task
+      older than 24h answer **423 Locked** unless ``force=true``; a forced
+      edit is echoed back with ``forced: true`` and audited in the
+      task.updated event (payload ``forced: true``).
+    - ``status`` is NOT content: workflow transitions (e.g. UI-8 «Вернуть
+      в работу») stay free at any task age — the 423 window never applies.
+    - ``col`` is silently ignored by the store allow-list (columns move via
+      POST /move) — long-standing v1 semantics, not an error.
+    - ``force`` itself is a request mode, never a task column: it is popped
+      here and never reaches the update payload.
+    """
     _guard_write(request)
     if body.agents is not None:
         _validate_agents(body.agents)  # ADR 0005 (BE-5): same rule as create
-    # store raises ValueError on unknown env — surface as 422, not 500
+    dump = body.model_dump(exclude_none=True)
+    force = dump.pop("force", False)  # request mode — not part of the payload
+    # store raises ValueError on unknown env/priority — surface as 422, not 500
     try:
-        task = store.update_task(task_id, body.model_dump(exclude_none=True))
+        task = store.update_task(task_id, dump, force=force)
+    except TaskLockedError:
+        raise HTTPException(
+            423,
+            "задача старше 24ч — редактирование заблокировано "
+            "(force=true для принудительной правки)",
+        ) from None
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if task is None:
         raise HTTPException(404, "task not found")
+    if force:
+        # extra="allow" keeps the flag in the serialized TaskOut
+        task["forced"] = True
     _broadcast({"kind": "task.updated", "task": task})
     return task
 

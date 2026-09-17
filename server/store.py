@@ -36,6 +36,27 @@ TASK_STATUSES = frozenset({*COLUMNS, "withdrawn"})
 # BE-11a: agent report kinds for a task.
 REPORT_KINDS = ("intermediate", "final")
 VALID_ENVS = frozenset({"cluster", "laptop", "local", "cloud", "unknown"})
+# BE-12: task priority dictionary. `normal` is both the API default and the
+# column DEFAULT, so pre-migration rows read `normal` with no backfill.
+TASK_PRIORITIES = frozenset({"critical", "high", "normal", "low"})
+# BE-12: content fields guarded by the 24h edit window. `status` is
+# deliberately NOT here: status changes are workflow transitions (column
+# moves, UI-8 «Вернуть в работу» → PATCH status), free at any task age —
+# only CONTENT edits lock after 24h. `col`/`position` were never patchable
+# (they change via POST /move); `archived`/`id`/`created_at` are managed
+# exclusively by the archive/create machinery.
+EDITABLE_FIELDS = frozenset({
+    "title", "summary", "spec", "project", "env", "priority",
+    "agents", "specialists", "memory_ids", "mnemos_tags",
+})
+# Age (seconds) after which EDITABLE_FIELDS edits require force=True.
+EDIT_WINDOW_SECONDS = 24 * 3600
+
+
+class TaskLockedError(Exception):
+    """BE-12: a content edit hit the 24h edit window (HTTP 423 upstream).
+    Retry the same PATCH with force=True to override; the override is
+    recorded in the task.updated audit event (payload forced=true)."""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS board_meta (
@@ -144,6 +165,22 @@ def _loads(raw: str) -> list[Any]:
         return []
 
 
+def _age_seconds(created_at: str) -> float:
+    """Seconds elapsed since ``created_at`` (BE-12 edit window).
+
+    All store-written timestamps are timezone-aware ISO strings; a naive or
+    unparsable value (legacy/manual row) is treated as UTC / age 0 — the
+    window fails OPEN (a corrupt timestamp must not permanently lock a
+    task's content)."""
+    try:
+        created = datetime.fromisoformat(created_at)
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - created).total_seconds()
+
+
 class Store:
     """Thread-safe SQLite wrapper. One connection per call — cheap and safe
     for the single-digit request rates this board sees."""
@@ -197,6 +234,12 @@ class Store:
             # this column existed get archived_from='' and fall back to
             # 'open' on unarchive (documented fallback).
             db.execute("ALTER TABLE tasks ADD COLUMN archived_from TEXT NOT NULL DEFAULT ''")
+        if "priority" not in cols:
+            # BE-12: task priority. Additive ALTER only — the column DEFAULT
+            # 'normal' covers every pre-migration row, so no backfill and NO
+            # SEED_VERSION bump (the seed-version check wipes all tasks).
+            db.execute(
+                "ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
@@ -312,6 +355,14 @@ class Store:
         env = payload.get("env", "unknown")
         if env not in VALID_ENVS:
             raise ValueError(f"invalid env: {env}")
+        # BE-12: priority, same boundary pattern as env/status — None means
+        # "not provided" and falls back to the dictionary default; garbage
+        # must raise (surfaces as 422 upstream), never silently normalize.
+        priority = payload.get("priority")
+        if priority is None:
+            priority = "normal"
+        if priority not in TASK_PRIORITIES:
+            raise ValueError(f"invalid priority: {priority}")
         # random suffix: two creates in the same millisecond must not
         # collide on the tasks.id UNIQUE constraint (QA-1 regression)
         task_id = payload.get("id") or f"t-{int(time.time()*1000)}-{secrets.token_hex(2)}"
@@ -325,8 +376,8 @@ class Store:
                 """INSERT INTO tasks
                        (id, col, status, position, title, summary, spec,
                         agents, specialists, env, project, memory_ids,
-                        mnemos_tags, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        mnemos_tags, priority, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task_id, col, status, pos, payload["title"],
                     payload.get("summary", ""), payload.get("spec", ""),
@@ -335,6 +386,7 @@ class Store:
                     env, payload.get("project", ""),
                     json.dumps(payload.get("memory_ids", [])),
                     json.dumps(payload.get("mnemos_tags", [])),
+                    priority,
                     now, now,
                 ),
             )
@@ -366,9 +418,24 @@ class Store:
             self._log(db, "task.moved", task_id, {"from": row["col"], "to": col})
         return self.task(task_id)
 
-    def update_task(self, task_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    def update_task(self, task_id: str, patch: dict[str, Any],
+                    force: bool = False) -> dict[str, Any] | None:
+        """Content/status PATCH (BE-12 semantics).
+
+        Allow-listed keys only — anything else (notably ``col``) is silently
+        ignored, per the established v1 contract: column changes go through
+        POST /move, so a PATCH carrying ``col`` is not an error, it is a
+        no-op for that key (documented; not 422).
+
+        ``status`` is a workflow transition and stays editable at any task
+        age (UI-8 «Вернуть в работу» relies on this). The keys in
+        EDITABLE_FIELDS are content: past EDIT_WINDOW_SECONDS they raise
+        TaskLockedError unless ``force=True``; a forced write is recorded in
+        the task.updated event payload as ``forced: true``.
+        """
         allowed = {"title", "summary", "spec", "agents", "specialists",
-                   "env", "project", "memory_ids", "mnemos_tags", "status"}
+                   "env", "project", "memory_ids", "mnemos_tags", "status",
+                   "priority"}
         fields: dict[str, Any] = {}
         for key, value in patch.items():
             if key not in allowed:
@@ -386,21 +453,42 @@ class Store:
                 if value not in TASK_STATUSES:
                     raise ValueError(f"invalid status: {value}")
                 fields[key] = value
+            elif key == "priority":
+                # BE-12: priority dictionary; validated like env/status so
+                # garbage surfaces as 422 upstream, never as a silent write.
+                if value not in TASK_PRIORITIES:
+                    raise ValueError(f"invalid priority: {value}")
+                fields[key] = value
             else:
                 fields[key] = value
         if not fields:
             return self.task(task_id)
         fields["updated_at"] = _now()
         with self._lock, self._conn() as db:
-            row = db.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone()
+            row = db.execute(
+                "SELECT created_at FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
             if row is None:
                 return None
+            # BE-12: 24h content-edit window. Only content fields age out;
+            # a status-only patch (or any patch without EDITABLE_FIELDS
+            # members) is never locked.
+            if (not force
+                    and any(k in EDITABLE_FIELDS for k in fields)
+                    and _age_seconds(row["created_at"]) > EDIT_WINDOW_SECONDS):
+                raise TaskLockedError(
+                    f"task {task_id} is older than {EDIT_WINDOW_SECONDS}s")
             sets = ", ".join(f"{k}=?" for k in fields)
             db.execute(
                 f"UPDATE tasks SET {sets} WHERE id=?",  # noqa: S608 — keys from a fixed allow-list
                 (*fields.values(), task_id),
             )
-            self._log(db, "task.updated", task_id, {"fields": sorted(fields)})
+            payload: dict[str, Any] = {"fields": sorted(fields)}
+            if force:
+                # forced edits must stay auditable: the override lands in
+                # the same task.updated event as the field list
+                payload["forced"] = True
+            self._log(db, "task.updated", task_id, payload)
         return self.task(task_id)
 
     def delete_task(self, task_id: str) -> bool:
