@@ -13,7 +13,7 @@ const buttonVariants = cva(
         outline:
           "border border-border bg-transparent hover:bg-elevated hover:text-foreground",
         ghost: "hover:bg-elevated hover:text-foreground",
-        link: "text-iris underline-offset-4 hover:underline",
+        link: "text-iris-bright underline-offset-4 hover:underline", // iris alone fails AA as text
         destructive: "bg-error text-foreground-inverse hover:bg-error/90",
       },
       size: {

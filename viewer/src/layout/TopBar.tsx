@@ -16,9 +16,13 @@ export function TopBar({ title }: TopBarProps) {
   const { theme, toggleTheme } = useTheme();
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border-subtle px-6">
-      <h2 className="text-sm font-semibold text-foreground-secondary">{title}</h2>
-      <div className="flex items-center gap-4">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-3 sm:px-6">
+      {/* Route label, not a heading — each page owns the (single) h1, so the
+       * document outline never jumps backwards (WCAG 1.3.1 / 2.4.6). */}
+      <p className="min-w-0 truncate text-sm font-semibold text-foreground-secondary">
+        {title}
+      </p>
+      <div className="flex shrink-0 items-center gap-3 sm:gap-4">
         <AuthStatus />
         <Button
           variant="ghost"
@@ -31,7 +35,11 @@ export function TopBar({ title }: TopBarProps) {
           ) : (
             <Moon className="size-4" aria-hidden="true" />
           )}
-          {theme === "dark" ? "Light" : "Dark"} theme
+          {/* Label shortens below sm so the bar reflows at 320px (WCAG 1.4.10);
+           * the aria-label carries the full wording for AT. */}
+          <span className="hidden sm:inline">
+            {theme === "dark" ? "Light" : "Dark"} theme
+          </span>
         </Button>
       </div>
     </header>

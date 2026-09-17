@@ -28,14 +28,15 @@ export function SearchResultCard({ result, queryTerms = [], className }: SearchR
     <Card className={className}>
       <CardContent className="space-y-2 p-5">
         <div className="flex items-start justify-between gap-3">
-          <h3 className="font-scroll text-base font-semibold leading-tight">
+          {/* h2: card headings sit one level under the page h1 (WCAG 1.3.1). */}
+          <h2 className="font-scroll text-base font-semibold leading-tight">
             <Link
               to={`/memories/${result.id}`}
-              className="hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+              className="inline-flex min-h-6 items-center hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
             >
               {highlight(result.title || result.id, queryTerms)}
             </Link>
-          </h3>
+          </h2>
           <span className="flex shrink-0 items-center gap-1.5">
             <Badge variant={TYPE_VARIANT[result.search_type]}>{result.search_type}</Badge>
             <span

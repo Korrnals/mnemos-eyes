@@ -23,6 +23,13 @@ export function Shell() {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
+      {/* Bypass the repeated nav (WCAG 2.4.1): visible only on keyboard focus. */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-well focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-float"
+      >
+        Skip to content
+      </a>
       <Sidebar collapsed={collapsed} onToggle={toggle} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar title={title} />

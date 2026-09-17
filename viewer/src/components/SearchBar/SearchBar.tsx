@@ -102,7 +102,7 @@ export function SearchBar({
                 "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors duration-instant",
                 "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-iris-bright",
                 searchType === option.value
-                  ? "border-iris bg-iris-dim text-iris-bright"
+                  ? "border-iris bg-iris/15 text-iris-bright" // AA in both themes
                   : "border-border-subtle text-foreground-secondary hover:bg-elevated",
               )}
             >

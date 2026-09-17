@@ -18,7 +18,7 @@ import { useSearch } from "@/hooks/useSearch";
  * client-side filters over the server-decided per-hit types (mnemos 4.1 has
  * no client-selectable mode param).
  */
-const DEBOUNCE_MS = 250;
+const DEBOUNCE_MS = 300; // perf budget: ≥300 ms before a keystroke fires the query
 const SEARCH_LIMIT = 20;
 
 export function SearchPage() {
@@ -88,6 +88,8 @@ export function SearchPage() {
   if (!hasQuery) {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-3xl flex-col items-center justify-center gap-8">
+        {/* The hero is imagery + a form; the h1 keeps one heading per page. */}
+        <h1 className="sr-only">Search</h1>
         {/* §8.1 hero: single breathing iris, glow on (motion budget). */}
         <div className="flex flex-col items-center gap-6 text-center">
           <IrisLogo size={160} glow breathing />
@@ -100,6 +102,7 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      <h1 className="sr-only">Search</h1>
       <div>{searchBar}</div>
       <SearchResults query={urlQuery} type={type} />
     </div>

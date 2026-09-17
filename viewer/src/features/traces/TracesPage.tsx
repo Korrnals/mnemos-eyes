@@ -13,7 +13,7 @@ import { useTraces } from "@/hooks/useTraces";
  * commits into the URL (debounced) — no sync effects, URL stays the source
  * of truth.
  */
-const DEBOUNCE_MS = 250;
+const DEBOUNCE_MS = 300; // same commit budget as the search page keystrokes
 
 export function TracesPage() {
   const [searchParams, setSearchParams] = useSearchParams();

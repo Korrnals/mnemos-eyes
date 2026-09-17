@@ -8,8 +8,10 @@ const badgeVariants = cva(
     variants: {
       variant: {
         default: "border-transparent bg-elevated text-foreground-secondary",
-        iris: "border-transparent bg-iris-dim text-iris-bright",
-        confidence: "border-transparent bg-confidence-dim text-confidence",
+        // 15% tints keep the accent hue while the text clears 4.5:1 in both
+        // themes (T7 audit; bg-confidence-dim combos failed AA).
+        iris: "border-transparent bg-iris/15 text-iris-bright",
+        confidence: "border-transparent bg-confidence/15 text-confidence",
         outline: "border-border text-foreground-secondary",
         success: "border-transparent bg-success/15 text-success",
         error: "border-transparent bg-error/15 text-error",
