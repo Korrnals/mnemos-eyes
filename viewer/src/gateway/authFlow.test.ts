@@ -47,7 +47,9 @@ function mockMnemosServer({ totpEnrolled, validCode }: MockMnemosOptions) {
     const auth = init?.headers as Record<string, string> | undefined;
     const bearer = auth?.Authorization?.replace(/^Bearer\s+/i, "") ?? null;
     state.calls.push({ url: path, method, authorized: bearer !== null });
-    const body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : {};
+    const body = init?.body
+      ? (JSON.parse(init.body as string) as Record<string, unknown>)
+      : {};
 
     if (method === "POST" && path === "/api/auth/login") {
       const token = typeof body.token === "string" ? body.token : "";
@@ -55,8 +57,9 @@ function mockMnemosServer({ totpEnrolled, validCode }: MockMnemosOptions) {
         return Response.json({ detail: "Invalid token format" }, { status: 401 });
       }
       if (!totpEnrolled) {
-        state.sessions.add(token);
-        return Response.json({ session: `sess-${token}`, expires_at: "2026-12-31T00:00:00Z" });
+        const session = `sess-${token}`;
+        state.sessions.add(session);
+        return Response.json({ session, expires_at: "2026-12-31T00:00:00Z" });
       }
       const challengeId = `ch-${state.challenges.size + 1}`;
       state.challenges.set(challengeId, token);
@@ -67,11 +70,14 @@ function mockMnemosServer({ totpEnrolled, validCode }: MockMnemosOptions) {
       const challengeId = String(body.challenge_id ?? "");
       const code = String(body.code ?? "");
       const token = state.challenges.get(challengeId);
-      if (!token) return Response.json({ detail: "Unknown challenge" }, { status: 404 });
-      if (code !== validCode) return Response.json({ detail: "Bad code" }, { status: 401 });
+      if (!token)
+        return Response.json({ detail: "Unknown challenge" }, { status: 404 });
+      if (code !== validCode)
+        return Response.json({ detail: "Bad code" }, { status: 401 });
       state.challenges.delete(challengeId);
-      state.sessions.add(token);
-      return Response.json({ session: `sess-${token}`, expires_at: "2026-12-31T00:00:00Z" });
+      const session = `sess-${token}`;
+      state.sessions.add(session);
+      return Response.json({ session, expires_at: "2026-12-31T00:00:00Z" });
     }
 
     if (method === "POST" && path === "/api/auth/logout") {
