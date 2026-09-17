@@ -995,14 +995,15 @@ body {
     .notif-clear, .ntab, .mtab, .stab, .mem-hit button,
     .store-row, .group-row, .pulse-item, .dd-item, .person-row, .notif-item,
     .pulse-proj-head, .col-group-head, .report-card,
-    .archive-link, .task-title, .spec-file-head, .mini-avatar, button.tl-head) {
+    .archive-link, .task-title, .spec-file-head, .mini-avatar, button.tl-head,
+    .inbox-entry, .inbox-card.adopted) {
   transition: color var(--duration-fast), background var(--duration-fast),
               border-color var(--duration-fast), transform var(--duration-instant);
 }
 
 /* quiet bordered controls (buttons, tabs): iris ripple on hover + keyboard focus */
 :is(.btn, .mbtn, .rail-add, .f-clear, .f-toggle, .theme-toggle, .bell, .drawer-close,
-    .notif-clear, .ntab, .mtab, .stab, .topbar-newtask, .col-group-head):is(:hover, :focus-visible) {
+    .notif-clear, .ntab, .mtab, .stab, .topbar-newtask, .col-group-head, .inbox-entry):is(:hover, :focus-visible) {
   border-color: var(--color-border-iris);
   color: var(--color-iris-bright);
 }
@@ -1013,7 +1014,7 @@ body {
 
 /* rail rows / list cards: iris border + surface tint */
 :is(.store-row, .group-row, .pulse-item, .dd-item, .person-row, .notif-item,
-    .pulse-proj-head, .report-card):hover {
+    .pulse-proj-head, .report-card, .inbox-card.adopted):hover {
   border-color: var(--color-border-iris);
   background: var(--color-bg-base);
 }
@@ -1049,9 +1050,86 @@ body {
   outline-offset: 2px;
 }
 
+/* ── AGG-1: inbox — tasks aggregated from memory stores ──────────── */
+/* Rail entry: one quiet bordered row, mirrors .archive-link prominence. */
+.inbox-entry {
+  display: flex; align-items: center; gap: var(--space-2);
+  width: 100%; text-align: left;
+  background: none; border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md); cursor: pointer;
+  color: var(--color-text-secondary); font-size: var(--text-xs);
+  padding: var(--space-2) var(--space-3);
+}
+.inbox-entry-glyph { color: var(--color-iris-bright); flex: none; }
+.inbox-entry-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Controls row reuses .arch-controls layout; scan button rides .btn. */
+.inbox-show-adopted {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  font-size: var(--text-xs); color: var(--color-text-secondary);
+  cursor: pointer; white-space: nowrap;
+}
+.inbox-controls .inbox-refresh { margin-left: auto; white-space: nowrap; }
+
+.inbox-card {
+  border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+  background: var(--color-bg-elevated); padding: var(--space-3);
+}
+.inbox-card-top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.inbox-date {
+  margin-left: auto; font-size: 10px;
+  color: var(--color-text-muted); white-space: nowrap;
+}
+.inbox-title {
+  margin: var(--space-2) 0 0; font-size: var(--text-sm);
+  font-weight: var(--weight-medium); color: var(--color-text-primary);
+  line-height: 1.4;
+}
+/* excerpt capped at two lines (AGG-1 spec) */
+.inbox-excerpt {
+  margin: var(--space-1) 0 0; font-size: var(--text-xs);
+  color: var(--color-text-secondary); line-height: 1.5;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.inbox-foot {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: var(--space-2); margin-top: var(--space-2);
+}
+.inbox-foot .inbox-adopt { margin-left: auto; }
+.inbox-foot .chip-spec { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* stale: memory not found on the last scan — dimmed like superseded
+   reports; the note stays secondary (not muted) for readability. */
+.inbox-card.stale { opacity: .55; }
+.inbox-stale-note { font-size: 10px; color: var(--color-text-secondary); font-style: italic; }
+/* adopted: the card itself opens the native task (keyboard included) */
+.inbox-card.adopted { cursor: pointer; }
+.inbox-adopted-chip {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+}
+/* refresh indicator: button stays disabled while the scan runs */
+.inbox-spin {
+  display: inline-block; width: 10px; height: 10px;
+  margin-right: 6px; vertical-align: -1px;
+  border: 2px solid var(--color-border-iris);
+  border-top-color: var(--color-iris-bright);
+  border-radius: 50%;
+  animation: inboxSpin 800ms linear infinite;
+}
+@keyframes inboxSpin { to { transform: rotate(360deg); } }
+
+/* action button inside a toast (AGG-1 adopt → «открыть») */
+.toast-action {
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+}
+
 /* ── Reduced motion (FE-5): tokens zero the durations; stop the looping
    and entrance animations outright so nothing ever moves unprompted. ── */
 @media (prefers-reduced-motion: reduce) {
   .iris .iris-pupil, .board.enter .task, .toast { animation: none; }
   .modal, .modal-backdrop, .drawer, .drawer-backdrop { transition: none; }
+  .inbox-spin { animation: none; }
 }
