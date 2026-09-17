@@ -16,8 +16,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from server.store import Store
+from server.task_inbox import record_from_memory
 
-QUEUE_TAG_BODY = {"query": "*", "tags": ["task:queue"], "limit": 100}
+# EXACT drill parity (prod 1.3.0 regression): same body the tag drill sends
+QUEUE_TAG_BODY = {"query": "*", "tags": ["task:queue"], "limit": 25}
 
 
 def hit(memory_id: str, title: str = "queue item", content: str = "body",
@@ -145,6 +147,50 @@ class TestMirror:
         assert store.mark_inbox_adopted("nope", "t-x") is False
 
 
+# ------------------------------------------- drill hit shape (prod 1.3.0 fix)
+class TestDrillHitShape:
+    """Prod 1.3.0 regression: search hits come in the drill form —
+    ``created_at`` may be absent or null and ``excerpt`` may exist without
+    full ``content``. The mirror must still take the record."""
+
+    def test_hit_without_created_at_is_mirrored(self):
+        rec = record_from_memory("srv", {
+            "id": "4d20edbf-4f22-4fdc-aabd-5f1c1b584a2e",
+            "title": "queue probe", "tags": ["task:queue", "severity:high"],
+        })
+        assert rec is not None
+        assert rec["source_created_at"] == ""  # absent -> '', never a reject
+        assert rec["priority"] == "high"
+        assert rec["excerpt"] == ""
+
+    def test_hit_created_at_null_is_mirrored(self):
+        rec = record_from_memory("srv", {"id": "m1", "created_at": None,
+                                         "tags": ["task:queue"]})
+        assert rec is not None
+        assert rec["source_created_at"] == ""
+
+    def test_excerpt_field_preferred_over_content(self):
+        rec = record_from_memory("srv", {
+            "id": "m1", "excerpt": "short preview",
+            "content": "z" * 500, "tags": ["task:queue"],
+        })
+        assert rec["excerpt"] == "short preview"
+
+    def test_excerpt_falls_back_to_content_capped(self):
+        rec = record_from_memory("srv", {
+            "id": "m1", "content": "c" * 500, "tags": ["task:queue"]})
+        assert rec["excerpt"] == "c" * 300
+
+    def test_title_falls_back_to_content(self):
+        rec = record_from_memory("srv", {"id": "m1",
+                                         "content": "title here",
+                                         "tags": ["task:queue"]})
+        assert rec["title"] == "title here"
+
+    def test_hit_without_id_is_rejected(self):
+        assert record_from_memory("srv", {"title": "no id"}) is None
+
+
 # ------------------------------------------------------------ scan + GET API
 class TestScanEngine:
     def test_refresh_counters_and_query_shape(self, inbox_env, client, auth,
@@ -239,6 +285,48 @@ class TestScanEngine:
         assert result == {"scanned_servers": 0, "found": 0, "new": 0,
                           "errors": []}
         assert store.inbox_refreshed_at() != ""
+
+    def test_drill_form_hits_are_mirrored(self, inbox_env, client, auth,
+                                          fake_mnemos):
+        """Prod 1.3.0 regression: hits without created_at, with excerpt —
+        still mirrored, counters honest."""
+        fake_mnemos.search_results = [{
+            "id": "4d20edbf-4f22-4fdc-aabd-5f1c1b584a2e",
+            "title": "cluster probe", "tags": ["task:queue", "severity:high"],
+            "excerpt": "probe body", "created_at": None,
+        }]
+        r = client.post("/api/tasks/inbox/refresh", headers=auth)
+        assert r.json() == {"scanned_servers": 1, "found": 1, "new": 1,
+                            "errors": []}
+        item = client.get("/api/tasks/inbox").json()["items"][0]
+        assert item["memory_id"] == "4d20edbf-4f22-4fdc-aabd-5f1c1b584a2e"
+        assert item["excerpt"] == "probe body"
+        assert item["created_at"] == ""
+        assert item["priority"] == "high"
+        # re-scan: same record, no duplicate mirror row
+        r2 = client.post("/api/tasks/inbox/refresh", headers=auth)
+        assert r2.json()["found"] == 1 and r2.json()["new"] == 0
+
+    def test_e2e_refresh_inbox_adopt_conflict(self, inbox_env, client, auth,
+                                              fake_mnemos):
+        """Full path: one new record -> refresh -> inbox 1 -> adopt ->
+        re-adopt 409 with the same task_id + record deduped out of inbox."""
+        fake_mnemos.search_results = [hit(
+            "m-e2e", title="e2e work", content="full description",
+            tags=["task:queue", "project:mnemos", "severity:high"],
+        )]
+        assert client.post("/api/tasks/inbox/refresh",
+                           headers=auth).status_code == 200
+        assert client.get("/api/tasks/inbox").json()["count"] == 1
+        first = client.post("/api/tasks/inbox/m-e2e/adopt", headers=auth)
+        assert first.status_code == 201
+        task_id = first.json()["id"]
+        # re-adopt: 409 naming the native task
+        second = client.post("/api/tasks/inbox/m-e2e/adopt", headers=auth)
+        assert second.status_code == 409
+        assert second.json()["task_id"] == task_id
+        # dedup: the adopted record never shows up in the inbox again
+        assert client.get("/api/tasks/inbox").json()["count"] == 0
 
 
 class TestInboxGet:

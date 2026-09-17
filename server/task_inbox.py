@@ -28,7 +28,12 @@ from .store import Store
 log = logging.getLogger("vesmaro.inbox")
 
 INBOX_TAG = "task:queue"
-SCAN_LIMIT = 100            # records requested per server, per scan
+# Drill parity (prod 1.3.0 finding): every mnemos caller in this codebase
+# caps /search at 25 hits (mnemos_client.search, tag drill, agent activity)
+# and the drill shape is the only one proven to return task:queue records.
+# A limit above the cap degraded the scan (prod: 9 arbitrary hits instead of
+# the 38-tag listing). Keep this EXACTLY equal to the drill request.
+SCAN_LIMIT = 25
 SCAN_INTERVAL_SECONDS = 300.0
 SCAN_TIMEOUT_SECONDS = 15.0
 EXCERPT_CHARS = 300
@@ -68,9 +73,16 @@ def _tag_value(tags: list[str], prefix: str) -> str:
 
 def record_from_memory(server_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
     """Mirror record from one mnemos search hit — data fields only (SEC-4).
-    None for hits without an id (cannot be mirrored / deduplicated)."""
+
+    Built for the DRILL hit shape (prod 1.3.0 finding): hits carry
+    ``created_at`` that may be absent or null (→ ``source_created_at=''``,
+    the record is still mirrored) and an ``excerpt`` field that may exist
+    WITHOUT full ``content`` — prefer it, fall back to content, cap at
+    EXCERPT_CHARS. Returns None only for hits without an id (nothing to
+    key the mirror row / dedup on)."""
     memory_id = item.get("id")
     if not memory_id:
+        log.debug("inbox scan on %s: hit without id skipped", server_name)
         return None
     tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
     content = item.get("content") or ""
@@ -80,7 +92,7 @@ def record_from_memory(server_name: str, item: dict[str, Any]) -> dict[str, Any]
         "server": server_name,
         "project": _tag_value(tags, "project:"),
         "title": item.get("title") or content[:80],
-        "excerpt": content[:EXCERPT_CHARS],
+        "excerpt": (item.get("excerpt") or content)[:EXCERPT_CHARS],
         "tags": tags,
         "priority": SEVERITY_MAP.get(_tag_value(tags, "severity:"), "normal"),
         "specialist": SPEC_MAP.get(owner, f"@{owner}" if owner else ""),
