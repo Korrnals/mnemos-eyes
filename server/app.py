@@ -33,7 +33,7 @@ from .security import (
     validate_memory_url,
     validate_token_ref,
 )
-from .store import Store, VALID_STATUSES
+from .store import REPORT_KINDS, Store, TASK_STATUSES, VALID_STATUSES
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
 DB_PATH = DATA_DIR / "board.db"
@@ -173,6 +173,8 @@ class TaskCreate(BaseModel):
     summary: str = ""
     spec: str = ""
     col: str = "open"
+    # BE-10: optional explicit workflow status; defaults to the col map.
+    status: str | None = None
     env: str = "unknown"
     agents: list[str] = []
     specialists: list[str] = []
@@ -185,6 +187,9 @@ class TaskPatch(BaseModel):
     title: str | None = None
     summary: str | None = None
     spec: str | None = None
+    # BE-10: full workflow dictionary (incl. `withdrawn`, which has no
+    # board column); lives until the next column move — see store.move_task.
+    status: str | None = None
     env: str | None = None
     agents: list[str] | None = None
     specialists: list[str] | None = None
@@ -256,6 +261,8 @@ class TaskOut(_ApiModel):
     created_at: str
     updated_at: str
     archived: int = 0
+    status: str                     # BE-10: workflow dictionary value — store always returns it post-migration
+    archived_from: str = ""         # BE-11b: pre-archive column
 
 
 class BoardOut(_ApiModel):
@@ -380,6 +387,56 @@ class NotificationReadOut(_ApiModel):
     unread: int
 
 
+# Agent report contract (BE-11a). Body is capped at 16K server-side; kind is
+# the two-value report dictionary. A second kind="final" supersedes previous
+# live finals — history is kept, flagged with superseded=true.
+class ReportCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=16384)
+    kind: str = "intermediate"  # intermediate | final
+    agent: str = Field(default="", max_length=120)
+
+
+class ReportOut(_ApiModel):
+    id: int
+    task_id: str
+    kind: str
+    agent: str
+    body: str
+    superseded: bool
+    created_at: str
+
+
+class ReportCreatedOut(_ApiModel):
+    ok: bool
+    report: ReportOut
+    superseded: list[int] = []  # ids of previous finals marked superseded
+
+
+class ReportsOut(_ApiModel):
+    ok: bool
+    task_id: str
+    count: int
+    items: list[ReportOut]
+
+
+class UnarchiveOut(_ApiModel):
+    ok: bool
+    task: TaskOut | None = None
+
+
+# Archive v2 (BE-11b): flat filtered page + per-project grouping over the
+# FULL matching set (not the page), so the v1 teaser counts stay stable
+# under pagination. ``count`` is the legacy total-matching key.
+class ArchiveOut(_ApiModel):
+    ok: bool
+    count: int
+    total: int
+    limit: int
+    offset: int
+    items: list[TaskOut]
+    projects: dict[str, list[dict[str, Any]]]
+
+
 # Specialist profile contract (BE-9). ``sections`` carry ONLY what the
 # agent's own .md owns or references; plugin-level material available to
 # every agent of the plugin lives in ``shared`` (shared=true, scope=
@@ -447,7 +504,14 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/api/board")
-async def board() -> BoardOut:
+async def board(status: str = "") -> BoardOut:
+    """Board projection; BE-10 optional ``?status=`` filter over the
+    workflow dictionary (422 on unknown values). ``counts`` always describe
+    the whole board, not the filtered view."""
+    if status:
+        if status not in TASK_STATUSES:
+            raise HTTPException(422, f"invalid status: {status}")
+        return store.board(status=status)
     return store.board()
 
 
@@ -1054,17 +1118,46 @@ async def notifications_read(
 
 
 @app.get("/api/archive")
-async def archive() -> dict[str, Any]:
-    tasks = store.archived_tasks()
-    # group by project, then by month of updated_at
+async def archive(
+    q: str = "",
+    status: str = "",
+    col: str = "",
+    agent: str = "",
+    project: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> ArchiveOut:
+    """Archive v2 (BE-11b): ``q`` LIKE over title/summary, ``status`` /
+    ``col`` exact, ``agent`` a member of the agents array, ``project``
+    exact; ``limit``/``offset`` paginate ``items`` while ``total`` (and the
+    legacy ``count`` key) always report the full matching set. ``projects``
+    grouping also covers the full matching set so v1 teaser counts stay
+    stable under pagination."""
+    if status and status not in TASK_STATUSES:
+        raise HTTPException(422, f"invalid status: {status}")
+    if col and col not in VALID_STATUSES:
+        raise HTTPException(422, f"invalid col: {col}")
+    limit = max(0, min(limit, 200))
+    offset = max(0, offset)
+    rows = store.archived_tasks(q=q.strip(), status=status, col=col,
+                                agent=agent.strip(), project=project)
+    total = len(rows)
     by_project: dict[str, list[dict[str, Any]]] = {}
-    for t in tasks:
+    for t in rows:
         by_project.setdefault(t.get("project") or "без проекта", []).append({
             "id": t["id"], "title": t["title"], "col": t["col"],
             "agents": t.get("agents", []), "env": t.get("env"),
             "updated_at": t.get("updated_at"),
         })
-    return {"ok": True, "count": len(tasks), "projects": by_project}
+    return {
+        "ok": True,
+        "count": total,   # legacy key (v1 SPA reads it)
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": rows[offset:offset + limit],
+        "projects": by_project,
+    }
 
 
 @app.post("/api/tasks/{task_id}/archive")
@@ -1077,12 +1170,68 @@ async def archive_task(task_id: str, request: Request) -> OkOut:
 
 
 @app.post("/api/tasks/{task_id}/unarchive")
-async def unarchive_task(task_id: str, request: Request) -> OkOut:
+async def unarchive_task(task_id: str, request: Request) -> UnarchiveOut:
+    """Restore an archived task to its pre-archive column (BE-11b); rows
+    archived before ``archived_from`` existed fall back to ``open``."""
     _guard_write(request)
-    if not store.unarchive_task(task_id):
+    task = store.unarchive_task(task_id)
+    if task is None:
         raise HTTPException(404, "task not found or not archived")
     _notify_and_broadcast("work", f"{task_id}: из архива", "задача возвращена на доску", task_id, {"kind": "task.unarchived", "task_id": task_id})
-    return {"ok": True}
+    return {"ok": True, "task": task}
+
+
+# ------------------------------------------------------- agent reports (BE-11a)
+# Same per-client sliding-window pattern as task-drafts; a friendlier budget
+# because agents report several times per task (intermediates + final).
+_REPORT_RATE_LIMIT = 30         # requests per client ...
+_REPORT_RATE_WINDOW = 60.0      # ... per sliding window (seconds)
+_report_limiter = RateLimiter(limit=_REPORT_RATE_LIMIT, window=_REPORT_RATE_WINDOW)
+
+
+@app.post("/api/tasks/{task_id}/reports", status_code=201)
+async def create_task_report(task_id: str, body: ReportCreate,
+                             request: Request) -> ReportCreatedOut:
+    """Append an agent report to a task. 404 on unknown task; 422 on an
+    unknown kind or an empty body; 429 when the per-client rate limit is
+    exhausted. A second kind="final" supersedes previous live finals
+    (history kept, flagged)."""
+    _guard_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _report_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"task reports rate limit exceeded "
+            f"({_REPORT_RATE_LIMIT} per {_REPORT_RATE_WINDOW:.0f}s per client)",
+        )
+    if body.kind not in REPORT_KINDS:
+        raise HTTPException(422, f"unknown report kind: {body.kind}")
+    if not body.body.strip():
+        raise HTTPException(422, "report body is empty")
+    try:
+        added = store.add_report(task_id, body.body, body.kind, body.agent)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if added is None:
+        raise HTTPException(404, "task not found")
+    report, superseded_ids = added
+    _notify_and_broadcast(
+        "work", f"{task_id}: отчёт агента ({body.kind})",
+        report["body"][:120], task_id,
+        {"kind": "report", "task_id": task_id,
+         "report": {**report, "body": report["body"][:200]}},
+    )
+    return {"ok": True, "report": report, "superseded": superseded_ids}
+
+
+@app.get("/api/tasks/{task_id}/reports")
+async def list_task_reports(task_id: str) -> ReportsOut:
+    """Chronological report history for a task (oldest first)."""
+    reports = store.list_reports(task_id)
+    if reports is None:
+        raise HTTPException(404, "task not found")
+    return {"ok": True, "task_id": task_id,
+            "count": len(reports), "items": reports}
 
 
 # -------------------------------------------------------- specialist profile

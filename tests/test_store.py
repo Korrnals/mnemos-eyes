@@ -23,6 +23,7 @@ from server.store import COLUMNS, VALID_ENVS, VALID_STATUSES, Store
 EXPECTED_TABLES = {
     "board_meta", "tasks", "events", "memory_servers", "memory_groups",
     "notifications", "group_log", "server_log", "profile_cache",
+    "task_reports",  # BE-11a
 }
 
 
@@ -168,17 +169,21 @@ class TestTaskCrud:
 # ------------------------------------------------------------------ archive
 class TestArchive:
     def test_archive_unarchive_roundtrip(self, tmp_path):
+        # BE-11b: unarchive returns the restored task (back in its
+        # pre-archive column), or None when there is nothing to restore.
         store = Store(tmp_path / "board.db")
-        task = store.create_task({"title": "arch"})
+        task = store.create_task({"title": "arch", "col": "in-progress"})
 
         assert store.archive_task(task["id"]) is True
         assert task["id"] not in [t["id"] for t in store.board()["tasks"]]
         assert task["id"] in [t["id"] for t in store.archived_tasks()]
         assert store.archive_task(task["id"]) is False, "double archive"
 
-        assert store.unarchive_task(task["id"]) is True
+        restored = store.unarchive_task(task["id"])
+        assert restored is not None
+        assert restored["col"] == "in-progress"
         assert task["id"] in [t["id"] for t in store.board()["tasks"]]
-        assert store.unarchive_task(task["id"]) is False, "double unarchive"
+        assert store.unarchive_task(task["id"]) is None, "double unarchive"
 
 
 # ------------------------------------------------------------ notifications

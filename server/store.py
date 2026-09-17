@@ -28,6 +28,13 @@ from .security import mask_secrets
 # workflow state machine so a task can graduate into a memory later.
 COLUMNS: tuple[str, ...] = ("open", "in-progress", "blocked", "resolved", "done")
 VALID_STATUSES = frozenset(COLUMNS)
+# BE-10: per-task status dictionary = the mnemos workflow state machine.
+# Superset of COLUMNS: `withdrawn` is a terminal mnemos status with no board
+# column (cancelled tasks are archived instead — WF-1 proposal §7). Validated
+# on create and PATCH; `col` remains the kanban projection (see move_task).
+TASK_STATUSES = frozenset({*COLUMNS, "withdrawn"})
+# BE-11a: agent report kinds for a task.
+REPORT_KINDS = ("intermediate", "final")
 VALID_ENVS = frozenset({"cluster", "laptop", "local", "cloud", "unknown"})
 
 _SCHEMA = """
@@ -107,6 +114,16 @@ CREATE TABLE IF NOT EXISTS server_log (
 CREATE INDEX IF NOT EXISTS idx_tasks_col ON tasks (col, position);
 CREATE INDEX IF NOT EXISTS idx_events_id ON events (id);
 CREATE INDEX IF NOT EXISTS idx_server_log ON server_log (server, id);
+CREATE TABLE IF NOT EXISTS task_reports (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id    TEXT NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('intermediate','final')),
+    agent      TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL,
+    superseded INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_reports_task ON task_reports (task_id, id);
 """
 
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
@@ -157,11 +174,29 @@ class Store:
     })
 
     def _migrate(self, db: sqlite3.Connection) -> None:
-        # schema evolution for pre-0.7 databases
+        # schema evolution for pre-0.7 databases.
+        # IMPORTANT: additive ALTER TABLE only — never bump SEED_VERSION for
+        # a column addition. The seed-version check below WIPES all tasks
+        # when the stored version differs (workflow-lifecycle-proposal §7),
+        # so schema extensions must not ride on it.
         cols = {r["name"] for r in db.execute(
             "PRAGMA table_info(tasks)").fetchall()}
         if "archived" not in cols:
             db.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        if "status" not in cols:
+            # BE-10: per-task workflow status. Existing rows are backfilled
+            # from their column (identity map: every board column is also a
+            # valid status). Backfill runs exactly once, right after the
+            # ALTER — later boots must never overwrite an explicitly PATCHed
+            # status with the column value.
+            db.execute("ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
+            db.execute("UPDATE tasks SET status = col")
+        if "archived_from" not in cols:
+            # BE-11b: column a task lived in when it was archived, so
+            # unarchive can restore it. No backfill: rows archived before
+            # this column existed get archived_from='' and fall back to
+            # 'open' on unarchive (documented fallback).
+            db.execute("ALTER TABLE tasks ADD COLUMN archived_from TEXT NOT NULL DEFAULT ''")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
@@ -184,13 +219,14 @@ class Store:
         for pos, task in enumerate(SEED_TASKS):
             db.execute(
                 """INSERT INTO tasks
-                       (id, col, position, title, summary, spec, agents,
-                        specialists, env, project, memory_ids, mnemos_tags,
-                        created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       (id, col, status, position, title, summary, spec,
+                        agents, specialists, env, project, memory_ids,
+                        mnemos_tags, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task["id"],
                     task["col"],
+                    task["col"],  # status derives from col (BE-10)
                     pos,
                     task["title"],
                     task["summary"],
@@ -207,11 +243,18 @@ class Store:
             )
 
     # ----------------------------------------------------------------- read
-    def board(self) -> dict[str, Any]:
+    def board(self, status: str | None = None) -> dict[str, Any]:
+        """Board projection. Optional ``status`` filter (BE-10) narrows the
+        task list; ``counts`` always describe the whole board, not the
+        filtered view."""
         with self._lock, self._conn() as db:
-            tasks = [dict(r) for r in db.execute(
-                "SELECT * FROM tasks WHERE archived=0 ORDER BY col, position"
-            ).fetchall()]
+            q = "SELECT * FROM tasks WHERE archived=0"
+            params: tuple[Any, ...] = ()
+            if status is not None:
+                q += " AND status=?"
+                params = (status,)
+            q += " ORDER BY col, position"
+            tasks = [dict(r) for r in db.execute(q, params).fetchall()]
             stats = db.execute(
                 """SELECT col, COUNT(*) AS n FROM tasks GROUP BY col"""
             ).fetchall()
@@ -240,6 +283,15 @@ class Store:
         col = payload.get("col", "open")
         if col not in VALID_STATUSES:
             raise ValueError(f"invalid col: {col}")
+        # BE-10: status defaults to the column map; an explicit status is
+        # honored when provided (validated against the workflow dictionary).
+        # Only None means "not provided" — an explicit empty string is
+        # garbage and must 422, not silently fall back to the column.
+        status = payload.get("status")
+        if status is None:
+            status = col
+        if status not in TASK_STATUSES:
+            raise ValueError(f"invalid status: {status}")
         env = payload.get("env", "unknown")
         if env not in VALID_ENVS:
             raise ValueError(f"invalid env: {env}")
@@ -254,12 +306,12 @@ class Store:
             ).fetchone()["p"]
             db.execute(
                 """INSERT INTO tasks
-                       (id, col, position, title, summary, spec, agents,
-                        specialists, env, project, memory_ids, mnemos_tags,
-                        created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       (id, col, status, position, title, summary, spec,
+                        agents, specialists, env, project, memory_ids,
+                        mnemos_tags, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    task_id, col, pos, payload["title"],
+                    task_id, col, status, pos, payload["title"],
                     payload.get("summary", ""), payload.get("spec", ""),
                     json.dumps(payload.get("agents", [])),
                     json.dumps(payload.get("specialists", [])),
@@ -269,10 +321,16 @@ class Store:
                     now, now,
                 ),
             )
-            self._log(db, "task.created", task_id, {"col": col})
+            self._log(db, "task.created", task_id, {"col": col, "status": status})
         return self.task(task_id)  # type: ignore[return-value]
 
     def move_task(self, task_id: str, col: str, position: int | None = None) -> dict[str, Any] | None:
+        """Kanban move (BE-10 v1 semantics): moving a column synchronously
+        re-derives ``status`` from the column map. A status set by a manual
+        PATCH therefore lives only until the next move — that keeps the
+        ``?status=`` filter honest with respect to the kanban state.
+        (Decision documented on BE-10; per-status persistence independent of
+        columns is deferred to the WF-1 transition-machine phase.)"""
         if col not in VALID_STATUSES:
             raise ValueError(f"invalid col: {col}")
         with self._lock, self._conn() as db:
@@ -285,15 +343,15 @@ class Store:
                     (col,),
                 ).fetchone()["p"]
             db.execute(
-                "UPDATE tasks SET col=?, position=?, updated_at=? WHERE id=?",
-                (col, position, _now(), task_id),
+                "UPDATE tasks SET col=?, status=?, position=?, updated_at=? WHERE id=?",
+                (col, col, position, _now(), task_id),
             )
             self._log(db, "task.moved", task_id, {"from": row["col"], "to": col})
         return self.task(task_id)
 
     def update_task(self, task_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
         allowed = {"title", "summary", "spec", "agents", "specialists",
-                   "env", "project", "memory_ids", "mnemos_tags"}
+                   "env", "project", "memory_ids", "mnemos_tags", "status"}
         fields: dict[str, Any] = {}
         for key, value in patch.items():
             if key not in allowed:
@@ -303,6 +361,13 @@ class Store:
             elif key == "env":
                 if value not in VALID_ENVS:
                     raise ValueError(f"invalid env: {value}")
+                fields[key] = value
+            elif key == "status":
+                # BE-10: full workflow dictionary, incl. `withdrawn` which
+                # has no board column. Lives until the next move (see
+                # move_task).
+                if value not in TASK_STATUSES:
+                    raise ValueError(f"invalid status: {value}")
                 fields[key] = value
             else:
                 fields[key] = value
@@ -326,6 +391,9 @@ class Store:
             cur = db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
             deleted = cur.rowcount > 0
             if deleted:
+                # reports are payload data attached to the task (unlike the
+                # events audit log) — they do not outlive it
+                db.execute("DELETE FROM task_reports WHERE task_id=?", (task_id,))
                 self._log(db, "task.deleted", task_id, {})
         return deleted
 
@@ -575,32 +643,139 @@ class Store:
 
     # ------------------------------------------------------------- archive
     def archive_task(self, task_id: str) -> bool:
+        """Archive a task, remembering its current column in ``archived_from``
+        (BE-11b) so unarchive can put it back."""
         with self._lock, self._conn() as db:
-            cur = db.execute(
-                "UPDATE tasks SET archived=1, updated_at=? WHERE id=? AND archived=0",
+            row = db.execute(
+                "SELECT col FROM tasks WHERE id=? AND archived=0",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            db.execute(
+                "UPDATE tasks SET archived=1, archived_from=col, updated_at=? WHERE id=?",
                 (_now(), task_id),
             )
-            done = cur.rowcount > 0
-            if done:
-                self._log(db, "task.archived", task_id, {})
-        return done
+            self._log(db, "task.archived", task_id, {"from": row["col"]})
+        return True
 
-    def unarchive_task(self, task_id: str) -> bool:
+    def unarchive_task(self, task_id: str) -> dict[str, Any] | None:
+        """Restore an archived task (BE-11b). It returns to its pre-archive
+        column (``archived_from``); rows archived before that column existed
+        (``archived_from=''``) fall back to ``open``. Status re-syncs to the
+        restored column (same semantics as move). Returns the restored task
+        or None when the id is unknown / not archived."""
         with self._lock, self._conn() as db:
-            cur = db.execute(
-                "UPDATE tasks SET archived=0, updated_at=? WHERE id=? AND archived=1",
-                (_now(), task_id),
+            row = db.execute(
+                "SELECT archived, archived_from FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if row is None or not row["archived"]:
+                return None
+            col = row["archived_from"] or "open"
+            db.execute(
+                "UPDATE tasks SET archived=0, col=?, status=?, updated_at=? WHERE id=?",
+                (col, col, _now(), task_id),
             )
-            return cur.rowcount > 0
+            self._log(db, "task.unarchived", task_id, {"to": col})
+        return self.task(task_id)
 
-    def archived_tasks(self) -> list[dict[str, Any]]:
+    def archived_tasks(self, q: str = "", status: str = "", col: str = "",
+                       agent: str = "", project: str = "") -> list[dict[str, Any]]:
+        """Archive v2 (BE-11b): full filtered listing, newest first.
+        ``q`` is a LIKE match on title/summary; ``agent`` matches a member
+        of the agents JSON array. Pagination (limit/offset) is applied by
+        the API layer — the archive is small and the API also needs the
+        unpaginated set for the per-project grouping."""
+        where = ["archived=1"]
+        params: list[Any] = []
+        if q:
+            like = f"%{q}%"
+            where.append("(title LIKE ? OR summary LIKE ?)")
+            params += [like, like]
+        if status:
+            where.append("status=?")
+            params.append(status)
+        if col:
+            where.append("col=?")
+            params.append(col)
+        if agent:
+            # exact member match inside the JSON array: "agent-name"
+            where.append(r"agents LIKE ?")
+            params.append(f'%"{agent}"%')
+        if project:
+            where.append("project=?")
+            params.append(project)
+        cond = " AND ".join(where)
         with self._lock, self._conn() as db:
             rows = [dict(r) for r in db.execute(
-                "SELECT * FROM tasks WHERE archived=1 ORDER BY updated_at DESC"
+                f"SELECT * FROM tasks WHERE {cond} ORDER BY updated_at DESC",  # noqa: S608 — fragments from a fixed allow-list, values bound
+                params,
             ).fetchall()]
         for t in rows:
             for k in ("agents", "specialists", "memory_ids", "mnemos_tags"):
                 t[k] = _loads(t[k])
+        return rows
+
+    # ------------------------------------------------------- agent reports
+    def add_report(self, task_id: str, body: str, kind: str,
+                   agent: str = "") -> tuple[dict[str, Any], list[int]] | None:
+        """Append an agent report to a task (BE-11a). A new ``final`` report
+        supersedes all previous live finals (they stay in history flagged
+        ``superseded``); intermediates are never touched. Returns
+        (report, superseded_ids) or None when the task does not exist."""
+        if kind not in REPORT_KINDS:
+            raise ValueError(f"invalid report kind: {kind}")
+        text = body.strip()
+        if not text:
+            raise ValueError("report body is empty")
+        agent = agent[:120]
+        now = _now()
+        with self._lock, self._conn() as db:
+            if db.execute("SELECT id FROM tasks WHERE id=?",
+                          (task_id,)).fetchone() is None:
+                return None
+            superseded_ids: list[int] = []
+            if kind == "final":
+                rows = db.execute(
+                    "SELECT id FROM task_reports "
+                    "WHERE task_id=? AND kind='final' AND superseded=0",
+                    (task_id,),
+                ).fetchall()
+                superseded_ids = [r["id"] for r in rows]
+                if superseded_ids:
+                    marks = ", ".join("?" for _ in superseded_ids)
+                    db.execute(
+                        f"UPDATE task_reports SET superseded=1 WHERE id IN ({marks})",
+                        superseded_ids,
+                    )
+            cur = db.execute(
+                "INSERT INTO task_reports (task_id, kind, agent, body, superseded, created_at) "
+                "VALUES (?,?,?,?,0,?)",
+                (task_id, kind, agent, text, now),
+            )
+            rid = int(cur.lastrowid)
+            self._log(db, "task.report", task_id,
+                      {"report_id": rid, "kind": kind, "agent": agent,
+                       "superseded": superseded_ids})
+        report = {"id": rid, "task_id": task_id, "kind": kind, "agent": agent,
+                  "body": text, "superseded": False, "created_at": now}
+        return report, superseded_ids
+
+    def list_reports(self, task_id: str) -> list[dict[str, Any]] | None:
+        """Chronological report history for a task; None when the task does
+        not exist (distinguishing an empty history from a missing task)."""
+        with self._lock, self._conn() as db:
+            if db.execute("SELECT id FROM tasks WHERE id=?",
+                          (task_id,)).fetchone() is None:
+                return None
+            rows = [dict(r) for r in db.execute(
+                "SELECT id, task_id, kind, agent, body, superseded, created_at "
+                "FROM task_reports WHERE task_id=? ORDER BY id ASC",
+                (task_id,),
+            ).fetchall()]
+        for r in rows:
+            r["superseded"] = bool(r["superseded"])
         return rows
 
     # -------------------------------------------------------- profile cache
