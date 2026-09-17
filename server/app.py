@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
@@ -154,6 +155,15 @@ async def _profile_cache_refresher() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # One-shot reports backfill (BE-7 wave) — strictly opt-in via env so a
+    # plain boot never mutates data. Intended for the deploy window; the
+    # same backfill is available as scripts/backfill_reports.py (pick one).
+    # Idempotent inside the store: board_meta flag + tasks with existing
+    # reports are never touched.
+    if os.environ.get("VESMARO_BACKFILL_REPORTS", "") == "1":
+        created = await asyncio.to_thread(store.backfill_reports)
+        logging.getLogger("vesmaro.backfill").info(
+            "reports backfill finished: created=%d", created)
     task = asyncio.create_task(_profile_cache_refresher())
     yield
     task.cancel()
@@ -419,6 +429,27 @@ class ReportsOut(_ApiModel):
     items: list[ReportOut]
 
 
+# BE-7: task history timeline for the task modal — board audit events plus
+# linked memory checkpoints. Optional context keys (detail/source/ts) are
+# absent when empty (route sets response_model_exclude_none).
+class EventItem(_ApiModel):
+    ts: str
+    title: str
+    detail: str | None = None
+
+
+class MemoryItem(_ApiModel):
+    ts: str | None = None
+    title: str
+    source: str | None = None
+    detail: str | None = None
+
+
+class HistoryOut(_ApiModel):
+    events: list[EventItem]
+    memories: list[MemoryItem]
+
+
 class UnarchiveOut(_ApiModel):
     ok: bool
     task: TaskOut | None = None
@@ -568,15 +599,20 @@ async def delete_task(task_id: str, request: Request) -> OkOut:
     return {"ok": True}
 
 
-@app.get("/api/tasks/{task_id}/memories")
-async def task_memories(task_id: str, scope: str = "") -> TaskMemoriesOut:
-    """Resolve task memory links against a server, a group, or all servers."""
+async def _resolve_task_memory_cards(
+    task_id: str, scope: str = ""
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str]]:
+    """Shared memory-link resolver (task drawer + BE-7 history timeline):
+    resolve ``task.memory_ids`` across a server, a group, or all active
+    servers. Returns ``(items, unresolved, sources)`` — ``items`` maps a
+    memory id to its card, ``sources`` to the resolving server's name.
+    404 when the task does not exist; empty structures without links."""
     task = store.task(task_id)
     if task is None:
         raise HTTPException(404, "task not found")
     ids: list[str] = task.get("memory_ids") or []
     if not ids:
-        return {"items": {}, "unresolved": [], "sources": {}}
+        return {}, [], {}
 
     if scope and scope != "all":
         _, servers = get_scope_servers(scope)
@@ -600,7 +636,76 @@ async def task_memories(task_id: str, scope: str = "") -> TaskMemoriesOut:
                                    "server": s["name"]})
     seen: set[str] = set()
     unresolved = [u for u in unresolved if not (u["id"] in seen or seen.add(u["id"]))]
+    return items, unresolved, sources
+
+
+@app.get("/api/tasks/{task_id}/memories")
+async def task_memories(task_id: str, scope: str = "") -> TaskMemoriesOut:
+    """Resolve task memory links against a server, a group, or all servers."""
+    items, unresolved, sources = await _resolve_task_memory_cards(task_id, scope)
     return {"items": items, "unresolved": unresolved, "sources": sources}
+
+
+def _event_detail(e: dict[str, Any]) -> str:
+    """Human-readable context line for one board audit event (BE-7 history
+    timeline). An empty return means "omit the detail row"."""
+    p = e.get("payload") or {}
+    kind = e["kind"]
+    if kind == "task.moved":
+        return f"{p.get('from', '?')} → {p.get('to', '?')}"
+    if kind == "task.updated":
+        # updated_at is bookkeeping the store stamps on every write — not a
+        # semantic field, so it never appears in the human digest
+        fields = ", ".join(f for f in p.get("fields", []) if f != "updated_at")
+        return f"поля: {fields}" if fields else ""
+    if kind == "task.created":
+        return f"колонка {p.get('col', '?')}"
+    if kind == "task.archived":
+        return f"из колонки {p.get('from', '?')}"
+    if kind == "task.unarchived":
+        return f"в колонку {p.get('to', '?')}"
+    if kind == "task.report":
+        return f"{p.get('kind', 'отчёт')}, агент: {p.get('agent') or '—'}"
+    if kind == "task.deleted":
+        return ""
+    text = str(p)[:200]
+    return "" if text == "{}" else text
+
+
+@app.get("/api/tasks/{task_id}/history", response_model_exclude_none=True)
+async def task_history(task_id: str) -> HistoryOut:
+    """BE-7: merged timeline for the task modal — the task's board audit
+    events (title = event kind, detail = human-readable payload digest) plus
+    its linked memory checkpoints (source = resolving server, detail =
+    excerpt capped at 200 chars). The SPA merges and sorts both lists by
+    ``ts`` desc; the server pre-sorts defensively."""
+    task = store.task(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+
+    events: list[dict[str, Any]] = []
+    for e in store.task_events(task_id):
+        item: dict[str, Any] = {"ts": e["ts"], "title": e["kind"]}
+        detail = _event_detail(e)
+        if detail:
+            item["detail"] = detail
+        events.append(item)
+    events.sort(key=lambda i: i["ts"], reverse=True)
+
+    cards, _unresolved, sources = await _resolve_task_memory_cards(task_id)
+    memories: list[dict[str, Any]] = []
+    for mid, card in cards.items():
+        m: dict[str, Any] = {
+            "ts": card.get("created_at") or None,
+            "title": card.get("title") or mid,
+            "source": sources.get(mid) or None,
+        }
+        excerpt = (card.get("excerpt") or "")[:200]
+        if excerpt:
+            m["detail"] = excerpt
+        memories.append(m)
+    memories.sort(key=lambda i: i.get("ts") or "", reverse=True)
+    return {"events": events, "memories": memories}
 
 
 # ------------------------------------------------------- memory servers CRUD
@@ -1381,20 +1486,6 @@ def _parse_meta_excerpt(text: str) -> dict[str, Any]:
             k, _, v = line.partition(":")
             out[k.strip().lower()] = v.strip()[:200]
     return out
-
-
-def _human_event(e: dict[str, Any]) -> str:
-    p = e.get("payload") or {}
-    kind = e["kind"]
-    if kind == "task.moved":
-        return f"{p.get('from', '?')} → {p.get('to', '?')}"
-    if kind == "task.updated":
-        return "поля: " + ", ".join(p.get("fields", []))
-    if kind == "task.created":
-        return "создана в колонке " + str(p.get("col", "?"))
-    if kind == "task.deleted":
-        return "удалена"
-    return str(p)[:200]
 
 
 @app.get("/api/tags/{tag}/drill")

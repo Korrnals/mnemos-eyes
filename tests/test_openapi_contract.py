@@ -38,6 +38,8 @@ class TestSchemasPresent:
         # BE-10 / BE-11
         "ReportCreate", "ReportOut", "ReportCreatedOut", "ReportsOut",
         "ArchiveOut", "UnarchiveOut",
+        # BE-7: task history timeline
+        "HistoryOut", "EventItem", "MemoryItem",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -126,3 +128,16 @@ class TestKeyRoutesReferenceSchemas:
     def test_unarchive(self, spec):
         assert _ref_name(_response_schema(
             spec, "/api/tasks/{task_id}/unarchive", "post")) == "UnarchiveOut"
+
+    def test_task_history(self, spec):
+        """BE-7: the history route must reference the timeline models."""
+        assert _ref_name(_response_schema(
+            spec, "/api/tasks/{task_id}/history", "get")) == "HistoryOut"
+        out = _components(spec)["HistoryOut"]
+        props = set(out.get("properties", {}))
+        assert {"events", "memories"} <= props
+        event_item = _components(spec)["EventItem"]
+        assert {"ts", "title"} <= set(event_item.get("properties", {}))
+        memory_item = _components(spec)["MemoryItem"]
+        assert {"ts", "title", "source", "detail"} \
+            <= set(memory_item.get("properties", {}))
