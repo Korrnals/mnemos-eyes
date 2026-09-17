@@ -8,6 +8,8 @@ const state = {
   es: null,           // EventSource
   memServers: null,   // {servers, groups}
   memScope: "all",    // server name | group name | "all"
+  inbox: null,          // AGG-1: last /api/tasks/inbox payload
+  inboxUnavailable: false, // AGG-1: backend answered 404 (engine ≥1.3.0 required)
 };
 
 // ------------------------------------------------------------------ helpers
@@ -43,9 +45,11 @@ async function api(path, opts = {}) {
   }
   if (!res.ok) {
     let detail = res.statusText;
-    try { detail = (await res.json()).detail || detail; } catch {}
+    let body = null;
+    try { body = await res.json(); detail = body.detail || detail; } catch {}
     const err = new Error(`${res.status}: ${detail}`);
     err.status = res.status; // UI-15: callers branch on 423 (Locked, >24h)
+    err.body = body;         // AGG-1: 409 adopt carries {task_id}
     throw err;
   }
   return res.json();
@@ -161,6 +165,7 @@ async function refreshBoard() {
   renderBoard();
   renderRail();
   refreshFilterOptions();
+  refreshInboxCount(); // AGG-1: rail counter — one cheap GET, not awaited
 }
 
 function taskMatches(t) {
@@ -1062,7 +1067,7 @@ function reportItem(t, r, allowResume) {
 // through a single document-level listener, scoped to the containers that
 // render cross-link chips — pulse/roster rows keep their whole-row clicks.
 document.addEventListener("click", (e) => {
-  if (!e.target.closest("#board, #modal-meta, #modal-reports, #arch-body, #dd-body")) return;
+  if (!e.target.closest("#board, #modal-meta, #modal-reports, #arch-body, #dd-body, #inbox-list")) return;
   const tag = e.target.closest(".tagchip[data-tag]");
   if (tag && tag.dataset.tag) { openTagDrill(tag.dataset.tag); return; }
   const ag = e.target.closest("[data-agent]");
@@ -1632,7 +1637,9 @@ $("#edit-force").addEventListener("click", () => {
 wireMax("#edit-max", "#edit-modal");
 
 // ------------------------------------------------------------------ toasts
-function toast(kind, title, message, ms = 4000) {
+// `action` (AGG-1): optional {label, onClick} — renders a button inside the
+// toast (adopt → «открыть»). Absent in all pre-existing calls.
+function toast(kind, title, message, ms = 4000, action = null) {
   let holder = document.querySelector("#toasts");
   if (!holder) {
     holder = document.createElement("div");
@@ -1643,6 +1650,14 @@ function toast(kind, title, message, ms = 4000) {
   t.className = "toast " + kind;
   t.innerHTML = `<span class="t-kind">${esc(kind === "ok" ? "выполнено" : kind === "err" ? "сбой" : "инфо")}</span>
     <b>${esc(title)}</b>${message ? `<div style="font-size:12px;color:var(--color-text-secondary);margin-top:2px">${esc(message)}</div>` : ""}`;
+  if (action && typeof action.onClick === "function") {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn toast-action";
+    b.textContent = action.label || "открыть";
+    b.addEventListener("click", () => { t.remove(); action.onClick(); });
+    t.appendChild(b);
+  }
   holder.appendChild(t);
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, ms);
 }
@@ -2002,6 +2017,255 @@ wireMax("#arch-max", "#arch-modal");
 function openMemoryOverlay(memoryId) {
   openMemoryCard({ id: memoryId, title: "", server: "" });
 }
+
+// ── AGG-1: inbox — tasks aggregated from connected memory stores ───
+// GET  /api/tasks/inbox?scope=all[&include_adopted=true]
+//        → {items:[{memory_id, server, project, title, excerpt, tags,
+//           priority, specialist, created_at, last_seen, stale, adopted,
+//           adopted_task_id}], count, refreshed_at}
+// POST /api/tasks/inbox/refresh → {scanned_servers, found, new, errors[]}
+// POST /api/tasks/inbox/{memory_id}/adopt → 201 {task} | 409 {task_id}
+// Old backend without the engine answers 404 → honest degradation state.
+const inboxFilter = { project: "", server: "", adopted: false };
+
+function inboxUnavailable(err) {
+  return /^404/.test(err?.message || "");
+}
+
+function renderInboxUnavailable() {
+  const list = $("#inbox-list");
+  if (list) list.innerHTML = `<div class="column-empty">движок входящих недоступен — нужен сервер ≥ 1.3.0</div>`;
+}
+
+// Rail counter — one cheap GET on boot and after every refreshBoard.
+async function refreshInboxCount() {
+  const el = $("#inbox-count");
+  try {
+    const d = await api("/api/tasks/inbox?scope=all&include_adopted=false");
+    state.inboxUnavailable = false;
+    if (el) el.textContent = d.count ? String(d.count) : "";
+  } catch (err) {
+    if (inboxUnavailable(err)) state.inboxUnavailable = true;
+    if (el) el.textContent = ""; // degradation explained inside the modal
+  }
+}
+
+async function openInboxModal() {
+  const d = $("#inbox-modal"), b = $("#inbox-backdrop");
+  b.hidden = false; d.hidden = false;
+  modalOpened("inbox-modal", closeInboxModal);
+  requestAnimationFrame(() => { b.classList.add("open"); d.classList.add("open"); });
+  $("#inbox-close").focus();
+  await loadInbox();
+}
+
+function closeInboxModal() {
+  const d = $("#inbox-modal"), b = $("#inbox-backdrop");
+  b.classList.remove("open"); d.classList.remove("open");
+  modalClosed("inbox-modal");
+  setTimeout(() => { b.hidden = true; d.hidden = true; }, 220);
+}
+
+async function loadInbox() {
+  const list = $("#inbox-list");
+  if (!list) return;
+  if (state.inboxUnavailable) { renderInboxUnavailable(); return; }
+  list.innerHTML = `<div class="column-empty">загрузка…</div>`;
+  const params = new URLSearchParams({ scope: "all" });
+  if (inboxFilter.adopted) params.set("include_adopted", "true");
+  try {
+    const d = await api("/api/tasks/inbox?" + params.toString());
+    state.inbox = d;
+    renderInbox(d);
+  } catch (err) {
+    if (inboxUnavailable(err)) {
+      state.inboxUnavailable = true;
+      refreshInboxCount();
+      renderInboxUnavailable();
+    } else {
+      list.innerHTML = `<div class="column-empty">входящие недоступны: ${esc(err.message)}</div>`;
+    }
+  }
+}
+
+// priority (critical→low), then newest first — same philosophy as the board
+function inboxComparator(a, b) {
+  const ra = PRIORITY_RANK[a.priority] ?? PRIORITY_RANK.normal;
+  const rb = PRIORITY_RANK[b.priority] ?? PRIORITY_RANK.normal;
+  if (ra !== rb) return ra - rb;
+  return (b.created_at || "").localeCompare(a.created_at || "");
+}
+
+function renderInbox(d) {
+  const list = $("#inbox-list");
+  if (!list) return;
+  const all = d?.items || [];
+  fillInboxFilters(all);
+  $("#inbox-refreshed").textContent = d?.refreshed_at
+    ? `скан: ${(d.refreshed_at || "").replace("T", " ").slice(0, 16)}` : "";
+  const items = all.filter((it) =>
+    (!inboxFilter.project || it.project === inboxFilter.project)
+    && (!inboxFilter.server || it.server === inboxFilter.server));
+  if (!items.length) {
+    list.innerHTML = `<div class="column-empty">${all.length
+      ? "под фильтр ничего не попало"
+      : "входящих задач нет — запустите сканирование хранилищ"}</div>`;
+    return;
+  }
+  list.innerHTML = "";
+  for (const it of [...items].sort(inboxComparator)) list.appendChild(inboxCard(it));
+}
+
+// project/server options come from ALL items so one filter never hides the
+// other's choices; current selection survives the refill
+function fillInboxFilters(items) {
+  const fill = (sel, values, label) => {
+    const el = $(sel);
+    if (!el) return;
+    const cur = el.value;
+    const uniq = [...new Set(values.filter(Boolean))].sort();
+    el.innerHTML = `<option value="">${label}: все</option>`
+      + uniq.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    if (uniq.includes(cur)) el.value = cur;
+    el.classList.toggle("active", !!el.value);
+  };
+  fill("#inbox-f-project", items.map((it) => it.project), "проект");
+  fill("#inbox-f-server", items.map((it) => it.server), "сервер");
+}
+
+function inboxCard(it) {
+  const card = document.createElement("article");
+  card.className = "inbox-card" + (it.stale ? " stale" : "") + (it.adopted ? " adopted" : "");
+  const proj = it.project || "";
+  const specialists = it.specialist
+    ? (Array.isArray(it.specialist) ? it.specialist : [it.specialist]) : [];
+  const created = createdShort({ created_at: it.created_at });
+  card.innerHTML = `
+    <div class="inbox-card-top">
+      ${it.server ? `<span class="pulse-server" title="сервер-источник">${esc(it.server)}</span>` : ""}
+      ${proj ? `<span class="chip tagchip tag-project" data-tag="project:${esc(proj)}" title="проект">◈ ${esc(proj)}</span>` : ""}
+      ${priorityBadge(it)}
+      ${it.stale ? `<span class="inbox-stale-note">не найдено при последнем скане</span>` : ""}
+      ${created ? `<span class="inbox-date" title="создана ${esc((it.created_at || "").slice(0, 10))}">создана ${esc(created)}</span>` : ""}
+    </div>
+    <h3 class="inbox-title">${esc(it.title || "(без заголовка)")}</h3>
+    ${it.excerpt ? `<p class="inbox-excerpt">${esc(it.excerpt)}</p>` : ""}
+    <div class="inbox-foot">
+      ${specialists.map((s) => `<span class="chip chip-spec" title="специалист">${esc(s)}</span>`).join("")}
+      ${it.adopted
+        ? `<span class="chip inbox-adopted-chip" title="принята в борд — клик откроет задачу">✓ принята${it.adopted_task_id ? " · " + esc(it.adopted_task_id) : ""}</span>`
+        : `<button class="btn inbox-adopt" type="button">Принять в борд</button>`}
+    </div>`;
+
+  const adoptBtn = card.querySelector(".inbox-adopt");
+  if (adoptBtn) adoptBtn.addEventListener("click", () => adoptInboxItem(it, adoptBtn));
+
+  if (it.adopted) {
+    // adopted cards open their native board task — pointer + keyboard paths
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-label",
+      `принятая задача${it.adopted_task_id ? " " + it.adopted_task_id : ""} — открыть на борде`);
+    const open = () => openBoardTask(it.adopted_task_id);
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("[data-tag]")) return; // project chip is a cross-link
+      open();
+    });
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+  }
+  return card;
+}
+
+function openBoardTask(taskId) {
+  if (!taskId) return;
+  const t = (state.board?.tasks || []).find((x) => x.id === taskId);
+  if (t) { openTask(t.id); return; }
+  // honest scope: no single-task GET — the task may be archived or filtered
+  toast("info", "Задачи нет на доске", `${taskId}: возможно, в архиве или скрыта фильтром`, 6000);
+}
+
+async function adoptInboxItem(it, btn) {
+  btn.disabled = true;
+  try {
+    const task = await api(`/api/tasks/inbox/${encodeURIComponent(it.memory_id)}/adopt`, { method: "POST" });
+    it.adopted = true;
+    it.adopted_task_id = task?.id || it.adopted_task_id;
+    renderInbox(state.inbox);
+    refreshInboxCount();
+    toast("ok", `задача ${task?.id || ""} создана`, "принята из входящих на борд", 8000,
+      task?.id ? { label: "открыть", onClick: () => openBoardTask(task.id) } : null);
+  } catch (err) {
+    if (err.status === 409) {
+      // already adopted — surface the existing native task
+      const taskId = err.body?.task_id || it.adopted_task_id || "";
+      it.adopted = true;
+      if (taskId) it.adopted_task_id = taskId;
+      renderInbox(state.inbox);
+      refreshInboxCount();
+      toast("info", "уже принята", taskId ? `нативная задача ${taskId} уже на борде` : "", 6000,
+        taskId ? { label: "открыть", onClick: () => openBoardTask(taskId) } : null);
+      if (taskId) openBoardTask(taskId);
+    } else {
+      toast("err", "Не удалось принять задачу", err.message);
+      btn.disabled = false;
+    }
+  }
+}
+
+async function scanInbox() {
+  const btn = $("#inbox-scan");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="inbox-spin" aria-hidden="true"></span>Сканирование…`;
+  try {
+    const r = await api("/api/tasks/inbox/refresh", { method: "POST" });
+    const errors = r.errors || [];
+    const errText = errors.length
+      ? " · ошибки: " + errors.map((e) => typeof e === "string"
+          ? e
+          : `${e.server || e.memory_id || "?"}: ${e.error || e.detail || e.status || "ошибка"}`).join("; ")
+      : "";
+    toast("ok", `найдено ${r.found ?? 0}, новых ${r.new ?? 0}`,
+      `серверов просканировано: ${r.scanned_servers ?? 0}${errText}`,
+      errors.length ? 8000 : 4000);
+    await loadInbox();
+    refreshInboxCount();
+  } catch (err) {
+    if (inboxUnavailable(err)) {
+      state.inboxUnavailable = true;
+      refreshInboxCount();
+      renderInboxUnavailable();
+      toast("err", "Сканирование недоступно", "движок входящих не отвечает — нужен сервер ≥ 1.3.0");
+    } else {
+      toast("err", "Сканирование не удалось", err.message);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Сканировать хранилища";
+  }
+}
+
+$("#inbox-open").addEventListener("click", openInboxModal);
+$("#inbox-close").addEventListener("click", closeInboxModal);
+$("#inbox-backdrop").addEventListener("click", closeInboxModal);
+$("#inbox-f-project").addEventListener("change", (e) => {
+  inboxFilter.project = e.target.value;
+  e.target.classList.toggle("active", !!e.target.value);
+  renderInbox(state.inbox);
+});
+$("#inbox-f-server").addEventListener("change", (e) => {
+  inboxFilter.server = e.target.value;
+  e.target.classList.toggle("active", !!e.target.value);
+  renderInbox(state.inbox);
+});
+$("#inbox-adopted").addEventListener("change", (e) => {
+  inboxFilter.adopted = e.target.checked;
+  loadInbox(); // refetch: adopted items ship only with include_adopted=true
+});
+$("#inbox-scan").addEventListener("click", scanInbox);
+wireMax("#inbox-max", "#inbox-modal");
 
 // ---------------------------------------------------- specialist card
 // v1: профиль из памяти mnemos (role contract + skills) + refine-форма.
@@ -2747,6 +3011,7 @@ applyTheme(localStorage.getItem(THEME_KEY)
   renderGroups();
   refreshBell();
   refreshArchiveTeaser();
+  refreshInboxCount(); // AGG-1: rail counter on load (refreshBoard covers updates)
   healthLoop();
   setInterval(healthLoop, 30000);
   setInterval(refreshPulse, 60000);

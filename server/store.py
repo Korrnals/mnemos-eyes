@@ -145,6 +145,19 @@ CREATE TABLE IF NOT EXISTS task_reports (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_reports_task ON task_reports (task_id, id);
+CREATE TABLE IF NOT EXISTS task_inbox (
+    memory_id         TEXT PRIMARY KEY,
+    server            TEXT NOT NULL,
+    project           TEXT NOT NULL DEFAULT '',
+    title             TEXT NOT NULL,
+    excerpt           TEXT NOT NULL DEFAULT '',
+    tags              TEXT NOT NULL DEFAULT '[]',
+    priority          TEXT NOT NULL DEFAULT 'normal',
+    specialist        TEXT NOT NULL DEFAULT '',
+    source_created_at TEXT NOT NULL DEFAULT '',
+    last_seen         TEXT NOT NULL,
+    adopted_task_id   TEXT
+);
 """
 
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
@@ -1005,6 +1018,128 @@ class Store:
                        updated_at=excluded.updated_at, json=excluded.json""",
                 (specialist, _now(), json.dumps(profile, ensure_ascii=False)),
             )
+
+    # ---------------------------------------------------------- task inbox
+    # AGG-1: mirror of task:queue memories from every active memory server.
+    # Rows are keyed by memory_id and upserted on every scan; last_seen is
+    # refreshed ONLY for records their server actually returned, so a record
+    # that vanished from mnemos simply ages out into "stale" instead of
+    # being deleted — the mirror never destroys data. adopted_task_id is
+    # write-once from the adopt flow and survives re-scans.
+    INBOX_STALE_SECONDS = 30 * 60
+    INBOX_REFRESHED_AT_KEY = "task_inbox_refreshed_at"
+
+    def upsert_inbox_records(self, records: list[dict[str, Any]],
+                             seen_at: str) -> tuple[int, int]:
+        """Upsert one scan batch (single transaction). Returns (found, new)
+        where ``found`` is the batch size and ``new`` counts first-time
+        mirror rows. Content fields and last_seen are refreshed on every
+        scan; adopted_task_id is never touched here."""
+        if not records:
+            return 0, 0
+        with self._lock, self._conn() as db:
+            new = 0
+            for rec in records:
+                exists = db.execute(
+                    "SELECT 1 FROM task_inbox WHERE memory_id=?",
+                    (rec["memory_id"],),
+                ).fetchone()
+                if exists is None:
+                    new += 1
+                db.execute(
+                    """INSERT INTO task_inbox
+                           (memory_id, server, project, title, excerpt, tags,
+                            priority, specialist, source_created_at, last_seen)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(memory_id) DO UPDATE SET
+                           server=excluded.server,
+                           project=excluded.project,
+                           title=excluded.title,
+                           excerpt=excluded.excerpt,
+                           tags=excluded.tags,
+                           priority=excluded.priority,
+                           specialist=excluded.specialist,
+                           source_created_at=excluded.source_created_at,
+                           last_seen=excluded.last_seen""",
+                    (rec["memory_id"], rec["server"], rec.get("project", ""),
+                     rec.get("title", ""), rec.get("excerpt", ""),
+                     json.dumps(rec.get("tags", [])),
+                     rec.get("priority", "normal"), rec.get("specialist", ""),
+                     rec.get("source_created_at", ""), seen_at),
+                )
+        return len(records), new
+
+    def get_inbox_item(self, memory_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM task_inbox WHERE memory_id=?", (memory_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def mark_inbox_adopted(self, memory_id: str, task_id: str) -> bool:
+        """Stamp the native task id onto the mirror row (adopt flow).
+        False when the row is gone (concurrent registry surgery)."""
+        with self._lock, self._conn() as db:
+            cur = db.execute(
+                "UPDATE task_inbox SET adopted_task_id=? WHERE memory_id=?",
+                (task_id, memory_id),
+            )
+        return cur.rowcount > 0
+
+    def inbox_refreshed_at(self) -> str:
+        return self.get_meta(self.INBOX_REFRESHED_AT_KEY) or ""
+
+    def list_inbox(self, scope: str = "all", project: str = "",
+                   include_adopted: bool = False) -> list[dict[str, Any]]:
+        """Inbox projection for the API.
+
+        Filters: ``scope`` is 'all' or one source server name (mirror rows
+        know their server); ``project`` is an exact match; rows already
+        adopted into a native task are hidden unless include_adopted.
+        Dedup (unconditional): rows whose memory_id appears in ANY native
+        task's memory_ids — archived included, the bulk import included —
+        never leak back into the inbox. ``stale`` = last_seen older than
+        INBOX_STALE_SECONDS, i.e. the source memory stopped coming back.
+        """
+        q = "SELECT * FROM task_inbox"
+        where: list[str] = []
+        params: list[Any] = []
+        if scope and scope != "all":
+            where.append("server=?")
+            params.append(scope)
+        if project:
+            where.append("project=?")
+            params.append(project)
+        if not include_adopted:
+            where.append("adopted_task_id IS NULL")
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY last_seen DESC"
+        with self._lock, self._conn() as db:
+            rows = [dict(r) for r in db.execute(q, params).fetchall()]
+            linked: set[str] = set()
+            for t in db.execute("SELECT memory_ids FROM tasks").fetchall():
+                linked.update(str(m) for m in _loads(t["memory_ids"]))
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            if r["memory_id"] in linked:
+                continue
+            items.append({
+                "memory_id": r["memory_id"],
+                "server": r["server"],
+                "project": r["project"],
+                "title": r["title"],
+                "excerpt": r["excerpt"],
+                "tags": _loads(r["tags"]),
+                "priority": r["priority"],
+                "specialist": r["specialist"],
+                "created_at": r["source_created_at"],
+                "last_seen": r["last_seen"],
+                "stale": _age_seconds(r["last_seen"]) > self.INBOX_STALE_SECONDS,
+                "adopted": r["adopted_task_id"] is not None,
+                "adopted_task_id": r["adopted_task_id"],
+            })
+        return items
 
     def log_group_action(self, group: str, action: str, detail: str = "") -> None:
         with self._lock, self._conn() as db:
