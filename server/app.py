@@ -186,7 +186,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.3.1", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.3.2", lifespan=lifespan)
 
 
 # --------------------------------------------------------------------- models
