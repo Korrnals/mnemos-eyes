@@ -1,20 +1,17 @@
 # Decisions log
 
-ADR-style records for `mnemos-eyes`. Each file is one decision.
-Summary table lives in [`../CHARTER.md`](../CHARTER.md) §3.
+ADR-style records of significant decisions for `mnemos-eyes`. Each file is
+one decision. The authoritative summary lives in [`../CHARTER.md`](../CHARTER.md)
+§3; these files capture the _context and consequences_ behind each call.
 
 | ADR | Title | Status |
 | --- | --- | --- |
 | [0001](0001-web-first-tauri-later.md) | Web-first SPA, Tauri 2.0 native shell later | Accepted |
 | [0002](0002-data-layer-abstraction.md) | Isolated data-layer (`MemoryGateway`) | Accepted |
 | [0003](0003-accent-typography-clusters.md) | Teal accent, Lora content font, clusters → L2 | Accepted |
-# Decisions log
-
-ADR-style records of significant decisions for `mnemos-eyes`.
-The authoritative summary lives in [`../CHARTER.md`](../CHARTER.md) §3; these
-files capture the _context and consequences_ behind each call.
-
-| ADR | Title | Status |
-| --- | --- | --- |
-| [0001](0001-web-first-tauri-later.md) | Web-first SPA, Tauri 2.0 native shell later | Accepted |
-| [0002](0002-data-layer-abstraction.md) | Isolated `MemoryGateway` data-layer abstraction | Accepted |
+| [0004](0004-task-board-v0.md) | Task board v0 — pivot of the first deliverable | Accepted |
+| [0005](0005-harness-identity.md) | Harness identity — agents vs specialists | Accepted |
+| [0006](0006-two-frontends-fate.md) | Fate of the two frontends (vanilla board vs React L1) | Accepted by committee — pending owner ratification |
+| [0007](0007-merged-views-vs-mesh.md) | Merged views — board aggregation vs mnemos-mesh federation | Accepted by committee — pending owner ratification |
+| [0008](0008-backend-stack.md) | Board backend stack — stay on Python/FastAPI (for now) | Accepted by committee — pending owner ratification |
+| [0009](0009-agent-bridge-assignments.md) | Agent bridge — assignment queue on the board (variant A′) | Accepted by committee — pending owner ratification |
