@@ -145,7 +145,9 @@ class _FakeMnemosHandler(BaseHTTPRequestHandler):
             if fake.fail_search:
                 self._reply(500, {"detail": "fake mnemos: intentional failure"})
                 return
-            self._reply(200, [])
+            # AGG-1: the task-inbox scanner (and any other tag-drill style
+            # caller) reads hits from here; default stays [] for legacy tests
+            self._reply(200, fake.search_results)
         else:
             self._reply(200, {})
 
@@ -160,6 +162,9 @@ class FakeMnemos:
         self.fail_memories = False
         self.fail_search = False
         self.mem_count = 0
+        # AGG-1: hits returned by POST /search (task-inbox scanner and any
+        # other tags-filter caller); default [] keeps legacy replies intact
+        self.search_results: list[dict] = []
         # memory id -> full card dict served by GET /memories/{id}
         # (BE-7 history tests wire task-linked checkpoints here)
         self.memory_cards: dict[str, dict] = {}
@@ -178,6 +183,12 @@ class FakeMnemos:
         with self.lock:
             return [json.loads(r["body"]) for r in self.requests
                     if r["method"] == "POST" and r["path"] == "/memories"]
+
+    def search_bodies(self) -> list[dict]:
+        """Parsed JSON bodies of all POST /search queries (scanner probes)."""
+        with self.lock:
+            return [json.loads(r["body"]) for r in self.requests
+                    if r["method"] == "POST" and r["path"] == "/search"]
 
     def close(self) -> None:
         self._srv.shutdown()

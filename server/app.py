@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -41,6 +41,8 @@ from .store import (
     TaskLockedError,
     VALID_STATUSES,
 )
+from .task_inbox import background_refresher as inbox_background_refresher
+from .task_inbox import refresh_inbox
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
 DB_PATH = DATA_DIR / "board.db"
@@ -171,8 +173,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logging.getLogger("vesmaro.backfill").info(
             "reports backfill finished: created=%d", created)
     task = asyncio.create_task(_profile_cache_refresher())
+    # AGG-1: inbox scan starts right after boot (non-blocking) and repeats
+    # every 5 min inside the task; errors are absorbed in the loop.
+    inbox_task = asyncio.create_task(inbox_background_refresher(registry, store))
     yield
     task.cancel()
+    inbox_task.cancel()
 
 
 COLUMN_RU = {
@@ -385,6 +391,39 @@ class TaskDraftOut(_ApiModel):
     ok: bool
     memory_id: str | None = None
     server: str
+
+
+# Task inbox mirror (AGG-1). ``created_at`` is the SOURCE memory's creation
+# timestamp; ``stale`` means the record stopped coming back from its server
+# (last_seen older than Store.INBOX_STALE_SECONDS); ``adopted`` means a
+# native board task was created from it.
+class TaskInboxItem(_ApiModel):
+    memory_id: str
+    server: str
+    project: str
+    title: str
+    excerpt: str
+    tags: list[str]
+    priority: str
+    specialist: str
+    created_at: str
+    last_seen: str
+    stale: bool
+    adopted: bool
+    adopted_task_id: str | None = None
+
+
+class TaskInboxOut(_ApiModel):
+    items: list[TaskInboxItem]
+    count: int
+    refreshed_at: str
+
+
+class TaskInboxRefreshOut(_ApiModel):
+    scanned_servers: int
+    found: int
+    new: int
+    errors: list[dict[str, Any]]
 
 
 class NotificationOut(_ApiModel):
@@ -1377,6 +1416,110 @@ async def list_task_reports(task_id: str) -> ReportsOut:
         raise HTTPException(404, "task not found")
     return {"ok": True, "task_id": task_id,
             "count": len(reports), "items": reports}
+
+
+# --------------------------------------------------------- task inbox (AGG-1)
+# Mirror of task:queue memories from every active memory server, refreshed
+# by the background scanner (task_inbox.background_refresher) or on demand
+# via POST /api/tasks/inbox/refresh. Queue-memories are DATA (SEC-4): the
+# mirror stores title/excerpt/tags only and never treats content as
+# instructions.
+_INBOX_REFRESH_RATE_LIMIT = 5   # requests per client ...
+_INBOX_REFRESH_RATE_WINDOW = 60.0  # ... per sliding window (seconds)
+_inbox_refresh_limiter = RateLimiter(
+    limit=_INBOX_REFRESH_RATE_LIMIT, window=_INBOX_REFRESH_RATE_WINDOW)
+
+
+@app.get("/api/tasks/inbox")
+async def tasks_inbox(scope: str = "all", project: str = "",
+                      include_adopted: bool = False) -> TaskInboxOut:
+    """AGG-1 inbox: task:queue records mirrored from active memory servers.
+
+    - dedup (unconditional): records whose memory_id is linked from ANY
+      native task's memory_ids (bulk import included) never appear here;
+    - ``scope``: 'all' or one source server name; ``project``: exact match;
+    - ``include_adopted``: re-include rows that already produced a native
+      task (hidden by default);
+    - ``stale``: the source server stopped returning the record (last_seen
+      older than 30 min);
+    - ``refreshed_at``: timestamp of the last completed scan (board_meta).
+    """
+    items = store.list_inbox(scope=scope, project=project,
+                             include_adopted=include_adopted)
+    return TaskInboxOut(
+        items=[TaskInboxItem(**i) for i in items],
+        count=len(items),
+        refreshed_at=store.inbox_refreshed_at(),
+    )
+
+
+@app.post("/api/tasks/inbox/refresh")
+async def tasks_inbox_refresh(request: Request) -> TaskInboxRefreshOut:
+    """Force one inbox scan synchronously (mutation-action). The mnemos
+    round-trips are async, so the event loop never blocks; the request may
+    take seconds — that is accepted for an explicit refresh. Rate limited
+    per client; a failing server degrades its own slice only."""
+    _guard_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _inbox_refresh_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"task-inbox refresh rate limit exceeded "
+            f"({_INBOX_REFRESH_RATE_LIMIT} per {_INBOX_REFRESH_RATE_WINDOW:.0f}s per client)",
+        )
+    result = await refresh_inbox(registry, store)
+    return TaskInboxRefreshOut(**result)
+
+
+@app.post("/api/tasks/inbox/{memory_id}/adopt", status_code=201)
+async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
+    """Adopt a mirrored task:queue record as a NATIVE board task.
+
+    The memory content is never copied — the task links it via memory_ids
+    (SEC-4). 409 with the existing ``task_id`` on double adoption; 404 when
+    the mirror row is unknown."""
+    _guard_write(request)
+    rec = store.get_inbox_item(memory_id)
+    if rec is None:
+        raise HTTPException(404, "memory not found in task inbox")
+    if rec.get("adopted_task_id"):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "task_id": rec["adopted_task_id"],
+                "detail": "inbox record already adopted",
+            },
+        )
+    specialist = rec.get("specialist") or ""
+    # store raises ValueError on a garbage env/priority in the mirror row —
+    # surface as 422, never as a 500
+    try:
+        task = store.create_task({
+            "title": (rec.get("title") or f"task:queue {memory_id[:8]}")[:200],
+            "summary": (
+                f"Принято из task:queue ({rec['server']}, память {memory_id[:8]}) "
+                "— полное описание в связанной памяти."
+            ),
+            "project": rec.get("project", ""),
+            "priority": rec.get("priority", "normal"),
+            "env": "laptop",
+            "agents": ["zcode"],
+            "specialists": [specialist] if specialist else [],
+            "memory_ids": [memory_id],
+            "mnemos_tags": ["task-queue-import"],
+        })
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not store.mark_inbox_adopted(memory_id, task["id"]):
+        logging.getLogger("vesmaro.inbox").warning(
+            "adopt: mirror row %s vanished mid-adopt (native task %s kept)",
+            memory_id, task["id"])
+    _notify_and_broadcast(
+        "work", f"{task['id']}: принята из task:queue",
+        task["title"][:120], task["id"],
+        {"kind": "task.created", "task": task},
+    )
+    return task
 
 
 # -------------------------------------------------------- specialist profile

@@ -40,6 +40,8 @@ class TestSchemasPresent:
         "ArchiveOut", "UnarchiveOut",
         # BE-7: task history timeline
         "HistoryOut", "EventItem", "MemoryItem",
+        # AGG-1: task inbox mirror
+        "TaskInboxItem", "TaskInboxOut", "TaskInboxRefreshOut",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -141,3 +143,15 @@ class TestKeyRoutesReferenceSchemas:
         memory_item = _components(spec)["MemoryItem"]
         assert {"ts", "title", "source", "detail"} \
             <= set(memory_item.get("properties", {}))
+
+    def test_task_inbox(self, spec):
+        """AGG-1: the inbox routes must reference the mirror models."""
+        assert _ref_name(_response_schema(spec, "/api/tasks/inbox", "get")) \
+            == "TaskInboxOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/tasks/inbox/refresh", "post")) == "TaskInboxRefreshOut"
+        item = _components(spec)["TaskInboxItem"]
+        must_have = {"memory_id", "server", "project", "title", "excerpt",
+                     "tags", "priority", "specialist", "created_at",
+                     "last_seen", "stale", "adopted", "adopted_task_id"}
+        assert must_have <= set(item.get("properties", {}))
