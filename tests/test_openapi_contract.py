@@ -181,3 +181,33 @@ class TestKeyRoutesReferenceSchemas:
             <= set(out.get("properties", {}))
         tag = _components(spec)["TagCountOut"]
         assert {"name", "count"} <= set(tag.get("properties", {}))
+
+    def test_assignments(self, spec):
+        """ADR 0009 Ф1 (ARCH-4): the assignment queue routes must reference
+        the queue models — the freeze-frame portable contract."""
+        for name in ("AssignmentOut", "AssignmentsOut", "AssignmentCreate",
+                     "AssignmentCreatedOut", "AssignmentClaimedOut",
+                     "AssignmentStateOut", "AssignmentFinishedOut"):
+            assert name in _components(spec)
+        assert _ref_name(_response_schema(
+            spec, "/api/assignments", "get")) == "AssignmentsOut"
+        post = spec["paths"]["/api/assignments"]["post"]
+        assert _ref_name(post["requestBody"]["content"]
+                         ["application/json"]["schema"]) == "AssignmentCreate"
+        assert _ref_name(_response_schema(
+            spec, "/api/assignments", "post", "201")) == "AssignmentCreatedOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/assignments/{assignment_id}/claim", "post")) \
+            == "AssignmentClaimedOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/assignments/{assignment_id}/complete", "post")) \
+            == "AssignmentFinishedOut"
+        out = _components(spec)["AssignmentOut"]
+        must_have = {"id", "task_id", "specialist", "harness", "state",
+                     "created_by", "claimed_by", "spec_hash",
+                     "executor_id", "claimed_by_executor", "created_at"}
+        assert must_have <= set(out.get("properties", {}))
+        # §11: the claim token rides only in the claim response
+        assert "claim_token" not in out.get("properties", {})
+        claimed = _components(spec)["AssignmentClaimedOut"]
+        assert {"assignment", "claim_token"} <= set(claimed.get("properties", {}))
