@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AuthClient, clearToken, getToken, onUnauthorized } from "@/gateway/auth";
+import type { AdapterKind } from "@/gateway/adapterConfig";
 import { isApiError, toError } from "@/lib/errors";
 import { AuthContext } from "./AuthContext";
 import type { AuthContextValue } from "./AuthContext";
@@ -20,7 +21,7 @@ import { refetchAfterLogin } from "./refetchAfterLogin";
 export interface AuthProviderProps {
   children: React.ReactNode;
   /** Active gateway mode — surfaced for the TopBar indicator. */
-  adapterMode: "mock" | "http";
+  adapterMode: AdapterKind;
   /** Backend endpoint label for the TopBar indicator. */
   endpoint: string;
   /** Test seam; defaults to the real wire client. */
@@ -39,9 +40,11 @@ export function AuthProvider({
   const sessionExpired = state.sessionExpired;
 
   // Confirm a restored token against /auth/me. On 401 the shared flag fires
-  // and the reducer moves to anonymous + re-opens the overlay.
+  // and the reducer moves to anonymous + re-opens the overlay. Skipped for
+  // mock and board modes: board reads are token-free through Ф0–Ф2 (ADR
+  // 0011 §7) — no session to confirm, no overlay to open.
   useEffect(() => {
-    if (adapterMode !== "http" || !getToken()) return;
+    if (adapterMode !== "mnemos" || !getToken()) return;
     let cancelled = false;
     dispatch({ type: "SESSION_RESTORED" });
     authClient.me().catch((error: unknown) => {

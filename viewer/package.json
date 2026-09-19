@@ -18,7 +18,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "codegen": "bash scripts/codegen.sh",
-    "codegen:offline": "bash scripts/codegen.sh --from-snapshot"
+    "codegen:offline": "bash scripts/codegen.sh --from-snapshot",
+    "codegen:board": "bash scripts/codegen-board.sh",
+    "codegen:board:offline": "bash scripts/codegen-board.sh --from-snapshot"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

@@ -22,7 +22,10 @@ import { ThemeProvider } from "@/components/theme-provider";
  */
 
 /** Build a full AuthContextValue from reducer events (pure, no provider). */
-function authValue(events: AuthEvent[], overrides?: Partial<AuthContextValue>): AuthContextValue {
+function authValue(
+  events: AuthEvent[],
+  overrides?: Partial<AuthContextValue>,
+): AuthContextValue {
   const state = events.reduce(authReducer, initialAuthState);
   return {
     state,
@@ -109,15 +112,18 @@ describe("TopBar auth slot (AuthStatus)", () => {
   });
 
   it("renders Sign out for an authenticated session", () => {
-    const html = renderWithProviders(<TopBar title="Search" />, authValue([{ type: "SESSION_RESTORED" }]));
+    const html = renderWithProviders(
+      <TopBar title="Search" />,
+      authValue([{ type: "SESSION_RESTORED" }]),
+    );
     expect(html).toContain("Sign out");
     expect(html).toContain("Sign out of mnemos");
   });
 
-  it("reports the live connection label on the http adapter", () => {
+  it("reports the live connection label on the mnemos adapter", () => {
     const html = renderWithProviders(
       <TopBar title="Search" />,
-      authValue([], { adapterMode: "http", endpoint: "/api" }),
+      authValue([], { adapterMode: "mnemos", endpoint: "/api" }),
     );
     // Queries are disabled in this harness → still connecting (honest state).
     expect(html).toContain("connecting…");

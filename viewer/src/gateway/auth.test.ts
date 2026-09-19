@@ -58,7 +58,9 @@ describe("token provider", () => {
 
   it("mirrors the token into localStorage under the auth key", () => {
     setToken("tok-2");
-    expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBe(JSON.stringify({ token: "tok-2" }));
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBe(
+      JSON.stringify({ token: "tok-2" }),
+    );
 
     clearToken();
     expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
@@ -141,7 +143,10 @@ describe("AuthClient", () => {
     expect(getToken()).toBe("sess-2");
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/auth/verify");
-    expect(JSON.parse(init.body as string)).toEqual({ challenge_id: "ch-9", code: "123456" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      challenge_id: "ch-9",
+      code: "123456",
+    });
   });
 
   it("verify: rejects when the response carries no token", async () => {
@@ -177,7 +182,9 @@ describe("AuthClient", () => {
     expect(me).toEqual({ agent: "zed", totp_enrolled: true });
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.method).toBe("GET");
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sess-5");
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer sess-5",
+    );
   });
 
   it("me: a 401 both throws and fires the unauthorized flag", async () => {
@@ -191,5 +198,61 @@ describe("AuthClient", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error.status).toBe(401);
     expect(unauthorized).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("storage mode (ADR 0011 §7 audit point Ф0)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("resolveStorageMode: only 'session' opts in, everything else stays local", async () => {
+    const { resolveStorageMode } = await import("./auth");
+    expect(resolveStorageMode("session")).toBe("session");
+    expect(resolveStorageMode("local")).toBe("local");
+    expect(resolveStorageMode(undefined)).toBe("local");
+    expect(resolveStorageMode("garbage")).toBe("local");
+  });
+
+  it("VITE_AUTH_STORAGE=session mirrors into sessionStorage, never localStorage", async () => {
+    vi.stubGlobal("sessionStorage", new MemoryStorage());
+    vi.stubEnv("VITE_AUTH_STORAGE", "session");
+    vi.resetModules();
+    const session = await import("./auth");
+
+    session.setToken("mnk_session_only");
+
+    expect(sessionStorage.getItem(AUTH_STORAGE_KEY)).toBe(
+      JSON.stringify({ token: "mnk_session_only" }),
+    );
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
+    expect(session.getToken()).toBe("mnk_session_only");
+  });
+
+  it("session mode restores across a module reload from sessionStorage", async () => {
+    vi.stubGlobal("sessionStorage", new MemoryStorage());
+    vi.stubEnv("VITE_AUTH_STORAGE", "session");
+    vi.resetModules();
+    (await import("./auth")).setToken("sess-tab");
+
+    vi.resetModules();
+    const restored = await import("./auth");
+    expect(restored.getToken()).toBe("sess-tab");
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
+  });
+
+  it("clearToken removes the mirror from both storages (mode-switch hygiene)", async () => {
+    vi.stubGlobal("sessionStorage", new MemoryStorage());
+    vi.stubEnv("VITE_AUTH_STORAGE", "session");
+    vi.resetModules();
+    const session = await import("./auth");
+    session.setToken("sess-hygiene");
+    // A stale entry in the OTHER storage must not survive a clear either.
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ token: "mnk_stale" }));
+
+    session.clearToken();
+
+    expect(sessionStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
   });
 });

@@ -3,4 +3,5 @@ coverage
 node_modules
 package-lock.json
 src/types/openapi.d.ts
+src/types/board-openapi.d.ts
 *.tsbuildinfo
