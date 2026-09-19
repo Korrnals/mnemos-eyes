@@ -3,12 +3,16 @@ import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { MemoryScroll } from "./MemoryScroll";
 import { MOCK_MEMORIES } from "@/gateway/fixtures";
+import { I18nProvider } from "@/i18n";
 import type { Memory } from "@/gateway/types";
 
+// English copy via initialLang — these tests pin copy, not the ru default.
 function render(memory: Memory, showRaw = false): string {
   return renderToString(
     <MemoryRouter>
-      <MemoryScroll memory={memory} showRaw={showRaw} onToggleRaw={() => undefined} />
+      <I18nProvider initialLang="en">
+        <MemoryScroll memory={memory} showRaw={showRaw} onToggleRaw={() => undefined} />
+      </I18nProvider>
     </MemoryRouter>,
   );
 }

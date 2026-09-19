@@ -11,6 +11,7 @@ import { useGateway } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { GC_TIMES, STALE_TIMES } from "@/lib/queryClient";
 import { useTags } from "@/hooks/useTags";
+import { useT } from "@/i18n";
 
 /**
  * `/tags` — tag inspector + drilldown (component-inventory §6). Counts come
@@ -21,6 +22,7 @@ import { useTags } from "@/hooks/useTags";
  * client-side and says so.
  */
 export function TagsPage() {
+  const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedTag = searchParams.get("tag");
   const [filter, setFilter] = useState("");
@@ -39,23 +41,23 @@ export function TagsPage() {
   return (
     <section aria-labelledby="tags-title" className="mx-auto max-w-3xl space-y-4">
       <h1 id="tags-title" className="text-xl font-semibold">
-        Tags
+        {t("tags.title")}
       </h1>
 
       <TagFilterInput id="tag-filter" value={filter} onChange={setFilter} />
 
       {tags.isPending ? (
-        <div role="status" aria-label="Loading tags">
+        <div role="status" aria-label={t("tags.loading")}>
           <MemoryCardSkeleton count={2} />
         </div>
       ) : tags.isError ? (
         <EmptyState
           variant="error"
-          title="Could not load tags"
+          title={t("tags.loadFailed")}
           message={tags.error.message}
           action={
             <Button variant="outline" onClick={() => void tags.refetch()}>
-              Retry
+              {t("common.retry")}
             </Button>
           }
         />
@@ -78,11 +80,9 @@ export function TagsPage() {
       {!tags.isPending && !tags.isError && Object.keys(record).length === 0 ? (
         <EmptyState
           variant="empty"
-          title={filter ? "No tags match" : "No tags yet"}
+          title={t(filter ? "tags.noMatch" : "tags.noTags")}
           message={
-            filter
-              ? `Nothing matches “${filter}”.`
-              : "Tags appear once memories carry them."
+            filter ? t("tags.noMatchMessage", { filter }) : t("tags.noTagsMessage")
           }
         />
       ) : null}
@@ -95,6 +95,7 @@ export function TagsPage() {
  * wide list fetch (no by-tag endpoint on mnemos — stated on screen).
  */
 function TagDrilldown({ tag }: { tag: string }) {
+  const t = useT();
   const [, setSearchParams] = useSearchParams();
   const gateway = useGateway();
   const all = useQuery({
@@ -109,7 +110,10 @@ function TagDrilldown({ tag }: { tag: string }) {
   );
 
   return (
-    <section aria-labelledby="tag-drilldown-title" className="mx-auto max-w-3xl space-y-4">
+    <section
+      aria-labelledby="tag-drilldown-title"
+      className="mx-auto max-w-3xl space-y-4"
+    >
       <Button
         variant="ghost"
         size="sm"
@@ -124,35 +128,33 @@ function TagDrilldown({ tag }: { tag: string }) {
           )
         }
       >
-        <ArrowLeft className="size-4" aria-hidden="true" /> All tags
+        <ArrowLeft className="size-4" aria-hidden="true" /> {t("tags.all")}
       </Button>
       <h1 id="tag-drilldown-title" className="text-xl font-semibold">
-        Memories tagged <span className="text-iris-bright">{tag}</span>
+        {t("tags.drilldownTitle")} <span className="text-iris-bright">{tag}</span>
       </h1>
-      <p className="text-xs text-foreground-muted">
-        Filtered client-side — mnemos has no by-tag list filter (ADR 0003 §9).
-      </p>
+      <p className="text-xs text-foreground-muted">{t("tags.drilldownNote")}</p>
 
       {all.isPending ? (
-        <div role="status" aria-label="Loading memories">
+        <div role="status" aria-label={t("memories.loading")}>
           <MemoryCardSkeleton count={3} />
         </div>
       ) : all.isError ? (
         <EmptyState
           variant="error"
-          title="Could not load memories"
+          title={t("memories.loadFailed")}
           message={all.error.message}
           action={
             <Button variant="outline" onClick={() => void all.refetch()}>
-              Retry
+              {t("common.retry")}
             </Button>
           }
         />
       ) : memories.length === 0 ? (
         <EmptyState
           variant="empty"
-          title="Nothing carries this tag"
-          message={`No memory is tagged ${tag} right now.`}
+          title={t("tags.nothingCarries")}
+          message={t("tags.nothingCarriesMessage", { tag })}
         />
       ) : (
         <ul className="grid gap-4">

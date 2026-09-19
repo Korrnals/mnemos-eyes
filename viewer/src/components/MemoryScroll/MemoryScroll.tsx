@@ -5,9 +5,10 @@ import {
   formatTimestamp,
   isMonoMemory,
 } from "@/components/memory/memoryDisplay";
-import { statusBadgeVariant } from "@/components/memory/memoryBadges";
+import { statusBadgeVariant, statusLabelKey } from "@/components/memory/memoryBadges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n";
 import type { Memory } from "@/gateway/types";
 
 /**
@@ -23,7 +24,13 @@ export interface MemoryScrollProps {
   className?: string;
 }
 
-export function MemoryScroll({ memory, showRaw, onToggleRaw, className }: MemoryScrollProps) {
+export function MemoryScroll({
+  memory,
+  showRaw,
+  onToggleRaw,
+  className,
+}: MemoryScrollProps) {
+  const t = useT();
   const raw = memory.raw_content ?? null;
   const effective = memory.clean_content ?? memory.content;
   // Inventory §5.3: the toggle exists only when raw differs from effective.
@@ -37,18 +44,27 @@ export function MemoryScroll({ memory, showRaw, onToggleRaw, className }: Memory
       {/* 1. Provenance bar */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-foreground-secondary">
         <span>
-          agent: <span className="text-foreground">{memory.agent || "unknown"}</span>
+          {t("memory.agentLabel")}{" "}
+          <span className="text-foreground">
+            {memory.agent || t("memory.agentUnknownShort")}
+          </span>
         </span>
         <span>
-          project: <span className="text-foreground">{memory.project}</span>
+          {t("memory.projectLabel")}{" "}
+          <span className="text-foreground">{memory.project}</span>
         </span>
         <span>
-          created:{" "}
+          {t("memory.createdLabel")}{" "}
           <time dateTime={memory.created_at}>{formatTimestamp(memory.created_at)}</time>
         </span>
-        <Badge variant={statusBadgeVariant(memory.status)}>{memory.status}</Badge>
+        <Badge variant={statusBadgeVariant(memory.status)}>
+          {t(statusLabelKey(memory.status))}
+        </Badge>
         {typeof memory.confidence === "number" ? (
-          <span className="text-confidence" title={`confidence ${memory.confidence}`}>
+          <span
+            className="text-confidence"
+            title={t("memory.confidenceTitle", { value: memory.confidence })}
+          >
             {formatConfidence(memory.confidence)}
           </span>
         ) : null}
@@ -73,8 +89,14 @@ export function MemoryScroll({ memory, showRaw, onToggleRaw, className }: Memory
       {/* 3. Raw content toggle */}
       {rawDiffers ? (
         <div className="mt-3">
-          <Button variant="outline" size="sm" onClick={onToggleRaw} aria-pressed={showRaw}>
-            {showRaw ? "Showing raw content" : "Showing effective content"} — switch
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onToggleRaw}
+            aria-pressed={showRaw}
+          >
+            {showRaw ? t("memory.showingRaw") : t("memory.showingEffective")} —{" "}
+            {t("memory.rawSwitch")}
           </Button>
         </div>
       ) : null}
@@ -92,8 +114,11 @@ export function MemoryScroll({ memory, showRaw, onToggleRaw, className }: Memory
       {/* Related memories (derived_from) — only rendered when the fixture carries links */}
       {related.length > 0 ? (
         <section aria-labelledby="related-memories" className="mt-6">
-          <h2 id="related-memories" className="text-sm font-semibold text-foreground-secondary">
-            Related memories
+          <h2
+            id="related-memories"
+            className="text-sm font-semibold text-foreground-secondary"
+          >
+            {t("memory.related")}
           </h2>
           <ul className="mt-2 space-y-1">
             {related.map((id) => (
@@ -114,17 +139,19 @@ export function MemoryScroll({ memory, showRaw, onToggleRaw, className }: Memory
       <footer className="mt-6 border-t border-border-subtle pt-3 text-xs text-foreground-muted">
         <dl className="flex flex-wrap gap-x-6 gap-y-1">
           <div className="flex gap-1">
-            <dt>id:</dt>
+            <dt>{t("memory.idLabel")}</dt>
             <dd>{memory.id}</dd>
           </div>
           <div className="flex gap-1">
-            <dt>updated:</dt>
+            <dt>{t("memory.updatedLabel")}</dt>
             <dd>
-              <time dateTime={memory.updated_at}>{formatTimestamp(memory.updated_at)}</time>
+              <time dateTime={memory.updated_at}>
+                {formatTimestamp(memory.updated_at)}
+              </time>
             </dd>
           </div>
           <div className="flex gap-1">
-            <dt>source:</dt>
+            <dt>{t("memory.sourceLabel")}</dt>
             <dd>{memory.source}</dd>
           </div>
         </dl>

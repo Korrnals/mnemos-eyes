@@ -9,6 +9,7 @@ import { useAuth } from "@/features/auth/AuthContext";
 import { ADAPTER, adapterEndpointLabel } from "@/gateway/adapterConfig";
 
 import { SearchPage } from "@/features/search/SearchPage"; // eager — only eagerly loaded chunk (§3)
+import { useT } from "@/i18n";
 
 // Route-level code splitting (architecture.md §3: lazy-loaded routes).
 const MemoriesPage = lazy(() =>
@@ -42,8 +43,14 @@ const TracesPage = lazy(() =>
 );
 
 function RouteFallback() {
+  const t = useT();
   return (
-    <div role="status" aria-label="Loading view" aria-busy="true" className="space-y-4">
+    <div
+      role="status"
+      aria-label={t("app.loadingView")}
+      aria-busy="true"
+      className="space-y-4"
+    >
       <Skeleton className="h-8 w-48" />
       <Skeleton className="h-40 w-full" />
     </div>
@@ -76,6 +83,7 @@ function AuthOverlay() {
 }
 
 function AppRoutes() {
+  const t = useT();
   return (
     <Routes>
       <Route element={<Shell />}>
@@ -142,7 +150,7 @@ function AppRoutes() {
             <EmptyState
               variant="error"
               title="404"
-              message="This path does not exist in the well."
+              message={t("app.notFoundMessage")}
             />
           }
         />

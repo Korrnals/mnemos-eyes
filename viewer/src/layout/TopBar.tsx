@@ -2,18 +2,23 @@ import { Moon, Sun } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { AuthStatus } from "@/features/auth/AuthStatus";
+import { useT } from "@/i18n";
+import { LanguageToggle } from "./LanguageToggle";
 
 /**
  * Top bar (component-inventory §1): view title + theme toggle + the T6
- * auth/connection slot (mnemos connection indicator, sign in / sign out).
+ * auth/connection slot (mnemos connection indicator, sign in / sign out) +
+ * the RU|EN language switcher (owner feedback 1.4.0).
  */
 export interface TopBarProps {
-  /** Current route label. */
+  /** Current route label (already translated by the caller). */
   title: string;
 }
 
 export function TopBar({ title }: TopBarProps) {
   const { theme, toggleTheme } = useTheme();
+  const t = useT();
+  const nextTheme = theme === "dark" ? "light" : "dark";
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-3 sm:px-6">
@@ -24,11 +29,14 @@ export function TopBar({ title }: TopBarProps) {
       </p>
       <div className="flex shrink-0 items-center gap-3 sm:gap-4">
         <AuthStatus />
+        <LanguageToggle />
         <Button
           variant="ghost"
           size="sm"
           onClick={toggleTheme}
-          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          aria-label={t(
+            nextTheme === "light" ? "topbar.themeToLight" : "topbar.themeToDark",
+          )}
         >
           {theme === "dark" ? (
             <Sun className="size-4" aria-hidden="true" />
@@ -38,7 +46,7 @@ export function TopBar({ title }: TopBarProps) {
           {/* Label shortens below sm so the bar reflows at 320px (WCAG 1.4.10);
            * the aria-label carries the full wording for AT. */}
           <span className="hidden sm:inline">
-            {theme === "dark" ? "Light" : "Dark"} theme
+            {t(nextTheme === "light" ? "topbar.themeLight" : "topbar.themeDark")}
           </span>
         </Button>
       </div>

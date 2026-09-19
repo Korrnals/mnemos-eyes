@@ -3,8 +3,10 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCard } from "@/components/MemoryCard/MemoryCard";
 import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
+import { statusLabelKey } from "@/components/memory/memoryBadges";
 import { Button } from "@/components/ui/button";
 import { useMemories } from "@/hooks/useMemories";
+import { useT } from "@/i18n";
 import {
   DEFAULT_PAGE_SIZE,
   MEMORY_STATUSES,
@@ -20,12 +22,15 @@ import { useProjectOptions } from "./useProjectOptions";
  * Filters and pagination live in URL params: `?status=&project=&limit=&page=`.
  */
 export function MemoriesPage() {
+  const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
   const state = parseMemoryListParams(searchParams);
   const projects = useProjectOptions();
   const list = useMemories(toListParams(state));
 
-  const patch = (changes: Partial<{ status: string; project: string; limit: number; page: number }>) => {
+  const patch = (
+    changes: Partial<{ status: string; project: string; limit: number; page: number }>,
+  ) => {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -56,19 +61,22 @@ export function MemoriesPage() {
   return (
     <section aria-labelledby="memories-title" className="mx-auto max-w-3xl space-y-4">
       <h1 id="memories-title" className="text-xl font-semibold">
-        Memories
+        {t("memories.title")}
       </h1>
 
       {/* Filters (inventory §4: status / project / limit as URL params).
        * Deliberately not role="search" — it filters the list, it does not search. */}
       <form
         className="flex flex-wrap items-end gap-3"
-        aria-label="Filter memories"
+        aria-label={t("memories.filterLabel")}
         onSubmit={(event) => event.preventDefault()}
       >
         <div className="flex flex-col gap-1">
-          <label htmlFor="memories-status" className="text-xs text-foreground-secondary">
-            Status
+          <label
+            htmlFor="memories-status"
+            className="text-xs text-foreground-secondary"
+          >
+            {t("memories.statusLabel")}
           </label>
           <select
             id="memories-status"
@@ -76,18 +84,21 @@ export function MemoriesPage() {
             onChange={(event) => patch({ status: event.target.value || undefined })}
             className="h-9 rounded-md border border-border bg-well px-2 text-sm text-foreground focus-visible:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
           >
-            <option value="">All statuses</option>
+            <option value="">{t("memories.allStatuses")}</option>
             {MEMORY_STATUSES.map((status) => (
               <option key={status} value={status}>
-                {status}
+                {t(statusLabelKey(status))}
               </option>
             ))}
           </select>
         </div>
 
         <div className="flex flex-col gap-1">
-          <label htmlFor="memories-project" className="text-xs text-foreground-secondary">
-            Project
+          <label
+            htmlFor="memories-project"
+            className="text-xs text-foreground-secondary"
+          >
+            {t("memories.projectLabel")}
           </label>
           <select
             id="memories-project"
@@ -95,7 +106,7 @@ export function MemoriesPage() {
             onChange={(event) => patch({ project: event.target.value || undefined })}
             className="h-9 rounded-md border border-border bg-well px-2 text-sm text-foreground focus-visible:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
           >
-            <option value="">All projects</option>
+            <option value="">{t("memories.allProjects")}</option>
             {projects.map((project) => (
               <option key={project} value={project}>
                 {project}
@@ -106,7 +117,7 @@ export function MemoriesPage() {
 
         <div className="flex flex-col gap-1">
           <label htmlFor="memories-limit" className="text-xs text-foreground-secondary">
-            Per page
+            {t("memories.limitLabel")}
           </label>
           <select
             id="memories-limit"
@@ -124,17 +135,17 @@ export function MemoriesPage() {
       </form>
 
       {list.isPending ? (
-        <div role="status" aria-label="Loading memories">
+        <div role="status" aria-label={t("memories.loading")}>
           <MemoryCardSkeleton count={4} />
         </div>
       ) : list.isError ? (
         <EmptyState
           variant="error"
-          title="Could not load memories"
+          title={t("memories.loadFailed")}
           message={list.error.message}
           action={
             <Button variant="outline" onClick={() => void list.refetch()}>
-              Retry
+              {t("common.retry")}
             </Button>
           }
         />
@@ -142,19 +153,22 @@ export function MemoriesPage() {
         filtered ? (
           <EmptyState
             variant="empty"
-            title="No memories match these filters"
-            message="Loosen the status or project filter to surface more of the well."
+            title={t("memories.noMatch")}
+            message={t("memories.noMatchHint")}
             action={
-              <Button variant="outline" onClick={() => patch({ status: undefined, project: undefined })}>
-                Clear filters
+              <Button
+                variant="outline"
+                onClick={() => patch({ status: undefined, project: undefined })}
+              >
+                {t("memories.clearFilters")}
               </Button>
             }
           />
         ) : (
           <EmptyState
             variant="empty"
-            title="The well is empty"
-            message="mnemos holds no memories yet."
+            title={t("memories.wellEmpty")}
+            message={t("memories.wellEmptyHint")}
           />
         )
       ) : (
@@ -166,15 +180,29 @@ export function MemoriesPage() {
               </li>
             ))}
           </ul>
-          <nav aria-label="Memory list pages" className="flex items-center justify-between">
-            <Button variant="outline" size="sm" disabled={!canGoPrev} onClick={() => patch({ page: state.page - 1 })}>
-              <ChevronLeft className="size-4" aria-hidden="true" /> Prev
+          <nav
+            aria-label={t("memories.pagesAria")}
+            className="flex items-center justify-between"
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!canGoPrev}
+              onClick={() => patch({ page: state.page - 1 })}
+            >
+              <ChevronLeft className="size-4" aria-hidden="true" /> {t("memories.prev")}
             </Button>
             <p aria-live="polite" className="text-xs text-foreground-secondary">
-              Showing {rangeStart}–{rangeEnd}
+              {t("memories.showing", { from: rangeStart, to: rangeEnd })}
             </p>
-            <Button variant="outline" size="sm" disabled={!canGoNext} onClick={() => patch({ page: state.page + 1 })}>
-              Next <ChevronRight className="size-4" aria-hidden="true" />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!canGoNext}
+              onClick={() => patch({ page: state.page + 1 })}
+            >
+              {t("memories.next")}{" "}
+              <ChevronRight className="size-4" aria-hidden="true" />
             </Button>
           </nav>
         </>

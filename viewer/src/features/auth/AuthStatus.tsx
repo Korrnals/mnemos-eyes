@@ -5,6 +5,7 @@ import { deriveHealthStatus } from "@/components/StatusIndicator/deriveHealthSta
 import { Button } from "@/components/ui/button";
 import { useStatus } from "@/hooks/useStatus";
 import { getToken } from "@/gateway/auth";
+import { useT, type TranslationKey } from "@/i18n";
 import { useAuth } from "./AuthContext";
 
 /**
@@ -24,22 +25,23 @@ import { useAuth } from "./AuthContext";
  */
 export function AuthStatus() {
   const { state, adapterMode, endpoint, logout, openOverlay } = useAuth();
+  const t = useT();
   const status = useStatus();
 
   const isBoard = adapterMode === "board";
   let connection: { state: HealthState; label: string };
   if (adapterMode === "mock") {
-    connection = { state: "ok", label: "local (mock)" };
+    connection = { state: "ok", label: t("auth.localMock") };
   } else {
     const health = deriveHealthStatus(status.data, status.isPending, status.isError);
     const backend = isBoard ? "board" : "mnemos";
-    const LABEL: Record<HealthState, string> = {
-      ok: `connected to ${backend}: ${endpoint}`,
-      degraded: `${backend} degraded`,
-      error: "offline",
-      unknown: "connecting…",
+    const LABEL: Record<HealthState, TranslationKey> = {
+      ok: "auth.connected",
+      degraded: "auth.degraded",
+      error: "auth.offline",
+      unknown: "auth.connecting",
     };
-    connection = { state: health, label: LABEL[health] };
+    connection = { state: health, label: t(LABEL[health], { backend, endpoint }) };
   }
 
   const authenticated = state.phase === "authenticated" || getToken() !== null;
@@ -56,15 +58,15 @@ export function AuthStatus() {
           variant="ghost"
           size="sm"
           onClick={() => void logout()}
-          aria-label="Sign out of mnemos"
+          aria-label={t("auth.signOutAria")}
         >
           <LogOut className="size-4" aria-hidden="true" />
-          Sign out
+          {t("auth.signOut")}
         </Button>
       ) : (
         <Button variant="outline" size="sm" onClick={openOverlay}>
           <LogIn className="size-4" aria-hidden="true" />
-          Sign in
+          {t("auth.signIn")}
         </Button>
       )}
     </div>

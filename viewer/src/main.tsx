@@ -7,6 +7,7 @@ import { queryClient } from "@/lib/queryClient";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { createGateway, routerBasename } from "@/gateway/adapterConfig";
 import { ThemeProvider } from "@/components/theme-provider";
+import { I18nProvider } from "@/i18n";
 import App from "@/App";
 
 import "@/styles/fonts.css";
@@ -19,9 +20,9 @@ import "@/styles/global.css";
  * (and the production reverse proxy) route requests without CORS.
  *
  * Adapter selection lives in gateway/adapterConfig.ts (`VITE_ADAPTER`):
- * "mnemos" (default — HttpAdapter against the mnemos API), "mock"
- * (in-memory fixtures, `.env.development` default) and "board" (BoardAdapter
- * speaking the board merge-API, ADR 0011 Ф0).
+ * "board" (production default — the read-only merge-API, no auth wall),
+ * "mock" (in-memory fixtures, dev default) and "mnemos" (HttpAdapter against
+ * the mnemos API, via VITE_ADAPTER=mnemos).
  *
  * The router mounts under the Vite base ("/app" in production, root in dev)
  * so the deployed `/app` deep links resolve client-side (ADR 0011 §2 Ф0a:
@@ -40,9 +41,13 @@ createRoot(rootElement).render(
     <GatewayContext.Provider value={gateway}>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-          <BrowserRouter basename={basename}>
-            <App />
-          </BrowserRouter>
+          {/* i18n (owner feedback 1.4.0): ru default, persisted choice in
+           * localStorage "vesmaro.lang", mirrored into <html lang>. */}
+          <I18nProvider>
+            <BrowserRouter basename={basename}>
+              <App />
+            </BrowserRouter>
+          </I18nProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </GatewayContext.Provider>

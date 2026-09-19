@@ -1,3 +1,4 @@
+import type { TranslationKey } from "@/i18n";
 import type { MemoryStatus } from "@/gateway/types";
 
 /**
@@ -19,6 +20,30 @@ export function statusBadgeVariant(
     case "raw":
     default:
       return "default";
+  }
+}
+
+/**
+ * i18n key for a memory status caption (pass 1: localized status labels).
+ * Unknown statuses degrade to the raw enum word — the wire value stays
+ * honest on screen.
+ */
+export function statusLabelKey(
+  status: MemoryStatus | string | null | undefined,
+): TranslationKey {
+  switch (status) {
+    case "raw":
+      return "memstatus.raw";
+    case "processing":
+      return "memstatus.processing";
+    case "processed":
+      return "memstatus.processed";
+    case "published":
+      return "memstatus.published";
+    case "archived":
+      return "memstatus.archived";
+    default:
+      return "memstatus.raw";
   }
 }
 

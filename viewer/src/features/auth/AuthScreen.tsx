@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { KeyRound, LogIn, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useT } from "@/i18n";
 import { useAuth } from "./AuthContext";
 
 /**
@@ -20,6 +21,7 @@ import { useAuth } from "./AuthContext";
  */
 export function AuthScreen() {
   const { state, login, verify, closeOverlay } = useAuth();
+  const t = useT();
   const [token, setToken] = useState("");
   const [code, setCode] = useState("");
   const [revealToken, setRevealToken] = useState(false);
@@ -34,9 +36,7 @@ export function AuthScreen() {
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    surfaceRef.current
-      ?.querySelector<HTMLElement>("[data-autofocus]")
-      ?.focus();
+    surfaceRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     return () => previouslyFocused?.focus();
   }, [inChallenge]);
 
@@ -95,21 +95,16 @@ export function AuthScreen() {
             <KeyRound className="size-5" aria-hidden="true" />
           )}
           <h1 id="auth-title" className="text-lg font-semibold text-foreground">
-            {inChallenge ? "Two-factor verification" : "Sign in to mnemos"}
+            {t(inChallenge ? "auth.title2fa" : "auth.title")}
           </h1>
         </div>
-        <p
-          id="auth-description"
-          className="mb-4 text-sm text-foreground-secondary"
-        >
-          {inChallenge
-            ? "Enter the 6-digit code from your authenticator app."
-            : "Paste your mnk_ access token. It stays in this browser and is sent only to your mnemos instance."}
+        <p id="auth-description" className="mb-4 text-sm text-foreground-secondary">
+          {t(inChallenge ? "auth.description2fa" : "auth.description")}
         </p>
 
         {state.sessionExpired && !state.error && (
           <p role="alert" className="mb-3 text-sm text-warning">
-            Your session expired — sign in again to continue.
+            {t("auth.sessionExpired")}
           </p>
         )}
         {state.error && (
@@ -126,7 +121,7 @@ export function AuthScreen() {
           {inChallenge ? (
             <div className="space-y-1.5">
               <label htmlFor="auth-code" className="text-sm font-medium">
-                One-time code
+                {t("auth.codeLabel")}
               </label>
               <Input
                 id="auth-code"
@@ -146,7 +141,7 @@ export function AuthScreen() {
           ) : (
             <div className="space-y-1.5">
               <label htmlFor="auth-token" className="text-sm font-medium">
-                Access token
+                {t("auth.tokenLabel")}
               </label>
               <div className="flex gap-2">
                 <Input
@@ -171,7 +166,7 @@ export function AuthScreen() {
                   onClick={() => setRevealToken((value) => !value)}
                   aria-pressed={revealToken}
                 >
-                  {revealToken ? "Hide" : "Show"}
+                  {t(revealToken ? "auth.hide" : "auth.show")}
                 </Button>
               </div>
             </div>
@@ -185,7 +180,7 @@ export function AuthScreen() {
               onClick={closeOverlay}
               className="px-0"
             >
-              Continue in read-only mode
+              {t("auth.continueReadOnly")}
             </Button>
             <Button
               type="submit"
@@ -196,7 +191,11 @@ export function AuthScreen() {
               }
             >
               <LogIn className="size-4" aria-hidden="true" />
-              {busy ? "Signing in…" : inChallenge ? "Verify" : "Sign in"}
+              {busy
+                ? t("auth.signingIn")
+                : inChallenge
+                  ? t("auth.verify")
+                  : t("auth.signIn")}
             </Button>
           </div>
         </form>

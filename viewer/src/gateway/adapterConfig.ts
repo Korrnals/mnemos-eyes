@@ -10,8 +10,12 @@ import { clearToken } from "./auth";
  * and the auth UI (endpoint label in the TopBar connection indicator) so both
  * always describe the same backend.
  *
- * Adapter selection (ADR 0011 Ф0): `VITE_ADAPTER=mock|mnemos|board`, default
- * `mnemos` — the pre-convergence behaviour. The legacy `VITE_MNEMOS_ADAPTER`
+ * Adapter selection (ADR 0011 Ф0): `VITE_ADAPTER=mock|mnemos|board`. The
+ * default is environment-aware (owner feedback 1.4.0): production builds boot
+ * into `board` (read-only merge-API, no auth wall — an `mnk_` sign-in screen
+ * is meaningless in the deployed /app), dev boots into `mock` (fixtures, no
+ * backend needed). `VITE_ADAPTER=mnemos` opts back into the direct mnemos
+ * mode for development against a live mnemos. The legacy `VITE_MNEMOS_ADAPTER`
  * knob keeps working (mock boxes stay mock) but is superseded by
  * `VITE_ADAPTER` when both are set.
  */
@@ -22,18 +26,24 @@ export const MNEMOS_BASE_URL = import.meta.env.VITE_MNEMOS_API_URL ?? "/api";
 /** Board merge-API base — same-origin "/api"; `VITE_BOARD_API_URL` overrides. */
 export const BOARD_BASE_URL = import.meta.env.VITE_BOARD_API_URL ?? "/api";
 
+/** Environment-aware fallback: prod boots board, dev/test boot mock. */
+export const DEFAULT_ADAPTER_KIND: AdapterKind = import.meta.env.PROD
+  ? "board"
+  : "mock";
+
 /** Resolve the adapter kind from the new + legacy env knobs (pure, testable). */
 export function resolveAdapterKind(
   adapter: string | undefined,
   legacy?: string | undefined,
+  fallback: AdapterKind = DEFAULT_ADAPTER_KIND,
 ): AdapterKind {
   if (adapter === "mock" || adapter === "mnemos" || adapter === "board") return adapter;
   if (adapter === undefined || adapter === "") {
     // Legacy knob honoured only in its mock flavour; legacy "http" (and any
-    // unknown value) maps to the mnemos default.
-    return legacy === "mock" ? "mock" : "mnemos";
+    // unknown value) falls through to the environment-aware default.
+    return legacy === "mock" ? "mock" : fallback;
   }
-  return "mnemos";
+  return fallback;
 }
 
 export const ADAPTER: AdapterKind = resolveAdapterKind(
