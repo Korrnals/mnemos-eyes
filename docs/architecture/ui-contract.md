@@ -167,6 +167,33 @@ X-Profile-Index-Sources: name=alpha,status=ok,items=12;name=beta,status=err
 | `task.unarchived` | `task_id: str` + `notification` | `app.py:735` | **не обрабатывается** (тот же gap) |
 | `server.changed` | опционально `server: name`; группы — `server: "group:{name}"`; поле может отсутствовать | операции с серверами/группами, `app.py:363,382,407,418,428,438,456,467,602` | перезагрузка хранилищ и кластеров (`app.js:1862–1864`) |
 | `notification` | только `notification` | fallback `_notify_and_broadcast`, `app.py:61`; текущие роуты не эмитят | не обрабатывается; колокольчик обновляется polling каждые 20 с (`app.js:1895`) |
+| `report` | `task_id: str` + `report` (объект Report, `body` обрезан до 200 символов) | POST `/api/tasks/{id}/reports`, `app.py:1402–1407` | **не обрабатывается** — известный gap; закрытие в UI-фазе ARCH-8, до тех пор лента отчёта карточки обновляется polling истории |
+
+### Зарезервированные kinds (ADR 0009, эмиттеры — фаза 1)
+
+Словарь `assignment.*` (ARCH-4/Ф1) зарезервирован заранее — той же фазой,
+которая вводит эмиттеры, чтобы контракт и код не расходились (урок gap
+`kind:"report"`). Payload каждого — `{assignment: Assignment, task_id: str}`
+(+ `notification`, где отмечено):
+
+| kind | Переход | Эмиттер (Ф1) | Клиент |
+| --- | --- | --- | --- |
+| `assignment.created` | → queued | POST `/api/assignments` + notification | до Ф4 не обрабатывается |
+| `assignment.claimed` | queued → claimed (+ move задачи) | POST `/api/assignments/{id}/claim` | до Ф4 не обрабатывается |
+| `assignment.started` | claimed → running | POST `/api/assignments/{id}/start` | до Ф4 не обрабатывается |
+| `assignment.done` | running → done (+ move в resolved) | POST `/api/assignments/{id}/complete` + notification | до Ф4 не обрабатывается |
+| `assignment.failed` | → failed (+ move в blocked) | POST `/api/assignments/{id}/fail` + notification | до Ф4 не обрабатывается |
+| `assignment.cancelled` | → cancelled (+ возврат в open) | POST `/api/assignments/{id}/cancel` + notification | до Ф4 не обрабатывается |
+| `assignment.expired` | claimed/running → expired (reaper Ф3, ADR 0009 §10) | reaper + notification | до Ф4 не обрабатывается |
+
+`Assignment`: `id`, `task_id`, `specialist`, `harness`, `state`
+(`queued|claimed|running|done|failed|cancelled|expired`), `created_by`,
+`claimed_by`, `note`, `created_at`, `claimed_at`, `started_at`,
+`heartbeat_at`, `finished_at`; `claim_token` и `spec_snapshot` в SSE-payload
+**не входят** (секрет и immutable execution view соответственно — только
+hash в payload, если понадобится). Транспортное ограничение без resumption:
+клиент после (re)connect обязан пере-fetch `GET /api/assignments` — SSE
+здесь уведомление, не источник правды.
 
 ### Встроенные объекты
 

@@ -16,3 +16,5 @@ one decision. The authoritative summary lives in [`../CHARTER.md`](../CHARTER.md
 | [0008](0008-backend-stack.md) | Board backend stack — stay on Python/FastAPI (for now) | Accepted by committee — pending owner ratification |
 | [0009](0009-agent-bridge-assignments.md) | Agent bridge — assignment queue on the board (variant A′) | Accepted by committee — pending owner ratification |
 | [0010](0010-task-aggregation-engine.md) | Движок агрегации задач — два класса задач, mirror-таблица `task_inbox` | Accepted |
+| [0011](0011-ui-convergence.md) | Конвергенция фронтендов в единое web-приложение (strangler Ф0–Ф4) | Accepted by committee — pending owner ratification |
+| [0012](0012-qr-pairing-device-tokens.md) | QR-пейринг и device-токены (LAN-direct, `mnd_`) | Accepted by committee — pending owner ratification |
