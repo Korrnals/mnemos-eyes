@@ -1,6 +1,6 @@
 # ADR 0012: QR-пейринг и device-токены
 
-- Status: **Accepted by committee — pending owner ratification** (2026-09-19)
+- Status: **Accepted (owner ratified 2026-09-19; details delegated to Tech Lead)** (2026-09-19)
 - Deciders: АРХКОМ-3 — Product Architect, Senior UI/UX Designer, Senior
   System Engineer, Senior Security Engineer, Senior Frontend Developer,
   Senior QA Engineer; ведёт `@GCW: Tech Lead`; ратификация — владелец

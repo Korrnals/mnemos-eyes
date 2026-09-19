@@ -36,7 +36,7 @@
 
 ## Решения сессии (комитет; четыре вердикта и два входа сведены TL)
 
-Все решения ниже — **Accepted by committee — pending owner ratification**.
+Все решения ниже — **Accepted (owner ratified 2026-09-19; details delegated to Tech Lead)**.
 
 1. **Конвергенция в единое React-приложение (ADR 0011).** Вариант A принят
    единогласно (четыре вердикта + оба входа). Новая IA строится в
