@@ -1,3 +1,4 @@
+import type { PulseParams } from "@/gateway/boardTypes";
 import type { ListMemoriesParams, SearchParams } from "@/gateway/types";
 
 /**
@@ -22,6 +23,12 @@ export const keys = {
   status: {
     health: () => ["status", "health"] as const,
     metrics: () => ["status", "metrics"] as const,
+    // Ф1 Overview: per-store health detail (board-native).
+    boardHealth: () => ["status", "board-health"] as const,
+  },
+  // Ф1 Pulse page: merged recency feed.
+  pulse: {
+    feed: (params: PulseParams = {}) => ["pulse", "feed", params] as const,
   },
   traces: {
     all: ["traces"] as const,
@@ -47,6 +54,8 @@ export type SearchResultsKey = ReturnType<typeof keys.search.results>;
 export type TagsListKey = ReturnType<typeof keys.tags.list>;
 export type HealthKey = ReturnType<typeof keys.status.health>;
 export type MetricsKey = ReturnType<typeof keys.status.metrics>;
+export type BoardHealthKey = ReturnType<typeof keys.status.boardHealth>;
+export type PulseFeedKey = ReturnType<typeof keys.pulse.feed>;
 export type TracesListKey = ReturnType<typeof keys.traces.list>;
 export type SessionsListKey = ReturnType<typeof keys.sessions.list>;
 export type SessionDetailKey = ReturnType<typeof keys.sessions.detail>;

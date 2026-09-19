@@ -9,11 +9,12 @@ import { useSearch } from "@/hooks/useSearch";
 import { useT } from "@/i18n";
 
 /**
- * `/` — the well: dashboard hero + unified search (component-inventory §3,
+ * `/memory/search` — the well: hero + unified search (component-inventory §3,
  * design-system.md §8.1–8.2). The query lives in the `?q=` URL param; typing
  * holds a local draft that a timer commits into the URL (debounced, replace).
  * No sync effects: URL is the committed source of truth, the draft only
- * bridges keystroke → commit, so external navigation shows through instantly.
+ * bridges keystroke → commit, so external navigation (e.g. the top-bar
+ * global search landing here with ?q=) shows through instantly.
  *
  * `auto` passes hits through untouched; `fts`/`semantic` are honest
  * client-side filters over the server-decided per-hit types (mnemos 4.1 has

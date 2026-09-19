@@ -124,7 +124,7 @@ export function MemoryScroll({
             {related.map((id) => (
               <li key={id}>
                 <Link
-                  to={`/memories/${id}`}
+                  to={`/memory/${id}`}
                   className="inline-flex min-h-6 items-center font-mono text-sm text-iris-bright underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
                 >
                   {id}

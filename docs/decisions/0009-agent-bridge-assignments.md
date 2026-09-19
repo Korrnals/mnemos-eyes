@@ -211,3 +211,27 @@ server-side lease semantics beyond the expired state; mnemos as broker
 Implementation phases: **0** SSE-dictionary sync (doc) → **1** server
 (store + routes + tests) → **2** poller (+ systemd) → **3** reaper →
 **4** UI trigger + badge.
+
+## Amendment (2026-09-19) — alignment with АРХКОМ-3 / convergence roadmap
+
+АРХКОМ-3 (interface platform convergence, ADR 0011 — ratified 2026-09-19,
+decision Р10) re-homed this ADR's UI delta: the "take into work" trigger and
+assignment badge are built in the **React app (`viewer/`) during convergence
+wave Ф3** (mutations + kanban DnD), not in the frozen vanilla board (`web/`).
+Consequences of the re-homing:
+
+- The board freeze exception (§1) is **no longer needed** — the board
+  receives zero UI changes; the exceptions-registry budget is not consumed
+  by ARCH-2 (supersedes ratification question №5 of the АРХКОМ-2 protocol).
+- Server-side phases (§3 lifecycle, §9 security, §10 reaper) and §11's
+  success metric are unchanged. The React EventStream consumes the
+  `assignment.*` dictionary reserved in `ui-contract.md` §11 (phase 0).
+- The token split (A1) becomes a **QR-pairing precondition** per the
+  ratified CV-PRE ordering: token-split → pairing; WF-1 rebuild → kanban;
+  CA → pairing/PWA. Server phase 1 and the chart token work therefore run
+  in the first wave, ahead of ADR 0012 implementation.
+- Phase 4 is no longer a standalone step of this ADR — it executes inside
+  the convergence Ф3 wave (tracked as ARCH-8 on the board).
+
+Owner ratification of this ADR remains open; the ratified convergence
+roadmap already schedules the token-split leg as a live precondition.

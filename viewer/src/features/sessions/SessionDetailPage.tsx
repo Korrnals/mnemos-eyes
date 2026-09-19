@@ -25,8 +25,15 @@ export function SessionDetailPage() {
 
   if (session.isPending) {
     return (
-      <div role="status" aria-label={t("sessions.loadingOne")} className="mx-auto max-w-3xl space-y-4">
-        <p className="text-sm text-foreground-secondary" style={{ fontFamily: "var(--font-mono)" }}>
+      <div
+        role="status"
+        aria-label={t("sessions.loadingOne")}
+        className="mx-auto max-w-3xl space-y-4"
+      >
+        <p
+          className="text-sm text-foreground-secondary"
+          style={{ fontFamily: "var(--font-mono)" }}
+        >
           {id}
         </p>
         <div className="h-40 animate-pulse rounded-md bg-elevated" />
@@ -81,7 +88,9 @@ export function SessionDetailPage() {
           <time dateTime={data.updated_at}>{formatTimestamp(data.updated_at)}</time>
         </p>
         <div className="flex items-center gap-2 pt-1">
-          <Badge variant="outline">{t("sessions.turns", { count: data.turns_count })}</Badge>
+          <Badge variant="outline">
+            {t("sessions.turns", { count: data.turns_count })}
+          </Badge>
           {typeof data.ttl_expires_at === "string" ? (
             <Badge variant="iris">
               {t("sessions.ttlUntil", { time: formatTimestamp(data.ttl_expires_at) })}
@@ -93,7 +102,10 @@ export function SessionDetailPage() {
       </header>
 
       <section aria-labelledby="session-metadata">
-        <h2 id="session-metadata" className="text-sm font-semibold text-foreground-secondary">
+        <h2
+          id="session-metadata"
+          className="text-sm font-semibold text-foreground-secondary"
+        >
           {t("sessions.metadata")}
         </h2>
         <pre
@@ -116,7 +128,7 @@ export function SessionDetailPage() {
 function BackLink({ children }: { children: React.ReactNode }) {
   return (
     <Link
-      to="/sessions"
+      to="/system/sessions"
       className="inline-flex min-h-6 items-center gap-1 text-sm text-foreground-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
     >
       <ArrowLeft className="size-4" aria-hidden="true" /> {children}

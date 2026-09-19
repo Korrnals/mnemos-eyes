@@ -133,6 +133,31 @@
   --space-24: 6rem; /*    96px */
 }
 
+/* ── Density (redesign concept §3.3 — two reading regimes) ───────────────
+ * The pair --row-h-dense/--row-h-airy freezes the two regime baselines;
+ * --row-h is the OPERATIONAL row height the user toggle drives (compact vs
+ * comfortable). Contemplative surfaces (search results, pulse, memory
+ * lists, scrolls) consume --row-h-airy/--measure-scroll and never move with
+ * the toggle — density contrast is the design decision, not a compromise. */
+:root {
+  --row-h-dense: 2rem; /*     32px — operational compact baseline */
+  --row-h-airy: 3.5rem; /*    56px — contemplative baseline (min row) */
+  --measure-scroll: 72ch; /*  reading measure for memory content */
+}
+
+/* Comfortable is the default (concept §3.3: toggle moves only the
+ * operational regime; comfortable wins unless the user opts into compact). */
+:root,
+[data-density="comfortable"] {
+  --row-h: 2.5rem; /*       40px — comfortable operational row */
+  --list-gap: 1rem; /*      16px — comfortable list gutter */
+}
+
+[data-density="compact"] {
+  --row-h: var(--row-h-dense);
+  --list-gap: 0.5rem; /*    8px — compact list gutter */
+}
+
 /* ── Radius ─────────────────────────────────────────────────────────── */
 :root {
   --radius-sm: 4px; /* tag badges, small chips */

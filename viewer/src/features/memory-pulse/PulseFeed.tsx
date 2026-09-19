@@ -1,0 +1,108 @@
+import { Link } from "react-router";
+import { TriangleAlert } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TagBadge } from "@/components/TagBadge/TagBadge";
+import { formatTimestamp } from "@/components/memory/memoryDisplay";
+import { statusBadgeVariant, statusLabelKey } from "@/components/memory/memoryBadges";
+import type { MemoryPulseItem, MemoryPulseServerNote } from "@/gateway/boardTypes";
+import { useT } from "@/i18n";
+import { cn } from "@/lib/utils";
+
+/**
+ * Pulse feed rows (redesign concept §4.2 "Live-лента"): recency order, the
+ * store badge first (provenance — a merge-feed row is meaningless without
+ * its origin), status + tags inline, timestamp right. Airy by design
+ * (§3.3): rows consume --row-h-airy and never shrink with the density
+ * toggle — the pulse is a contemplative surface.
+ */
+export interface PulseFeedProps {
+  items: readonly MemoryPulseItem[];
+  perServer?: readonly MemoryPulseServerNote[];
+  /** Compact cut for the Overview block (no tags, fewer hints). */
+  compact?: boolean;
+  className?: string;
+}
+
+export function PulseFeed({
+  items,
+  perServer,
+  compact = false,
+  className,
+}: PulseFeedProps) {
+  const t = useT();
+  const degraded = (perServer ?? []).filter((note) => !note.ok);
+  return (
+    <div className={cn("space-y-2", className)}>
+      {degraded.length > 0 ? (
+        <p
+          className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-xs text-foreground-secondary"
+          role="status"
+        >
+          <TriangleAlert
+            className="mt-0.5 size-3.5 shrink-0 text-warning"
+            aria-hidden="true"
+          />
+          {t("pulse.degradedStores", {
+            servers: degraded.map((note) => note.server).join(", "),
+          })}
+        </p>
+      ) : null}
+      <ul className="list-none space-y-list-gap" aria-label={t("pulse.feedLabel")}>
+        {items.map((item, index) => (
+          <li
+            key={`${item.server}:${item.id}:${index}`}
+            className="flex min-h-row-airy items-center gap-3 rounded-md border border-border-subtle bg-well px-4 py-2 shadow-well"
+          >
+            {/* Provenance badge — mono, first class citizen (ADR 0004 D4). */}
+            <Badge variant="outline" className="shrink-0 font-mono text-xs">
+              {item.server}
+            </Badge>
+            <div className="min-w-0 flex-1">
+              <Link
+                to={`/memory/${encodeURIComponent(item.id)}`}
+                className="inline-flex min-h-6 items-center font-scroll text-sm font-semibold leading-snug hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+              >
+                {item.title || t("pulse.untitled")}
+              </Link>
+              {!compact && item.tags.length > 0 ? (
+                <p className="mt-1 flex flex-wrap gap-1.5">
+                  {item.tags.slice(0, 4).map((tag) => (
+                    <TagBadge key={tag} tag={tag} />
+                  ))}
+                </p>
+              ) : null}
+            </div>
+            <Badge variant={statusBadgeVariant(item.status)} className="shrink-0">
+              {t(statusLabelKey(item.status))}
+            </Badge>
+            <time
+              dateTime={item.created_at || undefined}
+              className="shrink-0 text-xs text-foreground-secondary"
+            >
+              {formatTimestamp(item.created_at || undefined)}
+            </time>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Loading skeleton for the pulse surfaces (same airy row rhythm). */
+export function PulseSkeleton({ rows = 4 }: { rows?: number }) {
+  return (
+    <div className="space-y-list-gap" aria-hidden="true">
+      {Array.from({ length: rows }, (_, index) => (
+        <div
+          key={index}
+          className="flex min-h-row-airy items-center gap-3 rounded-md border border-border-subtle bg-well px-4 py-2"
+        >
+          <Skeleton className="h-5 w-20 shrink-0" />
+          <Skeleton className="h-4 flex-1" />
+          <Skeleton className="h-5 w-16 shrink-0" />
+        </div>
+      ))}
+    </div>
+  );
+}

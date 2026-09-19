@@ -19,7 +19,7 @@ export function SessionListItem({ session, className }: SessionListItemProps) {
   return (
     <li className={className}>
       <Link
-        to={`/sessions/${session.session_id}`}
+        to={`/system/sessions/${session.session_id}`}
         className="block rounded-md border border-border-subtle bg-well p-5 shadow-well transition-colors duration-instant hover:bg-elevated focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
       >
         <div className="flex items-start justify-between gap-3">

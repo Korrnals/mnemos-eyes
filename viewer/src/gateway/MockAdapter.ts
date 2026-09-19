@@ -2,6 +2,12 @@ import type { MemoryGateway } from "./MemoryGateway";
 import { ApiError } from "@/lib/errors";
 import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import type {
+  BoardHealthDetail,
+  MemoryPulse,
+  MemoryPulseItem,
+  PulseParams,
+} from "./boardTypes";
+import type {
   A2ASession,
   HealthStatus,
   ListMemoriesParams,
@@ -85,11 +91,17 @@ export class MockAdapter implements MemoryGateway {
       .map((memory) => ({ ...memory }));
   }
 
-  async getMemory(id: string, includeRaw = false, signal?: AbortSignal): Promise<Memory> {
+  async getMemory(
+    id: string,
+    includeRaw = false,
+    signal?: AbortSignal,
+  ): Promise<Memory> {
     await this.delay(signal);
     const memory = MOCK_MEMORIES.find((candidate) => candidate.id === id);
     if (!memory) {
-      throw new ApiError(404, `Memory "${id}" not found`, { url: `mock:/memories/${id}` });
+      throw new ApiError(404, `Memory "${id}" not found`, {
+        url: `mock:/memories/${id}`,
+      });
     }
     // Imitate the wire: raw_content is withheld unless explicitly requested.
     return includeRaw ? { ...memory } : { ...memory, raw_content: null };
@@ -153,6 +165,91 @@ export class MockAdapter implements MemoryGateway {
     };
   }
 
+  /**
+   * Board-native per-store health (Ф1 Overview). Mirrors the BoardAdapter
+   * wire with the mock's honest truth: one live store holding the fixtures,
+   * one paused store (the neutral "not probed" card branch — disabled stores
+   * are skipped by the merge, so its ok flag is false without an error).
+   */
+  async boardHealth(signal?: AbortSignal): Promise<BoardHealthDetail> {
+    await this.delay(signal);
+    return {
+      ok: true,
+      service: "vesmaro-eyes",
+      board_tasks: MOCK_TRACES.length,
+      servers: [
+        {
+          name: "mock-store",
+          group_name: "default",
+          enabled: true,
+          state: "idle",
+          description: "in-memory fixtures",
+          ok: true,
+          latency_ms: 24,
+          error: null,
+          memories_total: MOCK_MEMORIES.length,
+        },
+        {
+          name: "mock-store-paused",
+          group_name: "default",
+          enabled: false,
+          state: "paused",
+          description: "paused store (mock)",
+          ok: false,
+          latency_ms: null,
+          error: null,
+          memories_total: null,
+        },
+      ],
+    };
+  }
+
+  /**
+   * Board-native merged recency feed (Ф1 Pulse). The mock has a single
+   * store, so every row carries the same provenance stamp; scope filtering
+   * honours the board contract: unknown names fail honestly (404).
+   */
+  async pulse(params: PulseParams = {}, signal?: AbortSignal): Promise<MemoryPulse> {
+    await this.delay(signal);
+    const scope = params.scope && params.scope !== "all" ? params.scope : "";
+    if (scope && scope !== "mock-store" && scope !== "mock-store-paused") {
+      throw new ApiError(404, `no memory server or group named '${scope}'`, {
+        url: "mock:/api/memories/pulse",
+      });
+    }
+    const pool =
+      scope === "mock-store-paused"
+        ? []
+        : MOCK_MEMORIES.filter(
+            (memory) =>
+              params.project === undefined || memory.project === params.project,
+          ).sort(byCreatedDesc);
+    const items: MemoryPulseItem[] = pool
+      .slice(0, params.limit ?? 12)
+      .map((memory) => ({
+        id: memory.id ?? "mem-mock",
+        title: memory.title ?? "",
+        tags: [...(memory.tags ?? [])],
+        status: memory.status,
+        created_at: memory.created_at ?? "",
+        server: scope || "mock-store",
+      }));
+    return {
+      ok: scope !== "mock-store-paused",
+      scope: scope || "all",
+      kind: scope ? "server" : "all",
+      items,
+      per_server: [
+        {
+          server: scope || "mock-store",
+          ok: scope !== "mock-store-paused",
+          items: items.length,
+          detail: null,
+        },
+      ],
+    };
+  }
+
   async metrics(signal?: AbortSignal): Promise<Metrics> {
     await this.delay(signal);
     const byStatus: Record<string, number> = {};
@@ -162,7 +259,8 @@ export class MockAdapter implements MemoryGateway {
     const tags = new Set(MOCK_MEMORIES.flatMap((memory) => memory.tags ?? []));
     const scored = MOCK_MEMORIES.filter((m) => typeof m.quality_score === "number");
     const avgQuality =
-      scored.reduce((sum, m) => sum + (m.quality_score ?? 0), 0) / Math.max(scored.length, 1);
+      scored.reduce((sum, m) => sum + (m.quality_score ?? 0), 0) /
+      Math.max(scored.length, 1);
     return {
       memories_total: MOCK_MEMORIES.length,
       memories_by_status: byStatus,
@@ -282,7 +380,10 @@ function scoreMemory(
 
 /** Lowercase, split on whitespace, drop empties. */
 function tokenize(query: string): string[] {
-  return query.toLowerCase().split(/\s+/).filter((term) => term.length > 0);
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 0);
 }
 
 // --- Deterministic helpers ----------------------------------------------------

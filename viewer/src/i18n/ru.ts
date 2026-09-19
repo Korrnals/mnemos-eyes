@@ -9,14 +9,28 @@
  */
 export const ru = {
   // --- navigation / layout ---------------------------------------------------
+  // Domain sidebar (redesign concept §2.1 — Обзор + 5 доменов).
+  "nav.overview": "Обзор",
+  "nav.memory": "Память",
+  "nav.records": "Записи",
+  "nav.record": "Запись",
+  "nav.pulse": "Пульс",
+  "nav.tasks": "Задачи",
+  "nav.agents": "Агенты",
+  "nav.stores": "Хранилища",
+  "nav.system": "Система",
+  "nav.soon": "скоро",
+  "nav.soonTasks": "домен «Задачи» появится в Фазе 2",
+  "nav.soonAgents": "домен «Агенты» появится в Фазе 4",
+  "nav.soonStores": "домен «Хранилища» появится в Фазе 4",
+  // Section labels (level 2 pages).
   "nav.search": "Поиск",
-  "nav.memories": "Воспоминания",
+  "nav.memories": "Записи",
   "nav.tags": "Теги",
   "nav.status": "Статус",
   "nav.sessions": "Сессии",
   "nav.traces": "Трассировки",
   "nav.primary": "Основная навигация",
-  "nav.memory": "Воспоминание",
   "nav.session": "Сессия",
   "nav.collapse": "Свернуть панель",
   "nav.expand": "Развернуть панель",
@@ -25,12 +39,66 @@ export const ru = {
   "shell.viewFell": "Этот вид упал в колодец",
   "shell.tryAgain": "Попробовать снова",
 
+  // --- breadcrumbs (concept §2.2) ----------------------------------------------
+  "breadcrumbs.label": "Хлебные крошки",
+
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Переключить на светлую тему",
   "topbar.themeToDark": "Переключить на тёмную тему",
   "topbar.themeLight": "Светлая тема",
   "topbar.themeDark": "Тёмная тема",
   "topbar.langLabel": "Язык интерфейса",
+  "topbar.searchLabel": "Поиск по памяти",
+  "topbar.searchPlaceholder": "Поиск по памяти…",
+  "topbar.densityToCompact": "Переключить плотность на компактную",
+  "topbar.densityToComfortable": "Переключить плотность на комфортную",
+  "topbar.densityCompact": "Компактная плотность",
+  "topbar.densityComfortable": "Комфортная плотность",
+
+  // --- hotkeys (Ф1: `/` and `?` only — no not-yet-existing keys advertised) -----
+  "hotkeys.title": "Горячие клавиши",
+  "hotkeys.subtitle": "Клавиатурный слой оболочки. В полях ввода хоткеи отключены.",
+  "hotkeys.focusSearch": "Фокус на глобальный поиск",
+  "hotkeys.cheatsheet": "Эта шпаргалка",
+  "hotkeys.closeDialog": "Закрыть диалог",
+  "hotkeys.escKey": "Esc",
+  "hotkeys.openAria": "Шпаргалка горячих клавиш",
+
+  // --- overview (concept §2.4 — honest Ф1 cut) -----------------------------------
+  "overview.title": "Обзор",
+  "overview.tagline": "взгляд внутрь себя",
+  "overview.searchHint": "Нажмите / для поиска по памяти",
+  "overview.quickLinks": "Быстрые ссылки",
+  "overview.searchHintLink": "FTS · смысловой · гибрид",
+  "overview.recordsHintLink": "список и свитки-детали",
+  "overview.tagsHintLink": "инспектор и дриллдаун",
+  "overview.storesTitle": "Хранилища",
+  "overview.storesLoading": "Загружаем состояние хранилищ",
+  "overview.storesError": "Состояние хранилищ недоступно: {{message}}",
+  "overview.storeOk": "работает",
+  "overview.storeFail": "недоступно",
+  "overview.storeDisabled": "отключено",
+  "overview.storeDisabledNote": "Хранилище отключено и не участвует в выборке.",
+  "overview.storeMemories": "записей — {{count}}",
+  "overview.storeLatency": "отклик {{ms}} мс",
+  "overview.pulseTitle": "Свежий пульс",
+  "overview.pulseAll": "весь пульс",
+  "overview.pulseError": "Пульс недоступен: {{message}}",
+
+  // --- memory pulse (Ф1) ---------------------------------------------------------
+  "pulse.title": "Пульс памяти",
+  "pulse.loading": "Загружаем пульс",
+  "pulse.loadFailed": "Не удалось загрузить пульс",
+  "pulse.emptyTitle": "Пока тихо",
+  "pulse.emptyMessage": "Новых записей в выбранных хранилищах нет.",
+  "pulse.scopeLabel": "Область пульса",
+  "pulse.scopeAll": "все хранилища",
+  "pulse.feedLabel": "Лента записей пульса",
+  "pulse.untitled": "без заголовка",
+  "pulse.degradedStores": "Часть хранилищ не ответила: {{servers}}",
+  "pulse.unavailableTitle": "Пульс недоступен в mnemos-режиме",
+  "pulse.unavailableMessage":
+    "Пульс — объединённый вид merge-API борда; прямой адаптер mnemos его не отдаёт. Поднимите board-адаптер, чтобы увидеть ленту.",
 
   // --- auth / connection --------------------------------------------------------
   "auth.localMock": "локально (mock)",
@@ -82,8 +150,8 @@ export const ru = {
   "search.hitsTypedSuffix": " (клиентский фильтр по типу)",
   "search.relevanceTitle": "релевантность {{value}}",
 
-  // --- memories ---------------------------------------------------------------
-  "memories.title": "Воспоминания",
+  // --- memories (records list) --------------------------------------------------
+  "memories.title": "Записи",
   "memories.filterLabel": "Фильтр воспоминаний",
   "memories.statusLabel": "Статус",
   "memories.projectLabel": "Проект",

@@ -23,19 +23,24 @@ describe("MemoryCard", () => {
     expect(html).toContain("ADR: gateway via same-origin /api proxy");
     expect(html).toContain("published");
     expect(html).toContain("topic:gateway");
-    expect(html).toContain('href="/memories/mem-0001"');
+    expect(html).toContain('href="/memory/mem-0001"');
   });
 
   it("truncates the snippet to ~120 chars of effective content", () => {
     const html = render(MOCK_MEMORIES[0]);
-    expect(html).toContain("Viewer talks to mnemos through the same-origin /api prefix");
+    expect(html).toContain(
+      "Viewer talks to mnemos through the same-origin /api prefix",
+    );
   });
 
   it("falls back to a content-derived title when the memory has none", () => {
-    const memory = { ...MOCK_MEMORIES[14], title: null } as (typeof MOCK_MEMORIES)[number];
+    const memory = {
+      ...MOCK_MEMORIES[14],
+      title: null,
+    } as (typeof MOCK_MEMORIES)[number];
     const html = render(memory);
     // mem-0015 content head becomes the title; the id still links.
     expect(html).toContain("Checkpoint: L1 wave");
-    expect(html).toContain('href="/memories/mem-0015"');
+    expect(html).toContain('href="/memory/mem-0015"');
   });
 });

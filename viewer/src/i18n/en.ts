@@ -7,14 +7,28 @@ import type { TranslationKey } from "./ru";
  */
 export const en: Record<TranslationKey, string> = {
   // --- navigation / layout ---------------------------------------------------
+  // Domain sidebar (redesign concept §2.1 — Overview + 5 domains).
+  "nav.overview": "Overview",
+  "nav.memory": "Memory",
+  "nav.records": "Records",
+  "nav.record": "Record",
+  "nav.pulse": "Pulse",
+  "nav.tasks": "Tasks",
+  "nav.agents": "Agents",
+  "nav.stores": "Stores",
+  "nav.system": "System",
+  "nav.soon": "soon",
+  "nav.soonTasks": "the Tasks domain arrives in Phase 2",
+  "nav.soonAgents": "the Agents domain arrives in Phase 4",
+  "nav.soonStores": "the Stores domain arrives in Phase 4",
+  // Section labels (level 2 pages).
   "nav.search": "Search",
-  "nav.memories": "Memories",
+  "nav.memories": "Records",
   "nav.tags": "Tags",
   "nav.status": "Status",
   "nav.sessions": "Sessions",
   "nav.traces": "Traces",
   "nav.primary": "Primary",
-  "nav.memory": "Memory",
   "nav.session": "Session",
   "nav.collapse": "Collapse sidebar",
   "nav.expand": "Expand sidebar",
@@ -23,12 +37,66 @@ export const en: Record<TranslationKey, string> = {
   "shell.viewFell": "This view fell into the well",
   "shell.tryAgain": "Try again",
 
+  // --- breadcrumbs (concept §2.2) ----------------------------------------------
+  "breadcrumbs.label": "Breadcrumb",
+
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Switch to light theme",
   "topbar.themeToDark": "Switch to dark theme",
   "topbar.themeLight": "Light theme",
   "topbar.themeDark": "Dark theme",
   "topbar.langLabel": "Interface language",
+  "topbar.searchLabel": "Search memory",
+  "topbar.searchPlaceholder": "Search memory…",
+  "topbar.densityToCompact": "Switch density to compact",
+  "topbar.densityToComfortable": "Switch density to comfortable",
+  "topbar.densityCompact": "Compact density",
+  "topbar.densityComfortable": "Comfortable density",
+
+  // --- hotkeys (Ф1: `/` and `?` only — no not-yet-existing keys advertised) -----
+  "hotkeys.title": "Keyboard shortcuts",
+  "hotkeys.subtitle": "The shell hotkey layer. Hotkeys stay quiet inside inputs.",
+  "hotkeys.focusSearch": "Focus the global search",
+  "hotkeys.cheatsheet": "This cheatsheet",
+  "hotkeys.closeDialog": "Close the dialog",
+  "hotkeys.escKey": "Esc",
+  "hotkeys.openAria": "Keyboard shortcuts cheatsheet",
+
+  // --- overview (concept §2.4 — honest Ф1 cut) -----------------------------------
+  "overview.title": "Overview",
+  "overview.tagline": "a gaze into oneself",
+  "overview.searchHint": "Press / to search memory",
+  "overview.quickLinks": "Quick links",
+  "overview.searchHintLink": "FTS · semantic · hybrid",
+  "overview.recordsHintLink": "list and detail scrolls",
+  "overview.tagsHintLink": "inspector and drilldown",
+  "overview.storesTitle": "Stores",
+  "overview.storesLoading": "Loading store health",
+  "overview.storesError": "Store health unavailable: {{message}}",
+  "overview.storeOk": "healthy",
+  "overview.storeFail": "unreachable",
+  "overview.storeDisabled": "disabled",
+  "overview.storeDisabledNote": "This store is disabled and skipped by the merge.",
+  "overview.storeMemories": "memories — {{count}}",
+  "overview.storeLatency": "{{ms}} ms probe",
+  "overview.pulseTitle": "Fresh pulse",
+  "overview.pulseAll": "full pulse",
+  "overview.pulseError": "Pulse unavailable: {{message}}",
+
+  // --- memory pulse (Ф1) ---------------------------------------------------------
+  "pulse.title": "Memory pulse",
+  "pulse.loading": "Loading the pulse",
+  "pulse.loadFailed": "Failed to load the pulse",
+  "pulse.emptyTitle": "Quiet so far",
+  "pulse.emptyMessage": "No recent memories in the selected stores.",
+  "pulse.scopeLabel": "Pulse scope",
+  "pulse.scopeAll": "all stores",
+  "pulse.feedLabel": "Pulse memory feed",
+  "pulse.untitled": "untitled",
+  "pulse.degradedStores": "Some stores did not answer: {{servers}}",
+  "pulse.unavailableTitle": "Pulse is unavailable in mnemos mode",
+  "pulse.unavailableMessage":
+    "The pulse is a merged merge-API view; the direct mnemos adapter does not expose it. Boot the board adapter to see the feed.",
 
   // --- auth / connection --------------------------------------------------------
   "auth.localMock": "local (mock)",
@@ -81,7 +149,7 @@ export const en: Record<TranslationKey, string> = {
   "search.relevanceTitle": "relevance {{value}}",
 
   // --- memories ---------------------------------------------------------------
-  "memories.title": "Memories",
+  "memories.title": "Records",
   "memories.filterLabel": "Filter memories",
   "memories.statusLabel": "Status",
   "memories.projectLabel": "Project",

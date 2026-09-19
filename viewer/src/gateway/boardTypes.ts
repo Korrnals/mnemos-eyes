@@ -59,6 +59,77 @@ export interface BoardHealth {
 }
 
 /**
+ * `GET /api/health` — per-store detail (Ф1 Overview «карточки здоровья
+ * хранилища»). Captured from the live wire (recorded-corpus rule, QA verdict
+ * §5): every server row carries the health-dot contract of ui-contract §7 —
+ * `ok` reflects the cheap liveness probe only, never search latency.
+ */
+export interface BoardHealthServer {
+  readonly name: string;
+  readonly group_name?: string;
+  readonly enabled?: boolean;
+  readonly state?: string;
+  readonly description?: string | null;
+  readonly ok?: boolean;
+  readonly latency_ms?: number | null;
+  readonly error?: string | null;
+  readonly memories_total?: number | null;
+}
+
+/** Full board health view the Overview consumes (scalars + store rows). */
+export interface BoardHealthDetail {
+  readonly ok: boolean;
+  readonly service: string;
+  readonly board_tasks: number;
+  readonly servers: readonly BoardHealthServer[];
+}
+
+/**
+ * `GET /api/memories/pulse` — merged recency feed (Ф1 Pulse page).
+ * Anonymous dict on the wire; shape captured live against the board server
+ * (see also server/app.py `memory_pulse_all`). `store_stats` is present ONLY
+ * when the merged feed is empty (the server then explains what the stores
+ * hold); `per_server` is the honest degradation report — `ok: false` rows
+ * carry `detail` and contribute no items.
+ */
+export interface MemoryPulseItem {
+  readonly id: string;
+  readonly title: string;
+  readonly tags: readonly string[];
+  readonly status: string;
+  readonly created_at: string;
+  /** Provenance: the store that contributed the row (server-assigned). */
+  readonly server: string;
+}
+
+export interface MemoryPulseServerNote {
+  readonly server: string;
+  readonly ok: boolean;
+  /** How many items this store contributed before the merge cut. */
+  readonly items: number;
+  /** Failure detail (mnemos error body) — null on the happy path. */
+  readonly detail: unknown;
+}
+
+export interface MemoryPulse {
+  readonly ok: boolean;
+  readonly scope: string;
+  readonly kind: string;
+  readonly items: readonly MemoryPulseItem[];
+  readonly per_server: readonly MemoryPulseServerNote[];
+  readonly store_stats?: readonly unknown[];
+}
+
+/** Pulse query params (`?scope=&project=&limit=`, limit capped at 20 server-side). */
+export interface PulseParams {
+  /** `'all'` (default), a group name, or one server name; unknown → 404. */
+  readonly scope?: string;
+  /** Exact project filter (empty = all projects). */
+  readonly project?: string;
+  readonly limit?: number;
+}
+
+/**
  * `GET /api/memories/item/{memory_id}` envelope. `ok: true` carries the
  * reshaped memory card from the first resolving server; `ok: false` is the
  * "not found on any active server" answer.

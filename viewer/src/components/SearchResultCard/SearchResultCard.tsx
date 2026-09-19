@@ -40,7 +40,7 @@ export function SearchResultCard({
           {/* h2: card headings sit one level under the page h1 (WCAG 1.3.1). */}
           <h2 className="font-scroll text-base font-semibold leading-tight">
             <Link
-              to={`/memories/${result.id}`}
+              to={`/memory/${result.id}`}
               className="inline-flex min-h-6 items-center hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
             >
               {highlight(result.title || result.id, queryTerms)}

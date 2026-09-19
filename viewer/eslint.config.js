@@ -35,8 +35,16 @@ export default tseslint.config(
     // shadcn/ui convention co-locates cva variant exports with the component
     // (buttonVariants/badgeVariants) and ThemeProvider ships with useTheme;
     // splitting them would diverge from the upstream shadcn layout for a
-    // dev-only HMR nicety.
-    files: ["src/components/ui/**/*.{ts,tsx}", "src/components/theme-provider.tsx"],
+    // dev-only HMR nicety. DensityProvider and HotkeysProvider follow the
+    // same provider+hook pattern as ThemeProvider (Ф1). routes.tsx is the
+    // route TABLE (data with embedded elements), not an HMR-able component.
+    files: [
+      "src/components/ui/**/*.{ts,tsx}",
+      "src/components/theme-provider.tsx",
+      "src/components/density-provider.tsx",
+      "src/layout/Hotkeys.tsx",
+      "src/app/routes.tsx",
+    ],
     rules: {
       "react-refresh/only-export-components": "off",
     },

@@ -18,7 +18,7 @@ import {
 import { useProjectOptions } from "./useProjectOptions";
 
 /**
- * `/memories` — paginated, filterable memory list (component-inventory §4).
+ * `/memory` — paginated, filterable memory list (component-inventory §4).
  * Filters and pagination live in URL params: `?status=&project=&limit=&page=`.
  */
 export function MemoriesPage() {

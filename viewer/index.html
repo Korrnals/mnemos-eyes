@@ -28,6 +28,19 @@
         /* Storage unavailable: keep dark :root defaults. */
       }
     </script>
+    <script>
+      // Density bootstrap (Ф1, concept §3.3): applies the stored compact
+      // choice before first paint so compact users never see comfortable row
+      // heights flash. Mirrors src/components/density-provider.tsx — keep the
+      // "vesmaro.density" key and the comfortable default in sync.
+      try {
+        var density = localStorage.getItem("vesmaro.density");
+        document.documentElement.dataset.density =
+          density === "compact" ? "compact" : "comfortable";
+      } catch (_error) {
+        /* Storage unavailable: comfortable :root defaults. */
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

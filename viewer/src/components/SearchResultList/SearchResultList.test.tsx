@@ -23,8 +23,8 @@ describe("SearchResultList (mock fixtures)", () => {
       </MemoryRouter>,
     );
     // Both FTS-tagged fixture memories surface, deep-linked.
-    expect(html).toContain('href="/memories/mem-0002"');
-    expect(html).toContain('href="/memories/mem-0010"');
+    expect(html).toContain('href="/memory/mem-0002"');
+    expect(html).toContain('href="/memory/mem-0010"');
     // Every hit carries a search-type badge (fts / semantic / hybrid)…
     expect(html).toContain("hybrid");
     // …and query terms are highlighted with <mark>.

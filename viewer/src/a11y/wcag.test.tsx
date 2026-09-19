@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, createMemoryRouter, RouterProvider } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { Shell } from "@/layout/Shell";
-import App from "@/App";
+import { buildRoutes } from "@/app/routes";
 import { Badge } from "@/components/ui/badge";
 import { TraceRow } from "@/components/TraceRow/TraceRow";
 import { MemoryCard } from "@/components/MemoryCard/MemoryCard";
@@ -12,6 +11,8 @@ import { MOCK_MEMORIES, MOCK_TRACES } from "@/gateway/fixtures";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { ThemeProvider } from "@/components/theme-provider";
+import { DensityProvider } from "@/components/density-provider";
+import { HotkeysProvider } from "@/layout/Hotkeys";
 import { AuthProvider } from "@/features/auth/AuthProvider";
 import { I18nProvider } from "@/i18n";
 
@@ -21,10 +22,13 @@ import { I18nProvider } from "@/i18n";
  * semantics — landmarks, headings, skip link, live regions, AA badge tints,
  * ≥24px link targets — are present in the real component markup.
  */
-function renderTree(ui: React.ReactElement, path = "/"): string {
+function renderTree(_ui: React.ReactElement | null, path = "/"): string {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { enabled: false, retry: false } },
   });
+  // The full route tree through a memory DATA router — ScrollRestoration
+  // inside the Shell requires one, and the shell markup is what we assert.
+  const router = createMemoryRouter(buildRoutes(), { initialEntries: [path] });
   return renderToString(
     <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
       <QueryClientProvider client={queryClient}>
@@ -33,9 +37,11 @@ function renderTree(ui: React.ReactElement, path = "/"): string {
             {/* English copy via initialLang — the a11y assertions pin English
              * labels; semantics under test are language-independent. */}
             <I18nProvider initialLang="en">
-              {/* No <Routes> wrapper: Shell's <Outlet> may stay empty and App owns
-               * its own routes — only router context is provided here. */}
-              <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
+              <DensityProvider initialDensity="comfortable">
+                <HotkeysProvider>
+                  <RouterProvider router={router} />
+                </HotkeysProvider>
+              </DensityProvider>
             </I18nProvider>
           </AuthProvider>
         </ThemeProvider>
@@ -46,30 +52,34 @@ function renderTree(ui: React.ReactElement, path = "/"): string {
 
 describe("Shell landmarks and keyboard bypass (WCAG 2.4.1 / 1.3.1)", () => {
   it("renders a skip-to-content link ahead of the navigation", () => {
-    const html = renderTree(<Shell />);
+    const html = renderTree(null, "/memory");
     expect(html).toContain("Skip to content");
     expect(html).toContain('href="#main"');
     // The skip link precedes the primary nav in DOM (tab) order.
-    expect(html.indexOf('href="#main"')).toBeLessThan(html.indexOf('aria-label="Primary"'));
+    expect(html.indexOf('href="#main"')).toBeLessThan(
+      html.indexOf('aria-label="Primary"'),
+    );
   });
 
   it("exposes the landmark structure: header, nav, main", () => {
-    const html = renderTree(<Shell />);
-    expect(html).toContain("<main id=\"main\"");
+    const html = renderTree(null, "/memory");
+    expect(html).toContain('<main id="main"');
     expect(html).toContain('aria-label="Primary"');
     expect(html).toContain("<header");
     expect(html).toContain("<aside");
   });
 
   it("does not use a heading for the top-bar route label (pages own the h1)", () => {
-    const html = renderTree(<Shell />);
+    const html = renderTree(null, "/memory");
     expect(html).not.toContain("<h2");
   });
 });
 
 describe("Page headings (WCAG 1.3.1)", () => {
   it("search page carries an h1 even on the hero (imagery + form) branch", () => {
-    const html = renderTree(<App />);
+    // /memory/search — the eager route; the sr-only h1 keeps the outline
+    // intact while the hero is imagery + form.
+    const html = renderTree(null, "/memory/search");
     expect(html).toContain('<h1 class="sr-only">Search</h1>');
   });
 
