@@ -352,6 +352,120 @@ describe("BoardAdapter wire contract", () => {
     expect(stream).toBeInstanceOf(EventStream);
     stream.close();
   });
+
+  // Recorded corpus (2026-09-19, live board 1.4.1 + stub mnemos store): the
+  // exact anonymous dict `GET /api/memories/pulse` answers with — QA rule
+  // "recorded corpus instead of an invented double".
+  const PULSE_WIRE_FIXTURE = {
+    ok: true,
+    scope: "all",
+    kind: "all",
+    items: [
+      {
+        id: "mem-stub-001",
+        title: "CV-1 shell plan",
+        tags: ["topic:convergence", "agent:gcw-frontend"],
+        status: "published",
+        created_at: "2026-09-19T10:00:00Z",
+        server: "stub-store",
+      },
+      {
+        id: "mem-stub-002",
+        title: "Pulse wire notes",
+        tags: ["topic:pulse"],
+        status: "processed",
+        created_at: "2026-09-19T09:30:00Z",
+        server: "stub-store",
+      },
+    ],
+    per_server: [{ server: "stub-store", ok: true, items: 2, detail: null }],
+  };
+
+  it("pulse: GET /memories/pulse with scope/project/limit, corpus normalised", async () => {
+    const fetchMock = respondingFetch(PULSE_WIRE_FIXTURE);
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    const pulse = await adapter.pulse({ scope: "all", limit: 20 });
+
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      "/api/memories/pulse?scope=all&limit=20",
+    );
+    expect(pulse).toEqual(PULSE_WIRE_FIXTURE);
+    expect(pulse.store_stats).toBeUndefined(); // absent on the fed path
+  });
+
+  it("pulse: degraded rows keep honest defaults, empty-feed stats pass through", async () => {
+    const fetchMock = respondingFetch({
+      ok: false,
+      scope: "all",
+      kind: "all",
+      items: [],
+      per_server: [
+        { server: "down-store", ok: false, items: 0, detail: { detail: "503" } },
+      ],
+      store_stats: [{ server: "down-store", stats: null }],
+    });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    const pulse = await adapter.pulse();
+
+    expect(pulse.ok).toBe(false);
+    expect(pulse.items).toEqual([]);
+    expect(pulse.per_server[0].detail).toEqual({ detail: "503" });
+    expect(pulse.store_stats).toEqual([{ server: "down-store", stats: null }]);
+  });
+
+  it("boardHealth: GET /health per-store rows normalised onto the detail view", async () => {
+    // Recorded corpus (same session): servers[] carries the §7 dot contract.
+    const fetchMock = respondingFetch({
+      ok: true,
+      service: "vesmaro-eyes",
+      board_tasks: 11,
+      servers: [
+        {
+          name: "stub-store",
+          group_name: "lab",
+          enabled: true,
+          state: "idle",
+          description: "stub for wire capture",
+          ok: true,
+          latency_ms: 18.3,
+          error: null,
+          memories_total: 2,
+        },
+      ],
+      groups: [],
+    });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    const health = await adapter.boardHealth();
+
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/health");
+    expect(health).toEqual({
+      ok: true,
+      service: "vesmaro-eyes",
+      board_tasks: 11,
+      servers: [
+        {
+          name: "stub-store",
+          group_name: "lab",
+          enabled: true,
+          state: "idle",
+          description: "stub for wire capture",
+          ok: true,
+          latency_ms: 18.3,
+          error: null,
+          memories_total: 2,
+        },
+      ],
+    });
+  });
 });
 
 describe("BoardAdapter error and auth behaviour", () => {

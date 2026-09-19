@@ -1,75 +1,32 @@
-import { lazy, Suspense } from "react";
-import { Route, Routes } from "react-router";
-import { Shell } from "@/layout/Shell";
-import { EmptyState } from "@/components/EmptyState/EmptyState";
-import { Skeleton } from "@/components/ui/skeleton";
+import { createBrowserRouter, RouterProvider } from "react-router";
 import { AuthScreen } from "@/features/auth/AuthScreen";
 import { AuthProvider } from "@/features/auth/AuthProvider";
 import { useAuth } from "@/features/auth/AuthContext";
-import { ADAPTER, adapterEndpointLabel } from "@/gateway/adapterConfig";
-
-import { SearchPage } from "@/features/search/SearchPage"; // eager — only eagerly loaded chunk (§3)
-import { useT } from "@/i18n";
-
-// Route-level code splitting (architecture.md §3: lazy-loaded routes).
-const MemoriesPage = lazy(() =>
-  import("@/features/memories/MemoriesPage").then((m) => ({
-    default: m.MemoriesPage,
-  })),
-);
-const MemoryDetailPage = lazy(() =>
-  import("@/features/memory-detail/MemoryDetailPage").then((m) => ({
-    default: m.MemoryDetailPage,
-  })),
-);
-const TagsPage = lazy(() =>
-  import("@/features/tags/TagsPage").then((m) => ({ default: m.TagsPage })),
-);
-const StatusPage = lazy(() =>
-  import("@/features/status/StatusPage").then((m) => ({ default: m.StatusPage })),
-);
-const SessionsPage = lazy(() =>
-  import("@/features/sessions/SessionsPage").then((m) => ({
-    default: m.SessionsPage,
-  })),
-);
-const SessionDetailPage = lazy(() =>
-  import("@/features/sessions/SessionDetailPage").then((m) => ({
-    default: m.SessionDetailPage,
-  })),
-);
-const TracesPage = lazy(() =>
-  import("@/features/traces/TracesPage").then((m) => ({ default: m.TracesPage })),
-);
-
-function RouteFallback() {
-  const t = useT();
-  return (
-    <div
-      role="status"
-      aria-label={t("app.loadingView")}
-      aria-busy="true"
-      className="space-y-4"
-    >
-      <Skeleton className="h-8 w-48" />
-      <Skeleton className="h-40 w-full" />
-    </div>
-  );
-}
+import { ADAPTER, adapterEndpointLabel, routerBasename } from "@/gateway/adapterConfig";
+import { buildRoutes } from "@/app/routes";
 
 /**
- * Router root (architecture.md §3). The `/clusters` route from the spec is
- * intentionally NOT registered: cluster graph is deferred to L2 (ADR 0003
- * D12) and its nav slot stays hidden.
+ * Router root (architecture.md §3, ADR 0011 Ф1). The app runs on a DATA
+ * router (createBrowserRouter): `<ScrollRestoration/>` in the Shell — the
+ * ARCHCOM-3-mandated scroll-restore path — only works inside one. The route
+ * table itself lives in app/routes.tsx (buildRoutes) so tests mount the very
+ * same tree through createMemoryRouter.
+ *
+ * The router mounts under the Vite base ("/app" in production, root in dev)
+ * so deployed `/app` deep links resolve client-side (Ф0a history-fallback).
  *
  * T6: the whole tree sits under AuthProvider; the sign-in overlay renders on
  * top of (not instead of) the read-only pages, so a permissive loopback
  * deployment stays browsable after dismissing it.
  */
+const router = createBrowserRouter(buildRoutes(), {
+  basename: routerBasename(import.meta.env.BASE_URL),
+});
+
 export default function App() {
   return (
     <AuthProvider adapterMode={ADAPTER} endpoint={adapterEndpointLabel()}>
-      <AppRoutes />
+      <RouterProvider router={router} />
       <AuthOverlay />
     </AuthProvider>
   );
@@ -80,81 +37,4 @@ function AuthOverlay() {
   const { state } = useAuth();
   if (!state.overlayOpen) return null;
   return <AuthScreen />;
-}
-
-function AppRoutes() {
-  const t = useT();
-  return (
-    <Routes>
-      <Route element={<Shell />}>
-        <Route index element={<SearchPage />} />
-        <Route
-          path="memories"
-          element={
-            <Suspense fallback={<RouteFallback />}>
-              <MemoriesPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="memories/:id"
-          element={
-            <Suspense fallback={<RouteFallback />}>
-              <MemoryDetailPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="tags"
-          element={
-            <Suspense fallback={<RouteFallback />}>
-              <TagsPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="status"
-          element={
-            <Suspense fallback={<RouteFallback />}>
-              <StatusPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="sessions"
-          element={
-            <Suspense fallback={<RouteFallback />}>
-              <SessionsPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="sessions/:id"
-          element={
-            <Suspense fallback={<RouteFallback />}>
-              <SessionDetailPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="traces"
-          element={
-            <Suspense fallback={<RouteFallback />}>
-              <TracesPage />
-            </Suspense>
-          }
-        />
-        <Route
-          path="*"
-          element={
-            <EmptyState
-              variant="error"
-              title="404"
-              message={t("app.notFoundMessage")}
-            />
-          }
-        />
-      </Route>
-    </Routes>
-  );
 }

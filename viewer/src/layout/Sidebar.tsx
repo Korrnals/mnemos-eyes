@@ -1,17 +1,21 @@
-import { NavLink } from "react-router";
+import { Link, useLocation } from "react-router";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
-import { NAV_ITEMS } from "./navItems";
+import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
+import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
 
 /**
- * Primary navigation: links to all L1 routes + brand mark
- * (component-inventory §1). `collapsed` switches to icon-only mode; on narrow
- * viewports (< md) icon-only is also forced via CSS so no JS media query is
- * needed. The cluster slot stays hidden in L1 (ADR 0003 / D12). Labels are
- * translated via useT(); the "mnemos-eyes" brand is language-independent.
+ * Primary navigation (redesign concept §2.2): domain sidebar — «Обзор» root +
+ * 5 domains. Sections render under their domain only while it is active
+ * (two-layer sidebar: domain → section, never three). Phase-2+ domains are
+ * honest disabled slots: a disabled button carrying a "soon" badge and a
+ * tooltip, never a dead link. `collapsed` switches to icon-only mode; on
+ * narrow viewports (< md = 768px) icon-only is forced via CSS so no JS media
+ * query is needed. Labels are translated via useT(); the "mnemos-eyes" brand
+ * is language-independent.
  */
 export interface SidebarProps {
   collapsed: boolean;
@@ -20,11 +24,14 @@ export interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const t = useT();
+  const { pathname } = useLocation();
+  const openDomain = activeDomain(pathname);
   const hideLabels = collapsed ? undefined : "md:inline";
+
   return (
     <aside
       className={cn(
-        "flex h-dvh shrink-0 flex-col border-r border-border-subtle bg-well",
+        "sticky top-0 z-30 flex h-dvh shrink-0 flex-col border-r border-border-subtle bg-well",
         // Icon-only under md; manual collapse wins from md up.
         collapsed ? "w-14" : "w-14 md:w-56",
         "transition-[width] duration-fast ease-out",
@@ -42,36 +49,22 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </span>
       </div>
 
-      <nav aria-label={t("nav.primary")} className="flex-1 px-2">
+      <nav aria-label={t("nav.primary")} className="flex-1 overflow-y-auto px-2">
         <ul className="space-y-1">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const label = t(item.key);
-            return (
-              <li key={item.to}>
-                <NavLink
-                  to={item.to}
-                  end={"end" in item ? item.end : false}
-                  title={label}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-instant",
-                      "hover:bg-elevated hover:text-foreground",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright",
-                      isActive
-                        ? "bg-elevated font-medium text-iris-bright"
-                        : "text-foreground-secondary",
-                    )
-                  }
-                >
-                  <Icon className="size-4 shrink-0" aria-hidden="true" />
-                  <span className={cn("hidden whitespace-nowrap", hideLabels)}>
-                    {label}
-                  </span>
-                </NavLink>
-              </li>
-            );
-          })}
+          {NAV_DOMAINS.map((domain) => (
+            <li key={domain.to}>
+              <DomainLink domain={domain} expanded={openDomain?.to === domain.to} />
+              {openDomain?.to === domain.to && domain.sections ? (
+                <ul className="mt-1 ml-7 space-y-1 border-l border-border-subtle pl-2 md:ml-8">
+                  {domain.sections.map((section) => (
+                    <li key={section.to}>
+                      <SectionLink section={section} pathname={pathname} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          ))}
         </ul>
       </nav>
 
@@ -100,5 +93,91 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </p>
       </div>
     </aside>
+  );
+}
+
+function DomainLink({ domain, expanded }: { domain: NavDomain; expanded: boolean }) {
+  const t = useT();
+  const { pathname } = useLocation();
+  const Icon = domain.icon;
+  const label = t(domain.key);
+  const hideLabels = "hidden whitespace-nowrap md:inline";
+
+  // Honest disabled slot (Phase 2+): visible, explained, inert — a disabled
+  // button with a "soon" badge; the tooltip (title) carries the phase hint
+  // for pointer users, the badge text for everyone else.
+  if (domain.soonKey) {
+    const hint = t(domain.soonKey);
+    return (
+      <button
+        type="button"
+        disabled
+        title={`${label} — ${hint}`}
+        className={cn(
+          "flex w-full cursor-not-allowed items-center gap-3 rounded-md px-3 py-2 text-sm",
+          "text-foreground-muted opacity-70",
+        )}
+      >
+        <Icon className="size-4 shrink-0" aria-hidden="true" />
+        <span className={hideLabels}>{label}</span>
+        <span
+          className={cn(
+            "hidden rounded-full border border-border-subtle px-1.5 text-xs text-foreground-muted",
+            hideLabels,
+          )}
+        >
+          {t("nav.soon")}
+        </span>
+      </button>
+    );
+  }
+
+  const active = isPathActive(pathname, domain.to, domain.end);
+  return (
+    <Link
+      to={domain.linkTo ?? domain.to}
+      title={label}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-instant",
+        "hover:bg-elevated hover:text-foreground",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright",
+        active
+          ? "bg-elevated font-medium text-iris-bright"
+          : "text-foreground-secondary",
+        expanded && !active && "text-foreground",
+      )}
+    >
+      <Icon className="size-4 shrink-0" aria-hidden="true" />
+      <span className={hideLabels}>{label}</span>
+    </Link>
+  );
+}
+
+function SectionLink({ section, pathname }: { section: NavSection; pathname: string }) {
+  const t = useT();
+  const Icon = section.icon;
+  const label = t(section.key);
+  // Records ("/memory") must highlight on its detail route too
+  // ("/memory/:id") — the list is the master of the master-detail pair.
+  const active =
+    section.to === "/memory"
+      ? pathname === "/memory" || /^\/memory\/[^/]+$/.test(pathname)
+      : isPathActive(pathname, section.to, section.end);
+  return (
+    <Link
+      to={section.to}
+      title={label}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-instant",
+        "hover:bg-elevated hover:text-foreground",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright",
+        active ? "font-medium text-iris-bright" : "text-foreground-secondary",
+      )}
+    >
+      <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="hidden whitespace-nowrap md:inline">{label}</span>
+    </Link>
   );
 }

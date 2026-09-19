@@ -55,6 +55,16 @@ export default {
         ui: "var(--font-ui)",
         scroll: "var(--font-scroll)",
       },
+      // Density (redesign concept §3.3): operational rows/lists consume the
+      // user-driven tokens; airy surfaces pin to --row-h-airy deliberately.
+      spacing: {
+        row: "var(--row-h)",
+        "row-airy": "var(--row-h-airy)",
+        "list-gap": "var(--list-gap)",
+      },
+      maxWidth: {
+        scroll: "var(--measure-scroll)",
+      },
       fontSize: {
         xs: "var(--text-xs)",
         sm: "var(--text-sm)",

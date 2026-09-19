@@ -71,9 +71,30 @@ const SPACE_TOKENS = [
   "--space-24",
 ];
 
-const RADIUS_TOKENS = ["--radius-sm", "--radius-md", "--radius-lg", "--radius-xl", "--radius-full"];
+const RADIUS_TOKENS = [
+  "--radius-sm",
+  "--radius-md",
+  "--radius-lg",
+  "--radius-xl",
+  "--radius-full",
+];
 
-const SHADOW_TOKENS = ["--shadow-well", "--shadow-raised", "--shadow-float", "--shadow-modal", "--shadow-iris"];
+// Density pair (redesign concept §3.3 / ARCHCOM-3 verdict §2 — additive).
+const DENSITY_TOKENS = [
+  "--row-h-dense",
+  "--row-h-airy",
+  "--row-h",
+  "--list-gap",
+  "--measure-scroll",
+];
+
+const SHADOW_TOKENS = [
+  "--shadow-well",
+  "--shadow-raised",
+  "--shadow-float",
+  "--shadow-modal",
+  "--shadow-iris",
+];
 
 const MOTION_TOKENS = [
   "--duration-instant",
@@ -112,7 +133,13 @@ describe("tokens.css inventory (design-system.md §2–§7)", () => {
 
   it("defines typography, spacing, radius, shadow and motion tokens", () => {
     const props = blockProps(tokensCss);
-    for (const token of [...TYPE_TOKENS, ...SPACE_TOKENS, ...RADIUS_TOKENS, ...SHADOW_TOKENS, ...MOTION_TOKENS]) {
+    for (const token of [
+      ...TYPE_TOKENS,
+      ...SPACE_TOKENS,
+      ...RADIUS_TOKENS,
+      ...SHADOW_TOKENS,
+      ...MOTION_TOKENS,
+    ]) {
       expect(props, `${token} missing`).toContain(token);
     }
   });
@@ -120,6 +147,24 @@ describe("tokens.css inventory (design-system.md §2–§7)", () => {
   it("keeps the frozen iris seed value in both themes (ADR 0003 / D10)", () => {
     const seeds = tokensCss.match(/--color-iris:\s*#1a8a96/g) ?? [];
     expect(seeds).toHaveLength(2); // dark + light
+  });
+
+  it("defines the density regime pair and the user-driven operational tokens", () => {
+    const props = blockProps(tokensCss);
+    for (const token of DENSITY_TOKENS) {
+      expect(props, `${token} missing`).toContain(token);
+    }
+  });
+
+  it("drives [data-density]: compact maps the operational row onto dense", () => {
+    const compact =
+      tokensCss.match(/\[data-density="compact"\]\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(compact).toContain("--row-h: var(--row-h-dense)");
+    // Comfortable is the default (:root block), compact is the override.
+    const rootBlocks =
+      tokensCss.match(/:root,\s*\[data-density="comfortable"\]\s*\{([^}]*)\}/)?.[1] ??
+      "";
+    expect(rootBlocks).toContain("--row-h:");
   });
 
   it("resolves shadows through the iris glow token", () => {
@@ -157,5 +202,14 @@ describe("theme bootstrap (design-system.md §9)", () => {
     expect(indexHtml).toContain("mnemos-eyes:theme"); // storage key
     expect(indexHtml).toContain("prefers-color-scheme"); // system default
     expect(indexHtml).toContain("dataset.theme"); // [data-theme] switching
+  });
+});
+
+describe("density bootstrap (Ф1, concept §3.3)", () => {
+  it("applies the stored density before first paint with the provider's contract", () => {
+    expect(indexHtml).toContain("vesmaro.density"); // storage key
+    expect(indexHtml).toContain("dataset.density"); // [data-density] switching
+    // Only compact is an override; anything else falls back to comfortable.
+    expect(indexHtml).toMatch(/density === "compact" \? "compact" : "comfortable"/);
   });
 });

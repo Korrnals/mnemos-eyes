@@ -10,7 +10,7 @@ import { useMemory } from "@/hooks/useMemory";
 import { useT } from "@/i18n";
 
 /**
- * `/memories/:id` — the "scroll" detail view (component-inventory §5).
+ * `/memory/:id` — the "scroll" detail view (component-inventory §5).
  * `showRaw` toggles the `include_raw` wire flag: the raw variant refetches
  * rather than pretending the payload was already there.
  */
@@ -78,7 +78,7 @@ export function MemoryDetailPage() {
 function BackLink({ children }: { children: React.ReactNode }) {
   return (
     <Link
-      to="/memories"
+      to="/memory"
       className="inline-flex min-h-6 items-center gap-1 text-sm text-foreground-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
     >
       <ArrowLeft className="size-4" aria-hidden="true" /> {children}

@@ -21,6 +21,8 @@ export const STALE_TIMES = {
   sessions: 15_000,
   /** tags */
   tags: 60_000,
+  /** Ф1 pulse — a recency feed: cheap to revalidate, never stale for long */
+  pulse: 15_000,
 } as const;
 
 export const GC_TIMES = {
@@ -31,6 +33,7 @@ export const GC_TIMES = {
   traces: 5 * 60_000,
   sessions: 5 * 60_000,
   tags: 5 * 60_000,
+  pulse: 60_000,
 } as const;
 
 /**

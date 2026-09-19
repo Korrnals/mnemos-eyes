@@ -31,7 +31,7 @@ export function MemoryCard({ memory, className }: MemoryCardProps) {
           {/* h2: card headings sit one level under the page h1 (WCAG 1.3.1). */}
           <h2 className="font-scroll text-base font-semibold leading-tight">
             <Link
-              to={`/memories/${memory.id}`}
+              to={`/memory/${memory.id}`}
               className="inline-flex min-h-6 items-center hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
             >
               {memoryTitle(memory)}

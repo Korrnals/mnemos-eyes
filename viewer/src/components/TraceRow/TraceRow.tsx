@@ -37,7 +37,10 @@ export function TraceRow({ trace, className }: TraceRowProps) {
   const duration = typeof trace.duration_ms === "number" ? trace.duration_ms : null;
 
   return (
-    <tr className={className}>
+    // Operational table row (concept §3.3): consumes the density-driven
+    // --row-h token — compact mode tightens trace rows; airy surfaces
+    // elsewhere never move with the toggle.
+    <tr className={`h-row ${className ?? ""}`}>
       <td
         className="px-4 py-3 text-xs text-foreground"
         style={{ fontFamily: "var(--font-mono)" }}

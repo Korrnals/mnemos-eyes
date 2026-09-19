@@ -1,22 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { TopBar } from "./TopBar";
 import { LanguageToggle } from "./LanguageToggle";
 import { ThemeProvider } from "@/components/theme-provider";
+import { DensityProvider } from "@/components/density-provider";
+import { HotkeysProvider } from "@/layout/Hotkeys";
 import { AuthProvider } from "@/features/auth/AuthProvider";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { I18nProvider, type Lang } from "@/i18n";
 
 /**
- * TopBar i18n regression (owner feedback 1.4.0): the rendered strings and the
- * RU|EN segmented control in both languages. renderToString keeps this
- * DOM-free (project vitest pattern); snapshots pin the copy per language.
+ * TopBar i18n + Ф1 controls regression: RU|EN segmented control, the density
+ * toggle, the global search field — rendered copy pinned per language via
+ * snapshots (renderToString keeps this DOM-free, project pattern).
  *
  * Node env ⇒ ThemeProvider falls back to the system default "dark", so the
- * toggle label is deterministically the "switch to light" branch.
+ * theme toggle label is deterministically the "switch to light" branch.
  */
 function renderTopBar(lang: Lang): string {
   const queryClient = new QueryClient({
@@ -28,7 +31,13 @@ function renderTopBar(lang: Lang): string {
         <ThemeProvider>
           <AuthProvider adapterMode="mock" endpoint="/api">
             <I18nProvider initialLang={lang}>
-              <TopBar title={lang === "ru" ? "Поиск" : "Search"} />
+              <DensityProvider initialDensity="comfortable">
+                <HotkeysProvider>
+                  <MemoryRouter>
+                    <TopBar title={lang === "ru" ? "Поиск" : "Search"} />
+                  </MemoryRouter>
+                </HotkeysProvider>
+              </DensityProvider>
             </I18nProvider>
           </AuthProvider>
         </ThemeProvider>
@@ -43,6 +52,8 @@ describe("TopBar i18n (ru default, en switch)", () => {
     expect(html).toContain("Язык интерфейса");
     expect(html).toContain("Светлая тема");
     expect(html).toContain('aria-label="Переключить на светлую тему"');
+    expect(html).toContain('placeholder="Поиск по памяти…"');
+    expect(html).toContain("Переключить плотность на компактную");
     // Segmented control: RU is the pressed segment, EN is not.
     expect(html).toMatch(/aria-pressed="true"[^>]*>ru</);
     expect(html).toMatch(/aria-pressed="false"[^>]*>en</);
@@ -54,6 +65,8 @@ describe("TopBar i18n (ru default, en switch)", () => {
     expect(html).toContain("Interface language");
     expect(html).toContain("Light theme");
     expect(html).toContain('aria-label="Switch to light theme"');
+    expect(html).toContain('placeholder="Search memory…"');
+    expect(html).toContain("Switch density to compact");
     expect(html).toMatch(/aria-pressed="false"[^>]*>ru</);
     expect(html).toMatch(/aria-pressed="true"[^>]*>en</);
     expect(html).toMatchSnapshot();

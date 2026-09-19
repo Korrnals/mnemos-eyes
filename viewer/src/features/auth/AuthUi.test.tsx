@@ -12,6 +12,8 @@ import type { AuthEvent } from "./authState";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { ThemeProvider } from "@/components/theme-provider";
+import { DensityProvider } from "@/components/density-provider";
+import { HotkeysProvider } from "@/layout/Hotkeys";
 import { I18nProvider } from "@/i18n";
 
 /**
@@ -55,7 +57,11 @@ function renderWithProviders(
           <MemoryRouter initialEntries={["/"]}>
             {/* English copy via initialLang — these tests pin copy. */}
             <I18nProvider initialLang="en">
-              <AuthContext.Provider value={auth}>{ui}</AuthContext.Provider>
+              <DensityProvider initialDensity="comfortable">
+                <HotkeysProvider>
+                  <AuthContext.Provider value={auth}>{ui}</AuthContext.Provider>
+                </HotkeysProvider>
+              </DensityProvider>
             </I18nProvider>
           </MemoryRouter>
         </ThemeProvider>

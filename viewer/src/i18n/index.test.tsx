@@ -96,8 +96,8 @@ describe("document.lang mirroring", () => {
 describe("translation", () => {
   it("translates a key in both languages and interpolates {{vars}}", async () => {
     const { translate } = await import("./index");
-    expect(translate("ru", "nav.memories")).toBe("Воспоминания");
-    expect(translate("en", "nav.memories")).toBe("Memories");
+    expect(translate("ru", "nav.memories")).toBe("Записи");
+    expect(translate("en", "nav.memories")).toBe("Records");
     expect(
       translate("en", "auth.connected", { backend: "board", endpoint: "/api" }),
     ).toBe("connected to board: /api");
@@ -125,7 +125,7 @@ describe("React wiring (useT / useI18n / I18nProvider)", () => {
       const t = useT();
       return <p>{t("nav.memories")}</p>;
     }
-    expect(renderToString(<Probe />)).toContain("Воспоминания");
+    expect(renderToString(<Probe />)).toContain("Записи");
   });
 
   it("the provider switches the rendered copy (ru vs en render)", async () => {

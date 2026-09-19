@@ -6,12 +6,18 @@ import type { BoardEvent } from "./events";
 import { ApiError } from "@/lib/errors";
 import type {
   BoardHealth,
+  BoardHealthDetail,
+  BoardHealthServer,
   BoardMemoryEnvelope,
   BoardSearchResponse,
   BoardSummary,
+  MemoryPulse,
+  MemoryPulseItem,
+  MemoryPulseServerNote,
   MergedMemoriesPage,
   MergedMemoryListItem,
   MergedTags,
+  PulseParams,
   TaskInbox,
 } from "./boardTypes";
 import type {
@@ -44,6 +50,8 @@ import type {
  * - health         GET /api/health
  * - board          GET /api/board                ?status
  * - inbox          GET /api/tasks/inbox          ?scope&project&include_adopted
+ * - pulse          GET /api/memories/pulse       ?scope&project&limit (Ф1)
+ * - boardHealth    GET /api/health               (per-store detail view, Ф1)
  * - events         GET /api/events               (SSE, see gateway/events.ts)
  *
  * v0 honestly declares metrics / traces / sessions / agentRecall
@@ -94,6 +102,10 @@ export interface BoardGateway extends MemoryGateway {
   ): Promise<MergedMemoriesPage>;
   /** SSE stream on `/api/events` (see gateway/events.ts). */
   events(): EventStream;
+  /** Merged recency feed (`GET /api/memories/pulse`, Ф1). */
+  pulse(params?: PulseParams, signal?: AbortSignal): Promise<MemoryPulse>;
+  /** Per-store health detail (`GET /api/health`, Ф1 Overview). */
+  boardHealth(signal?: AbortSignal): Promise<BoardHealthDetail>;
 }
 
 export interface BoardAdapterOptions {
@@ -230,6 +242,30 @@ export class BoardAdapter implements BoardGateway {
 
   events(): EventStream {
     return new EventStream({ baseUrl: this.baseUrl });
+  }
+
+  /**
+   * Merged recency feed across scope. The wire shape is captured in
+   * boardTypes (live corpus, board `memory_pulse_all`); this normalises the
+   * anonymous dict defensively — per-row unknowns get honest defaults instead
+   * of pretending the field was there.
+   */
+  async pulse(params: PulseParams = {}, signal?: AbortSignal): Promise<MemoryPulse> {
+    const payload = await this.request<Record<string, unknown>>("/memories/pulse", {
+      query: { scope: params.scope, project: params.project, limit: params.limit },
+      signal,
+    });
+    return normalizePulse(payload);
+  }
+
+  /**
+   * Per-store health detail for the Overview cards. `health()` keeps serving
+   * the projected string map for the legacy Status page; this is the Ф1
+   * board-native view (`servers[].ok/latency_ms/memories_total`).
+   */
+  async boardHealth(signal?: AbortSignal): Promise<BoardHealthDetail> {
+    const payload = await this.request<Record<string, unknown>>("/health", { signal });
+    return normalizeBoardHealth(payload);
   }
 
   // --- v0-unsupported mnemos-side views (fail loud, never pretend) ----------
@@ -398,6 +434,84 @@ const MEMORY_SOURCES = [
 
 /** mnemos `Memory.marker_version` schema default (not carried by the board wire). */
 const DEFAULT_MARKER_VERSION = 1;
+
+// --- Ф1 normalizers (anonymous dicts → honest view models) ---------------------
+
+/** String-tunnel with an honest fallback (never pretend a field existed). */
+function str(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function strArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+/**
+ * `GET /api/memories/pulse` anonymous dict → `MemoryPulse`. Rows missing the
+ * server stamp (should not happen — the server assigns it) fall back to "?"
+ * so provenance never silently disappears from the feed.
+ */
+export function normalizePulse(payload: unknown): MemoryPulse {
+  const source = (payload ?? {}) as Record<string, unknown>;
+  const items = Array.isArray(source.items) ? source.items : [];
+  const perServer = Array.isArray(source.per_server) ? source.per_server : [];
+  return {
+    ok: source.ok === true,
+    scope: str(source.scope, "all"),
+    kind: str(source.kind, "all"),
+    items: items.map((row): MemoryPulseItem => {
+      const item = (row ?? {}) as Record<string, unknown>;
+      return {
+        id: str(item.id),
+        title: str(item.title),
+        tags: strArray(item.tags),
+        status: str(item.status),
+        created_at: str(item.created_at),
+        server: str(item.server, "?"),
+      };
+    }),
+    per_server: perServer.map((row): MemoryPulseServerNote => {
+      const note = (row ?? {}) as Record<string, unknown>;
+      return {
+        server: str(note.server, "?"),
+        ok: note.ok === true,
+        items: num(note.items),
+        detail: note.detail ?? null,
+      };
+    }),
+    store_stats: Array.isArray(source.store_stats) ? source.store_stats : undefined,
+  };
+}
+
+/** `GET /api/health` anonymous dict → `BoardHealthDetail` (per-store rows). */
+export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {
+  const source = (payload ?? {}) as Record<string, unknown>;
+  const servers = Array.isArray(source.servers) ? source.servers : [];
+  return {
+    ok: source.ok === true,
+    service: str(source.service, "vesmaro-eyes"),
+    board_tasks: num(source.board_tasks),
+    servers: servers.map((row): BoardHealthServer => {
+      const server = (row ?? {}) as Record<string, unknown>;
+      return {
+        name: str(server.name, "?"),
+        group_name: str(server.group_name, "default"),
+        enabled: server.enabled !== false,
+        state: str(server.state, "idle"),
+        description: typeof server.description === "string" ? server.description : null,
+        ok: server.ok === true,
+        latency_ms: typeof server.latency_ms === "number" ? server.latency_ms : null,
+        error: typeof server.error === "string" ? server.error : null,
+        memories_total:
+          typeof server.memories_total === "number" ? server.memories_total : null,
+      };
+    }),
+  };
+}
 
 // Re-export for consumers that subscribe through the adapter (typed handler
 // wiring lives in gateway/events.ts).

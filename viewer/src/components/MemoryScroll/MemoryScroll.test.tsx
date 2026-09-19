@@ -28,7 +28,9 @@ describe("MemoryScroll (the scroll)", () => {
   it("offers the raw toggle only when raw_content exists and differs", () => {
     // mem-0001 has raw_content ≠ effective content.
     const effective = render(MOCK_MEMORIES[0], false);
-    expect(effective).toContain("Viewer talks to mnemos through the same-origin /api prefix");
+    expect(effective).toContain(
+      "Viewer talks to mnemos through the same-origin /api prefix",
+    );
 
     const raw = render(MOCK_MEMORIES[0], true);
     expect(raw).toContain("# ADR: gateway");
@@ -52,7 +54,7 @@ describe("MemoryScroll (the scroll)", () => {
     const related: Memory = { ...MOCK_MEMORIES[1], derived_from: ["mem-0001"] };
     const html = render(related);
     expect(html).toContain("Related memories");
-    expect(html).toContain('href="/memories/mem-0001"');
+    expect(html).toContain('href="/memory/mem-0001"');
 
     expect(render(MOCK_MEMORIES[1])).not.toContain("Related memories");
   });

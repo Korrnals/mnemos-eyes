@@ -1,12 +1,13 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router";
 import { QueryClientProvider } from "@tanstack/react-query";
 
 import { queryClient } from "@/lib/queryClient";
 import { GatewayContext } from "@/gateway/GatewayContext";
-import { createGateway, routerBasename } from "@/gateway/adapterConfig";
+import { createGateway } from "@/gateway/adapterConfig";
 import { ThemeProvider } from "@/components/theme-provider";
+import { DensityProvider } from "@/components/density-provider";
+import { HotkeysProvider } from "@/layout/Hotkeys";
 import { I18nProvider } from "@/i18n";
 import App from "@/App";
 
@@ -29,7 +30,6 @@ import "@/styles/global.css";
  * server history-fallback serves index.html for `/app/{path}`).
  */
 const gateway = createGateway();
-const basename = routerBasename(import.meta.env.BASE_URL);
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -44,9 +44,16 @@ createRoot(rootElement).render(
           {/* i18n (owner feedback 1.4.0): ru default, persisted choice in
            * localStorage "vesmaro.lang", mirrored into <html lang>. */}
           <I18nProvider>
-            <BrowserRouter basename={basename}>
-              <App />
-            </BrowserRouter>
+            {/* Density (Ф1, concept §3.3): [data-density] on <html> drives the
+             * --row-h/--list-gap operational tokens; persisted "vesmaro.density". */}
+            <DensityProvider>
+              {/* Hotkeys (Ф1): `/` search focus + `?` cheatsheet with the
+               * inInput guard; the dialog renders from here, above routes.
+               * App brings its own data router (createBrowserRouter). */}
+              <HotkeysProvider>
+                <App />
+              </HotkeysProvider>
+            </DensityProvider>
           </I18nProvider>
         </ThemeProvider>
       </QueryClientProvider>
