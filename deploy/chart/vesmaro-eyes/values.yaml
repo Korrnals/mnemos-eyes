@@ -58,6 +58,10 @@ uiToken:
   # hatch, see RUNBOOK.md §6.
   enabled: true
   existingSecret: ""
+  # Wart (inherited from the board-token pattern): setting existingSecret
+  # WITHOUT a matching existingSecretKey makes the env silently miss and the
+  # server fall back to legacy single-token mode. The key must match what the
+  # chart's own secret template writes (VESMARO_UI_TOKEN).
   existingSecretKey: VESMARO_UI_TOKEN
 
 mnemos:

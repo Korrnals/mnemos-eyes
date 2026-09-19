@@ -509,3 +509,49 @@ class TestSseEmission:
         assert b"spec_snapshot" not in stream
         # payload carries the assignment + task_id discriminators
         assert b'"task_id"' in stream
+
+
+
+class TestReviewGaps:
+    """PR #13 review: negative state-transition matrix and 404s on unknown
+    assignment ids for the machine-class routes."""
+
+    def test_double_start_and_double_complete_409(self, client, auth, make_task):
+        task = make_task(title="neg-matrix")
+        r = _create(client, auth, task["id"])
+        assert r.status_code == 201, r.text
+        aid = r.json()["assignment"]["id"]
+        claim = _claim(client, auth, aid)
+        assert client.post(f"/api/assignments/{aid}/start",
+                           json={"claim_token": claim["claim_token"]},
+                           headers=auth).status_code == 200
+        # a second start is a state violation, not an idempotent replay
+        assert client.post(f"/api/assignments/{aid}/start",
+                           json={"claim_token": claim["claim_token"]},
+                           headers=auth).status_code == 409
+        assert client.post(f"/api/assignments/{aid}/complete",
+                           json={"claim_token": claim["claim_token"]},
+                           headers=auth).status_code == 200
+        assert client.post(f"/api/assignments/{aid}/complete",
+                           json={"claim_token": claim["claim_token"]},
+                           headers=auth).status_code == 409
+
+    def test_complete_from_claimed_without_start_409(self, client, auth, make_task):
+        task = make_task(title="claimed-complete")
+        aid = _create(client, auth, task["id"]).json()["assignment"]["id"]
+        claim = _claim(client, auth, aid)
+        r = client.post(f"/api/assignments/{aid}/complete",
+                        json={"claim_token": claim["claim_token"],
+                              "final_report": "early"}, headers=auth)
+        assert r.status_code == 409
+
+    def test_unknown_assignment_404_machine_routes(self, client, auth):
+        assert client.post("/api/assignments/999999/claim",
+                           json={"claimed_by": "x"},
+                           headers=auth).status_code == 404
+        assert client.post("/api/assignments/999999/complete",
+                           json={"claim_token": "x"},
+                           headers=auth).status_code == 404
+        assert client.post("/api/assignments/999999/start",
+                           json={"claim_token": "x"},
+                           headers=auth).status_code == 404

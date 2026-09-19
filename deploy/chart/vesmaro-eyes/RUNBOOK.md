@@ -165,8 +165,8 @@ hostNetwork-порт 8080 при откате снова займётся под
 
 | Токен | Секрет / ключ env | Кто пользует | Что может |
 |---|---|---|---|
-| **ui-token** | `vesmaro-eyes-ui-token` / `VESMARO_UI_TOKEN` | UI владельца (браузер, ноутбук) | создание и cancel assignments, UI-мутации владельца (задачи, колонки) |
-| **machine-token** (он же legacy board-token) | `vesmaro-eyes-board-token` / `VESMARO_BOARD_TOKEN` | поллер и агенты (laptop, харнесы) | claim / start / heartbeat / complete / fail, reports, move своих задач |
+| **ui-token** | `vesmaro-eyes-ui-token` / `VESMARO_UI_TOKEN` | UI владельца (браузер, ноутбук) | только assignment-класс: создание и отмена назначений (POST /api/assignments, cancel). Task-мутации (CRUD задач, колонки) остались на board-токене — ui-класс расширяется волной Ф3 конвергенции |
+| **machine-token** (он же legacy board-token) | `vesmaro-eyes-board-token` / `VESMARO_BOARD_TOKEN` | поллер и агенты (laptop, харнесы) | claim / start / heartbeat / complete / fail, reports, move своих задач, весь остальной write-API (task CRUD — до миграции классов) |
 
 Оба секрета создаёт чарт при первом install (randAlphaNum 48); на upgrade
 значение переиспользуется через `lookup` — `helm upgrade` НИКОГДА не

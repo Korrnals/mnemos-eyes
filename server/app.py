@@ -1972,9 +1972,15 @@ async def complete_assignment(assignment_id: int,
         a, task, moved_from, moved_to = store.finish_assignment(
             assignment_id, "complete", note=body.note, token=body.claim_token)
         if final:
-            added = store.add_report(
-                a["task_id"], final, "final",
-                agent=(a.get("claimed_by") or ""))
+            try:
+                added = store.add_report(
+                    a["task_id"], final, "final",
+                    agent=(a.get("claimed_by") or ""))
+            except Exception:
+                # The terminal transition is already committed; a report
+                # failure must not turn a done assignment into a client 500
+                # (a retry would 409 and the report would be lost).
+                added = None
             if added is not None:  # None only when the task vanished mid-flight
                 report, _superseded = added
     except AssignmentError as exc:
@@ -2030,7 +2036,7 @@ async def cancel_assignment(assignment_id: int, body: AssignmentCancelBody,
     _assignment_rate_limit(request, ui=True)
     try:
         a, task, moved_from, moved_to = store.finish_assignment(
-            assignment_id, "cancel", note=body.reason)
+            assignment_id, "cancel", note=body.reason, claimed_by="owner")
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
