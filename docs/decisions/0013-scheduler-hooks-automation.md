@@ -1,6 +1,7 @@
 # ADR 0013: Scheduler & hooks — launch automation as a separate domain (SCHED-1, variant C)
 
-- Status: **Accepted by committee — pending owner ratification** (2026-09-20)
+- Status: **Accepted** (committee 2026-09-20; owner ratification 2026-09-20 —
+  «Окей, принимается. Работаем дальше», agent-bridge session)
 - Deciders: owner, АРХКОМ-5 (Product Architect, Senior System Engineer,
   Senior Security Engineer, Senior Frontend Developer), `@GCW: Tech Lead`
 - Related: SCHED-1 problem statement

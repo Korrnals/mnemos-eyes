@@ -1,6 +1,8 @@
 # ADR 0009: Agent bridge — assignment queue on the board (variant A′)
 
-- Status: **Accepted by committee — pending owner ratification** (2026-09-17)
+- Status: **Accepted** (committee 2026-09-17; owner ratification 2026-09-20 —
+  «Окей, принимается. Работаем дальше», agent-bridge session; covers the body
+  + Amendment 1 + Amendment 2)
 - Deciders: owner, АРХКОМ-2 (Product Architect, Senior System Engineer,
   Senior Security Engineer, Agent Architect), `@GCW: Tech Lead`
 - Related: ARCH-2, ADR 0005 (harness identity), ADR 0006 (freeze rule /
