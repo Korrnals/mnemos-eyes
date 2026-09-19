@@ -1,0 +1,32 @@
+# vesmaro-eyes assignment poller (ADR 0009 phase 2) — laptop systemd unit.
+# Install:   sudo cp vesmaro-assignment-poller.service /etc/systemd/system/
+#            sudo systemctl daemon-reload && sudo systemctl enable --now vesmaro-assignment-poller
+# Token:     EnvironmentFile (see README.md) — the machine token never lives
+#            in this unit file.
+[Unit]
+Description=vesmaro-eyes assignment poller (deterministic dispatcher, ADR 0009)
+Documentation=https://vesmaro.abyss.lab/api
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=abyss
+EnvironmentFile=/etc/vesmaro/poller.env
+ExecStart=/usr/bin/python3 /opt/mnemos-eyes/scripts/assignment_poller.py --config /home/abyss/.config/mnemos-eyes/poller.yaml
+Restart=always
+RestartSec=5
+
+# The poller is an outbound-only loop (ADR 0009 §9): it opens no listening
+# port; a modest hardening set is still worth having.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/abyss/.local/state/mnemos-eyes
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
