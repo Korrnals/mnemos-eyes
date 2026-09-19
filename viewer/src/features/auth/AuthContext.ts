@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { AuthState } from "./authState";
+import type { AdapterKind } from "@/gateway/adapterConfig";
 
 /**
  * DI context for the auth flow. `AuthProvider` owns the state machine and the
@@ -16,8 +17,11 @@ export interface AuthContextValue {
   logout: () => Promise<void>;
   openOverlay: () => void;
   closeOverlay: () => void;
-  /** Which gateway is active — drives the TopBar "local (mock)" label. */
-  adapterMode: "mock" | "http";
+  /**
+   * Which gateway is active — drives the TopBar "local (mock)"/"board"
+   * labels; "board" has no session affordance at all (open reads, ADR 0011 §7).
+   */
+  adapterMode: AdapterKind;
   /** Backend endpoint label for the connection indicator. */
   endpoint: string;
 }

@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AuthScreen } from "@/features/auth/AuthScreen";
 import { AuthProvider } from "@/features/auth/AuthProvider";
 import { useAuth } from "@/features/auth/AuthContext";
-import { MNEMOS_ADAPTER, MNEMOS_BASE_URL } from "@/gateway/adapterConfig";
+import { ADAPTER, adapterEndpointLabel } from "@/gateway/adapterConfig";
 
 import { SearchPage } from "@/features/search/SearchPage"; // eager — only eagerly loaded chunk (§3)
 
@@ -61,7 +61,7 @@ function RouteFallback() {
  */
 export default function App() {
   return (
-    <AuthProvider adapterMode={MNEMOS_ADAPTER} endpoint={MNEMOS_BASE_URL}>
+    <AuthProvider adapterMode={ADAPTER} endpoint={adapterEndpointLabel()}>
       <AppRoutes />
       <AuthOverlay />
     </AuthProvider>

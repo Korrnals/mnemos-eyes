@@ -10,25 +10,32 @@ import { useAuth } from "./AuthContext";
 /**
  * TopBar auth/connection slot (T6). Two pieces of state, one compact widget:
  *
- * - Connection: mock adapter → "local (mock)"; live adapter → derived from
- *   the health query ("connected to mnemos: <endpoint>" / "offline").
+ * - Connection: mock adapter → "local (mock)"; mnemos/board adapters →
+ *   derived from the health query ("connected to <backend>: <endpoint>" /
+ *   "offline").
  * - Session: "Sign in" (opens the AuthScreen overlay) or "Sign out"
  *   (invalidates the session server-side). The authenticated branch also
  *   reflects a token restored from localStorage so a reload renders the
  *   correct state immediately (the /auth/me confirmation follows async).
+ *
+ * Board adapter (Ф0): no session affordance renders at all — reads are open
+ * and token-free (ADR 0011 §7), so the sign-in entry must not appear and
+ * the auth screen can never be pulled in.
  */
 export function AuthStatus() {
   const { state, adapterMode, endpoint, logout, openOverlay } = useAuth();
   const status = useStatus();
 
+  const isBoard = adapterMode === "board";
   let connection: { state: HealthState; label: string };
   if (adapterMode === "mock") {
     connection = { state: "ok", label: "local (mock)" };
   } else {
     const health = deriveHealthStatus(status.data, status.isPending, status.isError);
+    const backend = isBoard ? "board" : "mnemos";
     const LABEL: Record<HealthState, string> = {
-      ok: `connected to mnemos: ${endpoint}`,
-      degraded: "mnemos degraded",
+      ok: `connected to ${backend}: ${endpoint}`,
+      degraded: `${backend} degraded`,
       error: "offline",
       unknown: "connecting…",
     };
@@ -44,7 +51,7 @@ export function AuthStatus() {
         label={connection.label}
         className="hidden text-sm text-foreground-secondary lg:inline-flex"
       />
-      {authenticated ? (
+      {isBoard ? null : authenticated ? (
         <Button
           variant="ghost"
           size="sm"

@@ -17,19 +17,47 @@ import type { RequestConfig } from "./http";
  * `login()` therefore takes the token, per the wire contract.
  */
 
-/** localStorage key mirroring the in-memory token across page reloads. */
+/** Storage key mirroring the in-memory token across reloads (local mode). */
 export const AUTH_STORAGE_KEY = "mnemos-eyes:auth";
+
+/**
+ * Where the token mirror lives (ADR 0011 §7 audit point Ф0):
+ * - "local"    localStorage — survives reloads (mnemos dev default);
+ * - "session"  sessionStorage — dropped when the tab closes (opt-in hardening
+ *              against `mnk_` lingering in persistent browser storage).
+ * Selected via `VITE_AUTH_STORAGE=session`; memory always stays correct.
+ */
+export type AuthStorageMode = "local" | "session";
+
+export const AUTH_STORAGE_MODE: AuthStorageMode = resolveStorageMode(
+  import.meta.env.VITE_AUTH_STORAGE,
+);
+
+/** Pure env resolver (testable): anything but "session" means "local". */
+export function resolveStorageMode(value: string | undefined): AuthStorageMode {
+  return value === "session" ? "session" : "local";
+}
 
 interface StoredAuth {
   token: string;
 }
 
+function storageFor(mode: AuthStorageMode): Storage | null {
+  try {
+    return mode === "session" ? globalThis.sessionStorage : globalThis.localStorage;
+  } catch {
+    return null; // unavailable (tests, private mode) — memory only
+  }
+}
+
 function readStoredToken(): string | null {
   try {
-    const raw = globalThis.localStorage?.getItem(AUTH_STORAGE_KEY);
+    const raw = storageFor(AUTH_STORAGE_MODE)?.getItem(AUTH_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredAuth>;
-    return typeof parsed.token === "string" && parsed.token.length > 0 ? parsed.token : null;
+    return typeof parsed.token === "string" && parsed.token.length > 0
+      ? parsed.token
+      : null;
   } catch {
     return null;
   }
@@ -37,12 +65,16 @@ function readStoredToken(): string | null {
 
 function persistToken(token: string | null): void {
   try {
-    const storage = globalThis.localStorage;
+    const storage = storageFor(AUTH_STORAGE_MODE);
     if (!storage) return; // unavailable (tests, private mode) — memory only
     if (token) {
       storage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ token } satisfies StoredAuth));
     } else {
-      storage.removeItem(AUTH_STORAGE_KEY);
+      // Clear every mirror we may own so switching modes never leaves a
+      // stale `mnk_`-shaped entry behind in the other storage.
+      for (const candidate of [globalThis.localStorage, globalThis.sessionStorage]) {
+        candidate?.removeItem(AUTH_STORAGE_KEY);
+      }
     }
   } catch {
     // Quota/security errors must never break the app — memory stays correct.
@@ -58,7 +90,7 @@ export function getToken(): string | null {
   return memoryToken;
 }
 
-/** Store a token (memory + localStorage mirror). */
+/** Store a token (memory + storage mirror per `AUTH_STORAGE_MODE`). */
 export function setToken(token: string): void {
   memoryToken = token;
   persistToken(token);
@@ -148,7 +180,10 @@ export class AuthClient {
       setToken(sessionToken);
       return { mode: "authenticated", token: sessionToken };
     }
-    throw new ApiError(0, "/auth/login response carried neither challenge_id nor token");
+    throw new ApiError(
+      0,
+      "/auth/login response carried neither challenge_id nor token",
+    );
   }
 
   /** Phase 2: exchange challenge + TOTP code for a session token (stored). */

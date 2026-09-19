@@ -12,7 +12,9 @@ Volume: /data (board.db)
 from __future__ import annotations
 
 import asyncio
+import base64
 import hmac
+import json
 import logging
 import os
 import re
@@ -20,7 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,12 +43,18 @@ from .store import (
     TaskLockedError,
     VALID_STATUSES,
 )
+from .task_inbox import _hits_of as _listing_hits_of
 from .task_inbox import background_refresher as inbox_background_refresher
 from .task_inbox import refresh_inbox
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
 DB_PATH = DATA_DIR / "board.db"
 STATIC_DIR = Path(os.environ.get("VESMARO_WEB", Path(__file__).resolve().parents[1] / "web"))
+# Phase 0a (ADR 0011): dist of the React viewer inside the image. An image
+# built without the Node stage legitimately has no directory — the /app
+# routes then answer 404 with an explanatory detail and the board at /
+# keeps working.
+APP_DIR = Path(os.environ.get("VESMARO_APP_DIR", "/app/app"))
 
 # Board read/write is open on the LAN by design (the cluster ingress is the
 # boundary); mnemos credentials stay server-side. Since SEC-3 the write
@@ -186,7 +194,30 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.3.2", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.4.0", lifespan=lifespan)
+
+# --------------------------------------------------- security headers (Ф0a)
+# АРХКОМ-3 decision 13 / security verdict §5.2: on EVERY response — CSP,
+# nosniff, no-referrer (URLs carry record ids: no-referrer keeps them
+# on-LAN). Plus Cache-Control: no-store on /api/* — the compensator for
+# the "PWA without service worker" invariant (no client-side API cache).
+# Header-only middleware: no body buffering, so SSE (/api/events) keeps
+# streaming (its no-cache is deliberately superseded by no-store — an
+# EventSource never caches either way).
+_CSP = ("default-src 'self'; script-src 'self'; object-src 'none'; "
+        "base-uri 'self'; frame-ancestors 'none'; connect-src 'self'; "
+        "img-src 'self' data:")
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # --------------------------------------------------------------------- models
@@ -424,6 +455,45 @@ class TaskInboxRefreshOut(_ApiModel):
     found: int
     new: int
     errors: list[dict[str, Any]]
+
+
+# Merged memory list + aggregated tags (Ф0b, ADR 0011 §6/§11 — the two
+# additive endpoints the BoardAdapter needs). Cursor contract (uniform
+# pagination canon): ``limit`` + opaque ``cursor`` → ``next_cursor``;
+# sort ``created_at DESC`` with the unique tiebreak ``id``; ``truncated``
+# is true only when results were silently capped with no continuation
+# offered (here: the request ``limit`` exceeded the 200 page cap). The
+# cursor is base64(JSON ``{"v":1,"offsets":{server:offset}}``) — opaque to
+# the client, per-store offsets under the hood; it is only valid for the
+# same query parameters (filters/scope) it was issued with.
+class MemoryListItem(_ApiModel):
+    id: str
+    server: str
+    title: str = ""
+    tags: list[str] = []
+    status: str | None = None
+    project: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    excerpt: str = ""
+
+
+class MemoryListOut(_ApiModel):
+    items: list[MemoryListItem]
+    next_cursor: str | None = None
+    truncated: bool = False
+    errors: list[dict[str, Any]] = []
+
+
+class TagCountOut(_ApiModel):
+    name: str
+    count: int
+
+
+class TagListOut(_ApiModel):
+    tags: list[TagCountOut]
+    servers_scanned: int
+    errors: list[dict[str, Any]] = []
 
 
 class NotificationOut(_ApiModel):
@@ -1003,6 +1073,185 @@ async def memory_pulse_all(project: str = "", limit: int = 12,
 @app.get("/api/memories/servers/{scope}/pulse")
 async def memory_pulse(scope: str, project: str = "mnemos-eyes", limit: int = 8) -> dict[str, Any]:
     return await memory_pulse_all(project=project, limit=limit, scope=scope)
+
+
+# ------------------------------------------- merged memories + tags (Ф0b)
+# The two additive endpoints of ADR 0011 §6: a merged memory listing with
+# the uniform cursor contract (§11) and the aggregated tag listing that
+# closes the BoardAdapter "no listTags" probe gap.
+_MEMORY_PAGE_CAP = 200        # hard page cap; a request above it → truncated
+_MEM_EXCERPT_CHARS = 200     # SEC-4: excerpt only, capped — no full content
+
+
+def _encode_cursor(offsets: dict[str, int]) -> str:
+    payload = json.dumps({"v": 1, "offsets": offsets}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _decode_cursor(cursor: str) -> dict[str, int]:
+    """Opaque cursor → per-server offsets. Raises HTTP 422 on anything this
+    server did not issue (garbage base64/JSON, wrong version, non-string
+    keys, negative or non-integer offsets)."""
+    try:
+        data = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
+    except (ValueError, UnicodeEncodeError):
+        raise HTTPException(422, "invalid cursor") from None
+    if (not isinstance(data, dict) or data.get("v") != 1
+            or not isinstance(data.get("offsets"), dict)):
+        raise HTTPException(422, "invalid cursor")
+    offsets = data["offsets"]
+    if not all(isinstance(k, str) and isinstance(v, int)
+               and not isinstance(v, bool) and v >= 0
+               for k, v in offsets.items()):
+        raise HTTPException(422, "invalid cursor")
+    return offsets
+
+
+def _merged_memory_item(server_name: str, m: dict[str, Any]) -> dict[str, Any]:
+    """Public card of one mnemos listing hit. Ids are NOT prefixed or
+    mutated — per-store ids may collide by design; the ``server`` field
+    disambiguates. SEC-4: only an excerpt travels, never full content."""
+    tags = [t for t in (m.get("tags") or []) if isinstance(t, str)]
+    return {
+        "id": str(m.get("id") or ""),
+        "title": (m.get("title") or (m.get("content") or "")[:80]),
+        "tags": tags,
+        "status": m.get("status"),
+        "project": m.get("project") or next(
+            (t[len("project:"):] for t in tags if t.startswith("project:")), ""),
+        "created_at": m.get("created_at") or "",
+        "updated_at": m.get("updated_at") or "",
+        "excerpt": (m.get("excerpt") or m.get("content") or "")[:_MEM_EXCERPT_CHARS],
+        "server": server_name,
+    }
+
+
+def _memory_sort_key(m: dict[str, Any]) -> tuple[str, str]:
+    """Uniform pagination tiebreak (ADR 0011 §11): created_at DESC, id."""
+    return (m.get("created_at") or "", m.get("id") or "")
+
+
+def _upstream_error(server_name: str, code: int, body: Any) -> dict[str, Any]:
+    detail = (body.get("detail") or "") if isinstance(body, dict) else str(body)
+    return {"server": server_name, "status": code, "detail": str(detail)[:200]}
+
+
+@app.get("/api/memories")
+async def memories_merged(
+    limit: int = Query(50, ge=1),
+    cursor: str = "",
+    scope: str = "",
+    status: str = "",
+    project: str = "",
+    agent: str = "",
+    tags: str = "",
+    since: str = "",
+    until: str = "",
+) -> MemoryListOut:
+    """Merged memory listing across active servers (Ф0b — BoardAdapter's
+    list primitive). Native mnemos ``GET /memories`` listing per server
+    with ``offset`` under the hood; the client sees the uniform cursor
+    contract: ``limit`` (default 50, hard cap 200) + opaque ``cursor`` →
+    ``next_cursor``; sort ``created_at DESC`` with the ``id`` tiebreak.
+
+    Cursor mechanics: each server's slice is pre-sorted by the merge key,
+    so the merged page is a union of per-server PREFIXES — advancing a
+    server's offset by exactly its consumed count loses nothing and
+    duplicates nothing. ``scope``: 'all' (default) or one ACTIVE server
+    name (simplified like the inbox — no groups); unknown name → 404. The
+    native filters (status/project/agent/tags/since/until) pass through
+    verbatim; a cursor is only valid for the parameters it was issued
+    with. A failing server degrades to its own ``errors[]`` entry and
+    keeps its old offset for the next page. ``truncated`` is true when
+    the requested limit exceeded the page cap (silent cap); content drops
+    beyond the page always come with a non-null ``next_cursor``.
+    """
+    truncated = limit > _MEMORY_PAGE_CAP
+    limit = min(limit, _MEMORY_PAGE_CAP)
+    offsets = _decode_cursor(cursor) if cursor else {}
+
+    if scope and scope != "all":
+        matched = [s for s in registry.active_servers() if s["name"] == scope]
+        if not matched:
+            raise HTTPException(404, f"no active memory server named '{scope}'")
+        servers = matched
+    else:
+        servers = registry.active_servers()
+
+    listing_filters = {k: v for k, v in (
+        ("status", status), ("project", project), ("agent", agent),
+        ("tags", tags), ("since", since), ("until", until)) if v}
+    results = await asyncio.gather(*(
+        mnemos_client.fetch_json(s, "/memories", {
+            "limit": limit, "offset": offsets.get(s["name"], 0),
+            **listing_filters,
+        }) for s in servers
+    ))
+
+    errors: list[dict[str, Any]] = []
+    slices: dict[str, list[dict[str, Any]]] = {}
+    for s, (code, body) in zip(servers, results):
+        hits = _listing_hits_of(body)  # shared listing-body normalizer
+        if code != 200 or hits is None:
+            errors.append(_upstream_error(s["name"], code, body))
+            continue
+        items = [_merged_memory_item(s["name"], h) for h in hits]
+        items.sort(key=_memory_sort_key, reverse=True)
+        slices[s["name"]] = items
+
+    merged = sorted((m for its in slices.values() for m in its),
+                    key=_memory_sort_key, reverse=True)
+    page = merged[:limit]
+
+    consumed = {name: 0 for name in slices}
+    for m in page:
+        consumed[m["server"]] += 1
+    next_offsets = {name: offsets.get(name, 0) + consumed[name]
+                    for name in slices}
+    # Full slices may continue (mnemos answers in limit-sized pages);
+    # unconsumed items mean the merge dropped some — both must offer a
+    # continuation. Short fully-consumed slices are exhausted.
+    has_more = (len(merged) > len(page)
+                or any(len(its) >= limit for its in slices.values()))
+    return MemoryListOut(
+        items=page,
+        next_cursor=_encode_cursor(next_offsets) if has_more else None,
+        truncated=truncated,
+        errors=errors,
+    )
+
+
+@app.get("/api/tags")
+async def tags_merged() -> TagListOut:
+    """Aggregated tag listing across all ACTIVE memory servers (Ф0b).
+    Primitive: mnemos ``GET /tags`` (TagCount[]); counts are summed per
+    tag name across stores; sort count DESC, name ASC. A failing server
+    degrades to its own ``errors[]`` entry; ``servers_scanned`` counts
+    only the stores that answered."""
+    servers = registry.active_servers()
+    results = await asyncio.gather(*(
+        mnemos_client.fetch_json(s, "/tags") for s in servers))
+    counts: dict[str, int] = {}
+    errors: list[dict[str, Any]] = []
+    scanned = 0
+    for s, (code, body) in zip(servers, results):
+        if code != 200 or not isinstance(body, list):
+            errors.append(_upstream_error(s["name"], code, body))
+            continue
+        scanned += 1
+        for t in body:
+            if not (isinstance(t, dict) and isinstance(t.get("tag"), str)):
+                continue
+            try:
+                counts[t["tag"]] = counts.get(t["tag"], 0) + int(t.get("count") or 0)
+            except (TypeError, ValueError):
+                continue  # one malformed record never breaks the aggregate
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return TagListOut(
+        tags=[{"name": n, "count": c} for n, c in ordered],
+        servers_scanned=scanned,
+        errors=errors,
+    )
 
 
 @app.get("/api/memories/item/{memory_id}")
@@ -1814,8 +2063,6 @@ async def events() -> StreamingResponse:
 
 
 def _sse(event: dict[str, Any]) -> bytes:
-    import json
-
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
@@ -1826,6 +2073,57 @@ async def index() -> FileResponse:
         STATIC_DIR / "index.html",
         headers={"Cache-Control": "no-cache"},  # entry point always fresh
     )
+
+
+# ---------------------------------------------------------------- /app (Ф0a)
+# React viewer dist (ADR 0011 Ф0a): history-API routing needs a fallback —
+# every /app path that is not a real file resolves to index.html. Routes
+# are registered BEFORE the StaticFiles mount so they win over the board's
+# own html=True handler. Path joining is traversal-safe (security verdict
+# §5.4): the resolved candidate must stay inside APP_DIR.
+def _app_index_response() -> FileResponse:
+    index = APP_DIR / "index.html"
+    if not index.is_file():
+        # An image built without the Node stage is a legitimate state —
+        # say so instead of leaking a bare 404.
+        raise HTTPException(
+            404,
+            "viewer app is not deployed (VESMARO_APP_DIR has no index.html); "
+            "the board UI stays at /",
+        )
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/app", include_in_schema=False)
+@app.get("/app/", include_in_schema=False)
+async def app_index() -> FileResponse:
+    """SPA entries: both /app and /app/ serve the viewer's index.html."""
+    return _app_index_response()
+
+
+@app.get("/app/{path:path}", include_in_schema=False)
+async def app_spa(path: str) -> FileResponse:
+    """Catch-all under /app: real files are served (vite emits them under
+    assets/ with content-hashed names → immutable), anything else falls
+    back to index.html for the client router."""
+    if not (APP_DIR / "index.html").is_file():
+        raise HTTPException(
+            404,
+            "viewer app is not deployed (VESMARO_APP_DIR has no index.html); "
+            "the board UI stays at /",
+        )
+    root = APP_DIR.resolve()
+    candidate = (root / path).resolve()
+    if candidate != root and root not in candidate.parents:
+        # traversal attempt (or a symlink escaping the dist) — reject
+        raise HTTPException(400, "path escapes the viewer root")
+    if candidate.is_file():
+        rel = candidate.relative_to(root)
+        cache = ("public, max-age=31536000, immutable"
+                 if rel.parts and rel.parts[0] == "assets"
+                 else "no-cache")
+        return FileResponse(candidate, headers={"Cache-Control": cache})
+    return _app_index_response()
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="web")

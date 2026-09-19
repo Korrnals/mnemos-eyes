@@ -42,6 +42,8 @@ class TestSchemasPresent:
         "HistoryOut", "EventItem", "MemoryItem",
         # AGG-1: task inbox mirror
         "TaskInboxItem", "TaskInboxOut", "TaskInboxRefreshOut",
+        # Ф0b: merged memory listing + aggregated tags (BoardAdapter)
+        "MemoryListItem", "MemoryListOut", "TagCountOut", "TagListOut",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -155,3 +157,27 @@ class TestKeyRoutesReferenceSchemas:
                      "tags", "priority", "specialist", "created_at",
                      "last_seen", "stale", "adopted", "adopted_task_id"}
         assert must_have <= set(item.get("properties", {}))
+
+    def test_merged_memories_cursor_contract(self, spec):
+        """Ф0b (ADR 0011 §11): GET /api/memories references MemoryListOut
+        and pins the uniform pagination keys."""
+        assert _ref_name(_response_schema(spec, "/api/memories", "get")) \
+            == "MemoryListOut"
+        out = _components(spec)["MemoryListOut"]
+        must_have = {"items", "next_cursor", "truncated", "errors"}
+        assert must_have <= set(out.get("properties", {}))
+        item = _components(spec)["MemoryListItem"]
+        must_have_item = {"id", "title", "tags", "status", "project",
+                          "created_at", "updated_at", "excerpt", "server"}
+        assert must_have_item <= set(item.get("properties", {}))
+        assert {"id", "server"} <= set(item.get("required", []))
+
+    def test_merged_tags(self, spec):
+        """Ф0b: GET /api/tags references TagListOut with counters."""
+        assert _ref_name(_response_schema(spec, "/api/tags", "get")) \
+            == "TagListOut"
+        out = _components(spec)["TagListOut"]
+        assert {"tags", "servers_scanned", "errors"} \
+            <= set(out.get("properties", {}))
+        tag = _components(spec)["TagCountOut"]
+        assert {"name", "count"} <= set(tag.get("properties", {}))
