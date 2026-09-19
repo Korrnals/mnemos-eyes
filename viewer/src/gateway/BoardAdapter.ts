@@ -5,12 +5,15 @@ import { EventStream } from "./events";
 import type { BoardEvent } from "./events";
 import { ApiError } from "@/lib/errors";
 import type {
+  ArchivePage,
+  ArchiveParams,
   BoardHealth,
   BoardHealthDetail,
   BoardHealthServer,
   BoardMemoryEnvelope,
   BoardSearchResponse,
   BoardSummary,
+  BoardTask,
   MemoryPulse,
   MemoryPulseItem,
   MemoryPulseServerNote,
@@ -18,7 +21,10 @@ import type {
   MergedMemoryListItem,
   MergedTags,
   PulseParams,
+  TaskHistory,
   TaskInbox,
+  TaskMemories,
+  TaskReports,
 } from "./boardTypes";
 import type {
   A2ASession,
@@ -50,6 +56,11 @@ import type {
  * - health         GET /api/health
  * - board          GET /api/board                ?status
  * - inbox          GET /api/tasks/inbox          ?scope&project&include_adopted
+ * - reports        GET /api/tasks/{id}/reports   (chronological, Ф2)
+ * - history        GET /api/tasks/{id}/history   (audit + memory timeline, Ф2)
+ * - taskMemories   GET /api/tasks/{id}/memories  (resolved links, Ф2)
+ * - archive        GET /api/archive              ?q&status&col&agent&project&limit&offset (Ф2)
+ * - taskById       GET /api/board                (pick by id — no single GET exists)
  * - pulse          GET /api/memories/pulse       ?scope&project&limit (Ф1)
  * - boardHealth    GET /api/health               (per-store detail view, Ф1)
  * - events         GET /api/events               (SSE, see gateway/events.ts)
@@ -106,6 +117,25 @@ export interface BoardGateway extends MemoryGateway {
   pulse(params?: PulseParams, signal?: AbortSignal): Promise<MemoryPulse>;
   /** Per-store health detail (`GET /api/health`, Ф1 Overview). */
   boardHealth(signal?: AbortSignal): Promise<BoardHealthDetail>;
+  /**
+   * Chronological report history for one task, oldest first
+   * (`GET /api/tasks/{id}/reports`, Ф2).
+   */
+  reports(taskId: string, signal?: AbortSignal): Promise<TaskReports>;
+  /** Merged audit + memory timeline (`GET /api/tasks/{id}/history`, Ф2). */
+  history(taskId: string, signal?: AbortSignal): Promise<TaskHistory>;
+  /** Resolved memory links of a task (`GET /api/tasks/{id}/memories`, Ф2). */
+  taskMemories(taskId: string, signal?: AbortSignal): Promise<TaskMemories>;
+  /** Filtered + paginated archive page (`GET /api/archive`, Ф2). */
+  archive(params?: ArchiveParams, signal?: AbortSignal): Promise<ArchivePage>;
+  /**
+   * Single task lookup. The board API has NO per-id GET, so this is a
+   * board-projection pick (`GET /api/board` + find); callers that live in
+   * React should cache it through the shared `tasks.board` query key (one
+   * wire call feeds the list and every detail page — see hooks/useTasks.ts).
+   * Throws 404 when the id is neither on the board.
+   */
+  taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask>;
 }
 
 export interface BoardAdapterOptions {
@@ -266,6 +296,55 @@ export class BoardAdapter implements BoardGateway {
   async boardHealth(signal?: AbortSignal): Promise<BoardHealthDetail> {
     const payload = await this.request<Record<string, unknown>>("/health", { signal });
     return normalizeBoardHealth(payload);
+  }
+
+  // --- Ф2 task-domain reads ------------------------------------------------------
+
+  async reports(taskId: string, signal?: AbortSignal): Promise<TaskReports> {
+    return this.request<TaskReports>(`/tasks/${encodeURIComponent(taskId)}/reports`, {
+      signal,
+    });
+  }
+
+  async history(taskId: string, signal?: AbortSignal): Promise<TaskHistory> {
+    return this.request<TaskHistory>(`/tasks/${encodeURIComponent(taskId)}/history`, {
+      signal,
+    });
+  }
+
+  async taskMemories(taskId: string, signal?: AbortSignal): Promise<TaskMemories> {
+    return this.request<TaskMemories>(`/tasks/${encodeURIComponent(taskId)}/memories`, {
+      signal,
+    });
+  }
+
+  async archive(
+    params: ArchiveParams = {},
+    signal?: AbortSignal,
+  ): Promise<ArchivePage> {
+    return this.request<ArchivePage>("/archive", {
+      query: {
+        q: params.q,
+        status: params.status,
+        col: params.col,
+        agent: params.agent,
+        project: params.project,
+        limit: params.limit,
+        offset: params.offset,
+      },
+      signal,
+    });
+  }
+
+  async taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask> {
+    const board = await this.board(undefined, signal);
+    const task = board.tasks.find((candidate) => candidate.id === taskId);
+    if (!task) {
+      throw new ApiError(404, `task '${taskId}' not found on the board`, {
+        url: `${this.baseUrl}/board`,
+      });
+    }
+    return task;
   }
 
   // --- v0-unsupported mnemos-side views (fail loud, never pretend) ----------

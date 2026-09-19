@@ -1,4 +1,5 @@
-import type { PulseParams } from "@/gateway/boardTypes";
+import type { ArchiveParams, PulseParams } from "@/gateway/boardTypes";
+import type { InboxParams } from "@/gateway/BoardAdapter";
 import type { ListMemoriesParams, SearchParams } from "@/gateway/types";
 
 /**
@@ -30,6 +31,26 @@ export const keys = {
   pulse: {
     feed: (params: PulseParams = {}) => ["pulse", "feed", params] as const,
   },
+  // Ф2 task domain. There is NO per-task detail key: the board API has no
+  // single-task GET, so the detail page READS the shared board projection
+  // through a `select` on the same `tasks.board` key — one wire call feeds
+  // the list, the mini-stats and every open detail page, and SSE patches to
+  // `tasks.board` reach both surfaces at once.
+  tasks: {
+    all: ["tasks"] as const,
+    board: () => ["tasks", "board"] as const,
+    reports: {
+      all: ["tasks", "reports"] as const,
+      detail: (taskId: string) => ["tasks", "reports", "detail", taskId] as const,
+      /** Client-side per-task report count (SSE-fed; the board row has none). */
+      count: (taskId: string) => ["tasks", "reports", "count", taskId] as const,
+    },
+    history: (taskId: string) => ["tasks", "history", taskId] as const,
+    memories: (taskId: string) => ["tasks", "memories", taskId] as const,
+    archive: (params: ArchiveParams = {}) => ["tasks", "archive", params] as const,
+    archiveAll: ["tasks", "archive"] as const,
+    inbox: (params: InboxParams = {}) => ["tasks", "inbox", params] as const,
+  },
   traces: {
     all: ["traces"] as const,
     list: (params: { task_label?: string; limit?: number } = {}) =>
@@ -56,6 +77,12 @@ export type HealthKey = ReturnType<typeof keys.status.health>;
 export type MetricsKey = ReturnType<typeof keys.status.metrics>;
 export type BoardHealthKey = ReturnType<typeof keys.status.boardHealth>;
 export type PulseFeedKey = ReturnType<typeof keys.pulse.feed>;
+export type TaskBoardKey = ReturnType<typeof keys.tasks.board>;
+export type TaskReportsKey = ReturnType<typeof keys.tasks.reports.detail>;
+export type TaskHistoryKey = ReturnType<typeof keys.tasks.history>;
+export type TaskMemoriesKey = ReturnType<typeof keys.tasks.memories>;
+export type TaskArchiveKey = ReturnType<typeof keys.tasks.archive>;
+export type TaskInboxKey = ReturnType<typeof keys.tasks.inbox>;
 export type TracesListKey = ReturnType<typeof keys.traces.list>;
 export type SessionsListKey = ReturnType<typeof keys.sessions.list>;
 export type SessionDetailKey = ReturnType<typeof keys.sessions.detail>;

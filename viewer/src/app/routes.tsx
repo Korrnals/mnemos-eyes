@@ -43,6 +43,21 @@ const SessionDetailPage = lazy(() =>
 const TracesPage = lazy(() =>
   import("@/features/traces/TracesPage").then((m) => ({ default: m.TracesPage })),
 );
+const TaskListPage = lazy(() =>
+  import("@/features/tasks/TaskListPage").then((m) => ({ default: m.TaskListPage })),
+);
+const TaskDetailPage = lazy(() =>
+  import("@/features/tasks/TaskDetailPage").then((m) => ({ default: m.TaskDetailPage })),
+);
+const TaskInboxPage = lazy(() =>
+  import("@/features/tasks/TaskInboxPage").then((m) => ({ default: m.TaskInboxPage })),
+);
+const TaskArchivePage = lazy(() =>
+  import("@/features/tasks/TaskArchivePage").then((m) => ({ default: m.TaskArchivePage })),
+);
+const TasksLayout = lazy(() =>
+  import("@/features/tasks/TasksLayout").then((m) => ({ default: m.TasksLayout })),
+);
 
 /**
  * The route table as data (redesign concept §2.1 / ADR 0011 Ф1) — consumed by
@@ -52,8 +67,9 @@ const TracesPage = lazy(() =>
  * Sessions, Traces — a temporary honest home inside the System domain until
  * the Ф2+ system pages arrive). Routes are FINAL for the convergence waves
  * (QA verdict §3): old paths answer with replace redirects so bookmarks
- * survive. `/clusters` stays unregistered (ADR 0003 D12 — L2); `/tasks`,
- * `/agents`, `/stores` are sidebar slots only until their phases land.
+ * survive. `/clusters` stays unregistered (ADR 0003 D12 — L2); `/tasks`
+ * lands its Ф2 reading pages below; `/agents`, `/stores` are sidebar slots
+ * only until their phases land.
  */
 export function buildRoutes(): RouteObject[] {
   return [
@@ -110,6 +126,26 @@ export function buildRoutes(): RouteObject[] {
               <MemoryDetailPage />
             </Page>
           ),
+        },
+
+        // Задачи domain (Ф2, ADR 0011): READ-ONLY reading surfaces — the
+        // list, the task page (tabs), the inbox mirror and the archive.
+        // The layout route owns the domain SSE bridge (taskEvents.ts).
+        // /tasks/board (kanban) is a Ф3 deliverable and stays unregistered.
+        {
+          path: "/tasks",
+          element: (
+            <Page>
+              <TasksLayout />
+            </Page>
+          ),
+          children: [
+            { index: true, element: <TaskListPage /> },
+            { path: "inbox", element: <TaskInboxPage /> },
+            { path: "archive", element: <TaskArchivePage /> },
+            // Static siblings rank above :id (react-router ranking).
+            { path: ":id", element: <TaskDetailPage /> },
+          ],
         },
 
         // Система domain (temporary honest home for the legacy views).

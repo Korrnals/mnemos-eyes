@@ -189,38 +189,11 @@ X-Profile-Index-Sources: name=alpha,status=ok,items=12;name=beta,status=err
 `Assignment`: `id`, `task_id`, `specialist`, `harness`, `state`
 (`queued|claimed|running|done|failed|cancelled|expired`), `created_by`,
 `claimed_by`, `note`, `created_at`, `claimed_at`, `started_at`,
-`heartbeat_at`, `finished_at`, опционально `executor_id` /
-`claimed_by_executor` (атрибуция реестра исполнителей ARCH-9, additive-поле
-— разрешено правилами словаря ниже); `claim_token` и `spec_snapshot` в
-SSE-payload **не входят** (секрет и immutable execution view соответственно
-— только hash в payload, `spec_hash`, если понадобится). Транспортное
-ограничение без resumption: клиент после (re)connect обязан пере-fetch
-`GET /api/assignments` — SSE здесь уведомление, не источник правды.
-
-### Зарезервированные kinds (ARCH-9, эмиттеры — фаза реестра; НЕ Ф1)
-
-Словарь `executor.*` (реестр исполнителей ARCH-9, ADR 0009 Amendment 2 §7)
-зарезервирован по тому же правилу — контракт раньше эмиттеров (АРХКОМ-4).
-В Ф1 не эмитится ничего из этого блока; столбцы-носители (`executor_id`,
-`claimed_by_executor` в `task_assignments`) уже существуют с Ф1. Payload —
-`{executor: Executor, prev_state, state, last_seen_at}` (+ `notification`,
-где отмечено); эмит **только при смене presence** — per-heartbeat события
-запрещены (возраст клиент рендерит из GET + локальный 1 Гц тикер); правило
-ре-фетча после (re)connect распространяется на исполнителей.
-
-| kind | Payload | Эмиттер (ARCH-9) | Клиент |
-| --- | --- | --- | --- |
-| `executor.registered` | `executor` + `prev_state/state` + `notification` | регистрация исполнителя в реестре | до ARCH-9 не обрабатывается |
-| `executor.updated` | `executor` + `prev_state/state` | изменение записи реестра | до ARCH-9 не обрабатывается |
-| `executor.deleted` | `executor` + `prev_state/state` + `notification` | удаление записи реестра | до ARCH-9 не обрабатывается |
-| `executor.online` | `executor` + `prev_state: offline/stale` → `state: online` | presence: исполнитель подключился (смена состояния, не heartbeat) | до ARCH-9 не обрабатывается |
-| `executor.offline` | `executor` + `prev_state: online/stale` → `state: offline` | presence: исполнитель отключился (смена состояния) | до ARCH-9 не обрабатывается |
-
-`Executor` (объект словаря, материализуется в ARCH-9): `id`, `name`,
-`harness`, `host`, `transport` (`local-poll|mesh-r4`), `capabilities`,
-`enabled`, `last_seen`; presence вычисляется при чтении по TTL (столбца
-state нет — sweeper ничего не мутирует). В Ф1/до реестра executors —
-derived view из истории assignments + объявленных полей.
+`heartbeat_at`, `finished_at`; `claim_token` и `spec_snapshot` в SSE-payload
+**не входят** (секрет и immutable execution view соответственно — только
+hash в payload, если понадобится). Транспортное ограничение без resumption:
+клиент после (re)connect обязан пере-fetch `GET /api/assignments` — SSE
+здесь уведомление, не источник правды.
 
 ### Встроенные объекты
 

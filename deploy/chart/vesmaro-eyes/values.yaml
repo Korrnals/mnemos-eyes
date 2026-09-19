@@ -13,7 +13,7 @@ image:
   repository: ghcr.io/korrnals/vesmaro-eyes
   # Explicit tag synced from server/app.py by scripts/sync-version.sh.
   # If left empty, .Chart.AppVersion is used.
-  tag: "1.6.0"
+  tag: "1.5.0"
   pullPolicy: Always
 
 imagePullSecrets:
@@ -45,24 +45,6 @@ boardToken:
   # secret you manage yourself.
   existingSecret: ""
   existingSecretKey: VESMARO_BOARD_TOKEN
-
-uiToken:
-  # VESMARO_UI_TOKEN (ADR 0009 §2 A1 — token split): owner UI token for
-  # assignment create/cancel + owner UI mutations. Same lifecycle as
-  # boardToken: created on first install (randAlphaNum 48), reused via
-  # lookup on every upgrade, kept on uninstall. Set existingSecret to
-  # reference a secret you manage yourself.
-  # enabled=false removes BOTH the secret and the env var → the server
-  # runs in legacy mode (VESMARO_UI_TOKEN absent → VESMARO_BOARD_TOKEN
-  # serves both channels + a startup warning in server logs). Escape
-  # hatch, see RUNBOOK.md §6.
-  enabled: true
-  existingSecret: ""
-  # Wart (inherited from the board-token pattern): setting existingSecret
-  # WITHOUT a matching existingSecretKey makes the env silently miss and the
-  # server fall back to legacy single-token mode. The key must match what the
-  # chart's own secret template writes (VESMARO_UI_TOKEN).
-  existingSecretKey: VESMARO_UI_TOKEN
 
 mnemos:
   cluster:

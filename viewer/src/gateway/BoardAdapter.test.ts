@@ -468,6 +468,220 @@ describe("BoardAdapter wire contract", () => {
   });
 });
 
+// --- Ф2 task-domain reads ------------------------------------------------------
+// Recorded corpus (2026-09-19, live board on :8141 — seeded store + the real
+// mnemos on :8787 registered as "laptop"): the exact wire bodies the new
+// endpoints answered with, trimmed to representative rows (QA rule: recorded
+// corpus instead of an invented double).
+
+const CORPUS_REPORTS = {
+  ok: true,
+  task_id: "TB-1",
+  count: 3,
+  items: [
+    {
+      id: 1,
+      task_id: "TB-1",
+      kind: "intermediate",
+      agent: "zcode",
+      body: "Промежуточный отчёт: разведка завершена, роуты Tasks подтверждены.",
+      superseded: false,
+      created_at: "2026-09-19T21:12:12+00:00",
+    },
+    {
+      id: 2,
+      task_id: "TB-1",
+      kind: "final",
+      agent: "zcode",
+      body: "Финальный отчёт v1: список страниц свёрстан.",
+      superseded: true,
+      created_at: "2026-09-19T21:12:16+00:00",
+    },
+    {
+      id: 3,
+      task_id: "TB-1",
+      kind: "final",
+      agent: "zcode",
+      body: "Финальный отчёт v2: список + страница задачи готовы, правки внесены.",
+      superseded: false,
+      created_at: "2026-09-19T21:12:19+00:00",
+    },
+  ],
+};
+
+const CORPUS_HISTORY = {
+  events: [
+    { ts: "2026-09-19T21:12:19+00:00", title: "task.report", detail: "final, агент: zcode" },
+    { ts: "2026-09-19T21:12:12+00:00", title: "task.report", detail: "intermediate, агент: zcode" },
+    { ts: "2026-09-19T21:11:58+00:00", title: "task.moved", detail: "in-progress → in-progress" },
+    { ts: "2026-09-19T21:11:52+00:00", title: "task.updated", detail: "поля: summary" },
+  ],
+  memories: [
+    {
+      ts: "2026-07-27T09:26:20.643428Z",
+      title: "Session checkpoint — 2026-07-27T09:26:20.643279+00:00",
+      source: "laptop",
+      detail: "# Session checkpoint — 2026-07-27T09:26:20.643279+00:00\n\n## Goals\n…",
+    },
+  ],
+};
+
+const CORPUS_TASK_MEMORIES = {
+  items: {
+    "25cdc0e9-1912-4217-aaf0-0e7c48912df1": {
+      id: "25cdc0e9-1912-4217-aaf0-0e7c48912df1",
+      title: "Session checkpoint — 2026-07-27T09:26:20.643279+00:00",
+      excerpt: "# Session checkpoint — 2026-07-27T09:26:20.643279+00:00\n\n## Goals\n…",
+      status: "published",
+      tags: ["project:mnemos-eyes", "mnemos:checkpoint"],
+    },
+  },
+  unresolved: [],
+  sources: { "25cdc0e9-1912-4217-aaf0-0e7c48912df1": "laptop" },
+};
+
+const CORPUS_ARCHIVED_ROW = {
+  id: "RB-1",
+  col: "blocked",
+  position: 2,
+  title: "Провести день регистраций vesmaro",
+  summary: "Имя vesmaro подтверждено владельцем.",
+  spec: "Acceptance criteria:\n— [ ] фаза A: GitHub org",
+  agents: ["zcode"],
+  specialists: ["@GCW: Tech Lead", "owner"],
+  env: "laptop",
+  project: "mnemos",
+  memory_ids: [],
+  mnemos_tags: ["project:mnemos", "naming"],
+  created_at: "2026-09-19T21:11:24+00:00",
+  updated_at: "2026-09-19T21:12:19+00:00",
+  archived: 1,
+  status: "blocked",
+  priority: "normal",
+  archived_from: "blocked",
+};
+
+const CORPUS_ARCHIVE = {
+  ok: true,
+  count: 1,
+  total: 1,
+  limit: 5,
+  offset: 0,
+  items: [CORPUS_ARCHIVED_ROW],
+  projects: {
+    mnemos: [
+      {
+        id: "RB-1",
+        title: "Провести день регистраций vesmaro",
+        col: "blocked",
+        agents: ["zcode"],
+        env: "laptop",
+        updated_at: "2026-09-19T21:12:19+00:00",
+      },
+    ],
+  },
+};
+
+const CORPUS_BOARD_TASK = {
+  id: "T6",
+  col: "in-progress",
+  position: 1,
+  title: "Подключить L1 viewer к живому mnemos: HttpAdapter + auth flow",
+  summary: "Backend-гейт (CORS + auth/2FA) снят 2026-06-17.",
+  spec: "Acceptance criteria:\n— [ ] Authorization: Bearer mnk_…",
+  agents: ["zcode"],
+  specialists: ["@GCW: Senior Frontend Developer", "@GCW: Tech Lead"],
+  env: "cluster",
+  project: "mnemos-eyes",
+  memory_ids: ["25cdc0e9-1912-4217-aaf0-0e7c48912df1"],
+  mnemos_tags: ["project:mnemos-eyes", "agent:zcode", "mnemos:decision"],
+  created_at: "2026-09-19T21:11:24+00:00",
+  updated_at: "2026-09-19T21:11:24+00:00",
+  archived: 0,
+  status: "in-progress",
+  priority: "normal",
+  archived_from: "",
+};
+
+describe("BoardAdapter Ф2 task reads (recorded corpus)", () => {
+  it("reports: GET /tasks/{id}/reports passes the corpus through", async () => {
+    const fetchMock = respondingFetch(CORPUS_REPORTS);
+    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+
+    const reports = await adapter.reports("TB-1");
+
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/tasks/TB-1/reports");
+    expect(reports.count).toBe(3);
+    expect(reports.items[1].superseded).toBe(true);
+    expect(reports.items[2].superseded).toBe(false);
+  });
+
+  it("history: GET /tasks/{id}/history — events desc + memory checkpoints", async () => {
+    const fetchMock = respondingFetch(CORPUS_HISTORY);
+    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+
+    const history = await adapter.history("TB-1");
+
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/tasks/TB-1/history");
+    expect(history.events[0].title).toBe("task.report");
+    expect(history.memories[0].source).toBe("laptop");
+  });
+
+  it("taskMemories: GET /tasks/{id}/memories — cards + sources + unresolved", async () => {
+    const fetchMock = respondingFetch(CORPUS_TASK_MEMORIES);
+    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+
+    const links = await adapter.taskMemories("T6");
+
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/tasks/T6/memories");
+    expect(links.sources["25cdc0e9-1912-4217-aaf0-0e7c48912df1"]).toBe("laptop");
+    expect(Object.keys(links.items)).toHaveLength(1);
+  });
+
+  it("archive: GET /archive with the full filter set + pagination", async () => {
+    const fetchMock = respondingFetch(CORPUS_ARCHIVE);
+    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+
+    const page = await adapter.archive({
+      q: "регистрац",
+      status: "blocked",
+      col: "blocked",
+      agent: "zcode",
+      project: "mnemos",
+      limit: 5,
+      offset: 0,
+    });
+
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+      "/api/archive?q=%D1%80%D0%B5%D0%B3%D0%B8%D1%81%D1%82%D1%80%D0%B0%D1%86" +
+        "&status=blocked&col=blocked&agent=zcode&project=mnemos&limit=5&offset=0",
+    );
+    expect(page.total).toBe(1);
+    expect(page.items[0].archived).toBe(1);
+    expect(page.items[0].archived_from).toBe("blocked");
+    expect(page.projects.mnemos).toHaveLength(1);
+  });
+
+  it("taskById: picks the row from the board projection, 404 when absent", async () => {
+    const fetchMock = respondingFetch({
+      columns: ["open", "in-progress"],
+      tasks: [CORPUS_BOARD_TASK],
+      counts: { open: 0, "in-progress": 1 },
+    });
+    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+
+    const task = await adapter.taskById("T6");
+    expect(task.id).toBe("T6");
+    expect(task.priority).toBe("normal");
+
+    const error = (await adapter
+      .taskById("NOPE")
+      .catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(404);
+  });
+});
+
 describe("BoardAdapter error and auth behaviour", () => {
   it("maps non-2xx responses onto ApiError with the server detail", async () => {
     const fetchMock = respondingFetch({ detail: "boom" }, 500);

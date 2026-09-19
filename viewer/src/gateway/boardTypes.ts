@@ -43,6 +43,56 @@ export type MergedMemoryListItem = Schemas["MemoryListItem"];
 /** Aggregated tag listing — board `TagListOut` schema (`GET /api/tags`). */
 export type MergedTags = Schemas["TagListOut"];
 
+// --- Ф2 task-domain wire types (generated entity schemas) ---------------------
+
+/** One agent report — board `ReportOut` schema. */
+export type TaskReport = Schemas["ReportOut"];
+
+/** Report history — board `ReportsOut` schema (`GET /api/tasks/{id}/reports`). */
+export type TaskReports = Schemas["ReportsOut"];
+
+/** One audit event row — board `EventItem` schema (ts + title + detail?). */
+export type TaskHistoryEvent = Schemas["EventItem"];
+
+/** One linked-memory row — board `MemoryItem` schema (ts?/source?/detail?). */
+export type TaskHistoryMemory = Schemas["MemoryItem"];
+
+/** Merged task timeline — board `HistoryOut` schema (`GET /api/tasks/{id}/history`). */
+export type TaskHistory = Schemas["HistoryOut"];
+
+/**
+ * Resolved task memory links — board `TaskMemoriesOut` schema
+ * (`GET /api/tasks/{id}/memories`). `items` maps a memory id onto an
+ * excerpt-only card (SEC-4); `sources` maps the id onto the resolving
+ * server; `unresolved` lists links no active server could resolve.
+ */
+export type TaskMemories = Schemas["TaskMemoriesOut"];
+
+/**
+ * Archive page — board `ArchiveOut` schema (`GET /api/archive`). `items` is
+ * the limit/offset page; `projects` groups the FULL matching set (stable
+ * teaser counts under pagination, BE-11b); `count` is the legacy total key.
+ */
+export type ArchivePage = Schemas["ArchiveOut"];
+
+/** Archive query params (mirrors the server's filter contract). */
+export interface ArchiveParams {
+  /** LIKE over title/summary. */
+  readonly q?: string;
+  /** Exact workflow-status match (`TASK_STATUSES`; empty = all). */
+  readonly status?: string;
+  /** Exact column match (`VALID_STATUSES`; empty = all). */
+  readonly col?: string;
+  /** Member-of-agents-array match. */
+  readonly agent?: string;
+  /** Exact project match. */
+  readonly project?: string;
+  /** Page size (server clamps to 0..200; default 50). */
+  readonly limit?: number;
+  /** Page offset (≥ 0). */
+  readonly offset?: number;
+}
+
 // --- Anonymous wire shapes (board answers `dict[str, Any]`) ------------------
 
 /**
