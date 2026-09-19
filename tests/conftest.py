@@ -126,13 +126,22 @@ class _FakeMnemosHandler(BaseHTTPRequestHandler):
             self._reply(200, {"status": "ok", "volume": {"memories_total": 1}})
         elif self.path.startswith("/memories"):
             # AGG-1: with a tags query-param this is the tag LISTING the
-            # task-inbox scanner reads; without it the legacy pulse path
-            # keeps its empty reply
+            # task-inbox scanner reads; without it the merged-listing path
+            # (Ф0b) gets a limit/offset window into fake.memories_result
+            # (the legacy pulse path keeps its empty reply on the default)
             from urllib.parse import parse_qs, urlparse
-            if "tags" in parse_qs(urlparse(self.path).query):
+            q = parse_qs(urlparse(self.path).query)
+            if "tags" in q:
                 self._reply(200, fake.listing_results)
             else:
-                self._reply(200, [])
+                offset = int(q.get("offset", ["0"])[0])
+                limit = int(q.get("limit", ["0"])[0])
+                window = (fake.memories_result[offset:offset + limit]
+                          if limit else fake.memories_result)
+                self._reply(200, window)
+        elif self.path.startswith("/tags"):
+            # Ф0b: aggregated tag listing primitive (mnemos TagCount[])
+            self._reply(200, fake.tags_result)
         else:  # /health and anything else
             self._reply(200, {"status": "ok"})
 
@@ -175,6 +184,13 @@ class FakeMnemos:
         # AGG-1: GET /memories?tags=... LISTING body (the task-inbox
         # scanner's primitive); without a tags param /memories replies []
         self.listing_results: list[dict] = []
+        # Ф0b: GET /memories (no tags param) listing body — served as a
+        # limit/offset window so cursor-pagination tests see a real
+        # has-more signal (full page ⇒ maybe more); default [] keeps the
+        # legacy pulse replies intact
+        self.memories_result: list[dict] = []
+        # Ф0b: GET /tags reply (mnemos TagCount[] shape)
+        self.tags_result: list[dict] = []
         # memory id -> full card dict served by GET /memories/{id}
         # (BE-7 history tests wire task-linked checkpoints here)
         self.memory_cards: dict[str, dict] = {}

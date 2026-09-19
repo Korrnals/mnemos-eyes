@@ -1,7 +1,27 @@
 # vesmaro-eyes — task board container
 #
-# Python 3.12 slim, non-root, healthcheck on /api/health.
-# Data (SQLite) lives on a mounted volume at /data.
+# Multi-stage (ADR 0011 Ф0a): the React viewer is built from viewer/ in a
+# Node stage and its dist/ ships inside the board image at /app/app
+# (VESMARO_APP_DIR) — one Deployment/Ingress/NetPol serves both the board
+# at / and the viewer at /app. Codegen for the viewer runs off the
+# committed viewer/openapi-snapshot.json (offline: no mnemos access, no
+# network API calls at build time). npm ci needs the registry; that is the
+# only network dependency of the build.
+#
+# Runtime: Python 3.12 slim, data (SQLite) on a mounted volume at /data.
+
+FROM node:22-alpine AS viewer-builder
+
+WORKDIR /build
+
+# Manifests first for layer caching; .dockerignore keeps node_modules and
+# a stale dist/ out of the context, so npm ci is the single dependency
+# source of truth.
+COPY viewer/package.json viewer/package-lock.json ./
+RUN npm ci
+
+COPY viewer/ ./
+RUN npm run build
 
 FROM python:3.12-slim
 
@@ -9,7 +29,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     VESMARO_DATA=/data \
-    VESMARO_WEB=/app/web
+    VESMARO_WEB=/app/web \
+    VESMARO_APP_DIR=/app/app
 
 WORKDIR /app
 
@@ -18,6 +39,7 @@ RUN pip install --no-cache-dir -r /app/server/requirements.txt
 
 COPY server/ /app/server/
 COPY web/ /app/web/
+COPY --from=viewer-builder /build/dist/ /app/app/
 
 # Runs as uid 0 inside the container: under rootless podman/k8s this maps to
 # the host uid (k8s securityContext pins runAsUser=1000), and on bind mounts

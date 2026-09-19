@@ -1,0 +1,12 @@
+# Build-context hygiene for the multi-stage Containerfile (Ф0a).
+# viewer/node_modules must never enter the builder image (npm ci is the
+# source of truth); viewer/dist is rebuilt inside the image. Local state
+# (board DB, caches, VCS) stays on the host.
+.git
+.history
+.remember
+.pytest_cache
+data
+**/__pycache__
+viewer/node_modules
+viewer/dist
