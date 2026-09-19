@@ -5,10 +5,10 @@
 > Продукт: **vesmaro-eyes**. Репозиторий: **mnemos-eyes**
 > (`github.com/Korrnals/mnemos-eyes`; запланирован переезд в org `vesmaro` —
 > задача RB-1 на борде, статус blocked).
-> Status: **борд v1.0.0 задеплоен** и живёт на `http://vesmaro.abyss.lab`;
-> релиз `ghcr.io/korrnals/vesmaro-eyes:1.0.0` в ghcr. Это не design phase.
-> Следующий этап разработки — **L1 viewer** (см. §7: Phase 2 «L1 scaffold»
-> после закрытия Phase 1 «стабилизация»).
+> Status: **борд задеплоен** и живёт на `vesmaro.abyss.lab`; это не design
+> phase. Следующий этап — **конвергенция фронтендов в единое web-приложение**
+> (strangler-фазы Ф0–Ф4, ADR 0011 — принята комитетом, на ратификации
+> владельца; см. §7).
 
 ---
 
@@ -154,17 +154,39 @@ ADR 0006 (судьба двух фронтендов), 0007 (merged views vs mes
 ## 7. Roadmap
 
 Каркас Phase 1–4 — решение №5 архкома от 2026-09-16
-([протокол](architecture/archcom-2026-09-16-archcom-session1.md)):
-стабилизация → L1 scaffold → mesh → конвергенция.
+([протокол](architecture/archcom-2026-09-16-archcom-session1.md)).
+АРХКОМ-3 ([протокол](architecture/archcom-2026-09-19-archcom-session3.md);
+ADR 0011/0012 — приняты комитетом, ожидают ратификации владельца) назвал
+конечное состояние: **конвергенция двух фронтендов в единое React
+web-приложение** (`viewer/`), strangler-фазы Ф0–Ф4, канбан мигрирует
+последним; freeze-правило ADR 0006 действует до parity-гейта Ф4.
 
-| Phase | Deliverable | Gate на вход |
+| Фаза | Deliverable | Гейт на вход / предусловия |
 | --- | --- | --- |
-| **Phase 1 — стабилизация** (текущая: ветка `feat/sprint-1-stabilization`) | Приоритет спринта: SEC-1/2 → BE-1/4 → FE-1 → QA-1 → SRE-1 | — |
-| **Phase 2 — L1 scaffold** | Каркас L1 viewer (React+TS+Vite); OpenAPI-схемы board API + контракт-тесты (TL + QA) | **Gate 1→2** = OpenAPI-схемы + QA-1 контракт-тесты + SRE-1 закрыл SEC-3 |
-| **Phase 3 — mesh** | Федерация mnemos-mesh (MSH-1); борд-мерж остаётся query-агрегацией, монополия борд-мерж API до появления query-API у mesh (ADR 0007) | **Gate 2→3** = L1 потребляет `/api/memories/*`; второй мерж-слой = veto |
-| **Phase 4 — конвергенция** | Сведение двух фронтендов по конвергенционному гейту ADR 0006 | **Gate 3→4** = «mesh query-API ∨ L1 parity по daily loop владельца — что раньше» |
+| **Ф0a — деплой `/app`** | viewer в образе: multi-stage Containerfile (node:22 → `dist/`), `VESMARO_APP_DIR`, history-fallback `/app/{path}` | CI зелёный на Node-сборке |
+| **Ф0b — BoardAdapter (read)** | Адаптер merge-API борда в шлюзе: `GET /api/memories` + `GET /api/tags` (аддитивные), SSE EventStream, типы из OpenAPI борда; CSP + `no-store` + `Referrer-Policy` на `/api/*`; purge `mnk_` из браузера | Контракт-тесты против борд-сервера; golden-корпус запинен (QA) |
+| **Ф1 — оболочка + «Память»** | Sidebar/breadcrumbs/топбар/палитра/хоткеи/i18n/density-токены; домен «Память»; auth-рерайт на ui-token (`mnk_`/TOTP уходят из UI); PWA-минимум (manifest, без SW) | Установка PWA требует lab-CA |
+| **Ф2 — «Задачи» read-only** | Страница задачи, вид «Список», инбокс-чтение, архив | Read-parity по чеклисту TL (выход Ф2 = вход в миграцию канбана) |
+| **Ф3 — мутации + канбан** | move/edit/draft/adopt, канбан DnD, assignment-триггер (ARCH-2 Ф4 — в React), SSE-оптимистик | **WF-1 CHECK-rebuild (`tasks.col`) до кодирования канбана**; выход = раунд фидбека владельца (гейт (b) ADR 0006) |
+| **Ф4 — переключение** | `/` → React-app; `/board` — deprecation-окно (bug-fix only), затем снятие с ingress | fallback-to-board ≈ 0; rollback прорепетирован; подпись владельца |
 
-Deferrals (архком): борд-фичи, Tauri, L2/L3, i18n.
+Смежные треки (предусловия раньше следствий):
+
+- **ARCH-2 (ADR 0009)**: Ф0–Ф1 (сервер + поллер) — раньше QR-пейринга;
+  **Ф4 (UI-триггер) перенесён в React** (Ф3 конвергенции); freeze-исключение
+  борда не тратить.
+- **QR-пейринг + device-токены (ADR 0012)**: строго после токен-сплита
+  **ADR 0009 Ф1** (ui/machine); **lab-CA — предусловие пейринга** (не
+  опция); UI пейринга — в React после Ф0.
+- **PWA-минимум (ADR 0011)**: manifest + иконки подключаются с Ф0
+  (start_url/scope параметром сборки); service worker — только по
+  отдельному решению архкома.
+- **Mesh (MSH-1, ADR 0007)**: гейт (a) ADR 0006 не двигается — query-API
+  mesh меняет внутренности BoardAdapter, не фазы конвергенции.
+
+Deferrals (архком): борд-фичи (сверх закрытого списка быстрых побед,
+ADR 0011 §8), Tauri (Phase 2 по ADR 0001), L2/L3, нативные приложения,
+service worker / offline-кеш.
 
 ---
 
