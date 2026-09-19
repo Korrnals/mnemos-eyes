@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { Search } from "lucide-react";
+import { useT, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,10 +23,18 @@ export interface SearchBarProps {
   className?: string;
 }
 
-const SEARCH_TYPES: { value: SearchTypeSetting; label: string; title: string }[] = [
-  { value: "auto", label: "Auto", title: "Server-decided ranking per hit" },
-  { value: "fts", label: "FTS", title: "Show full-text hits only (client-side filter)" },
-  { value: "semantic", label: "Semantic", title: "Show semantic hits only (client-side filter)" },
+const SEARCH_TYPES: {
+  value: SearchTypeSetting;
+  labelKey: TranslationKey;
+  titleKey: TranslationKey;
+}[] = [
+  { value: "auto", labelKey: "search.typeAuto", titleKey: "search.typeAutoTitle" },
+  { value: "fts", labelKey: "search.typeFts", titleKey: "search.typeFtsTitle" },
+  {
+    value: "semantic",
+    labelKey: "search.typeSemantic",
+    titleKey: "search.typeSemanticTitle",
+  },
 ];
 
 export function SearchBar({
@@ -37,13 +46,14 @@ export function SearchBar({
   onSearchTypeChange,
   className,
 }: SearchBarProps) {
+  const t = useT();
   const inputId = useId();
   const typeName = `search-type-${inputId}`;
 
   return (
     <form
       role="search"
-      aria-label="Search memories"
+      aria-label={t("search.formLabel")}
       aria-busy={isSearching}
       className={cn("w-full", className)}
       onSubmit={(event) => {
@@ -59,7 +69,7 @@ export function SearchBar({
         )}
       >
         <label htmlFor={inputId} className="sr-only">
-          Search memory
+          {t("search.inputLabel")}
         </label>
         <input
           id={inputId}
@@ -67,7 +77,7 @@ export function SearchBar({
           type="search"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="Search the well…"
+          placeholder={t("search.placeholder")}
           autoComplete="off"
           spellCheck={false}
           className={cn(
@@ -78,7 +88,7 @@ export function SearchBar({
         <button
           type="submit"
           disabled={isSearching}
-          aria-label={isSearching ? "Searching" : "Search"}
+          aria-label={t(isSearching ? "search.submitting" : "search.submit")}
           className={cn(
             "inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-iris-strong text-foreground-inverse",
             "transition-colors duration-instant hover:bg-iris-strong-hover", // AA in both themes
@@ -93,11 +103,11 @@ export function SearchBar({
 
       {onSearchTypeChange ? (
         <fieldset className="mt-3 flex items-center justify-center gap-1">
-          <legend className="sr-only">Search type</legend>
+          <legend className="sr-only">{t("search.typeLegend")}</legend>
           {SEARCH_TYPES.map((option) => (
             <label
               key={option.value}
-              title={option.title}
+              title={t(option.titleKey)}
               className={cn(
                 "cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors duration-instant",
                 "has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-iris-bright",
@@ -114,7 +124,7 @@ export function SearchBar({
                 onChange={() => onSearchTypeChange(option.value)}
                 className="sr-only"
               />
-              {option.label}
+              {t(option.labelKey)}
             </label>
           ))}
         </fieldset>

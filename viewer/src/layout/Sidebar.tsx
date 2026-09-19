@@ -2,6 +2,7 @@ import { NavLink } from "react-router";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n";
 import { NAV_ITEMS } from "./navItems";
 import { cn } from "@/lib/utils";
 
@@ -9,7 +10,8 @@ import { cn } from "@/lib/utils";
  * Primary navigation: links to all L1 routes + brand mark
  * (component-inventory §1). `collapsed` switches to icon-only mode; on narrow
  * viewports (< md) icon-only is also forced via CSS so no JS media query is
- * needed. The cluster slot stays hidden in L1 (ADR 0003 / D12).
+ * needed. The cluster slot stays hidden in L1 (ADR 0003 / D12). Labels are
+ * translated via useT(); the "mnemos-eyes" brand is language-independent.
  */
 export interface SidebarProps {
   collapsed: boolean;
@@ -17,6 +19,7 @@ export interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
+  const t = useT();
   const hideLabels = collapsed ? undefined : "md:inline";
   return (
     <aside
@@ -39,16 +42,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </span>
       </div>
 
-      <nav aria-label="Primary" className="flex-1 px-2">
+      <nav aria-label={t("nav.primary")} className="flex-1 px-2">
         <ul className="space-y-1">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
+            const label = t(item.key);
             return (
               <li key={item.to}>
                 <NavLink
                   to={item.to}
                   end={"end" in item ? item.end : false}
-                  title={item.label}
+                  title={label}
                   className={({ isActive }) =>
                     cn(
                       "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors duration-instant",
@@ -62,7 +66,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 >
                   <Icon className="size-4 shrink-0" aria-hidden="true" />
                   <span className={cn("hidden whitespace-nowrap", hideLabels)}>
-                    {item.label}
+                    {label}
                   </span>
                 </NavLink>
               </li>
@@ -76,7 +80,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           variant="ghost"
           size="icon"
           onClick={onToggle}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={t(collapsed ? "nav.expand" : "nav.collapse")}
           aria-expanded={!collapsed}
           className="hidden md:inline-flex"
         >
@@ -92,7 +96,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             collapsed ? undefined : "md:inline",
           )}
         >
-          L1 read-only
+          {t("nav.footerReadOnly")}
         </p>
       </div>
     </aside>

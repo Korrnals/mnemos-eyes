@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
-import { routeTitle } from "./navItems";
+import { routeTitleKey } from "./navItems";
+import { useT } from "@/i18n";
 
 /**
  * App shell (component-inventory §1): persistent sidebar + top bar + main
@@ -19,7 +20,9 @@ export function Shell() {
   const [collapsed, setCollapsed] = useState(false);
   const toggle = useCallback(() => setCollapsed((value) => !value), []);
   const location = useLocation();
-  const title = routeTitle(location.pathname);
+  const t = useT();
+  const titleKey = routeTitleKey(location.pathname);
+  const title = titleKey === null ? "mnemos-eyes" : t(titleKey);
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background text-foreground">
@@ -28,7 +31,7 @@ export function Shell() {
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-well focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-float"
       >
-        Skip to content
+        {t("shell.skipToContent")}
       </a>
       <Sidebar collapsed={collapsed} onToggle={toggle} />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -38,11 +41,12 @@ export function Shell() {
             fallback={(error, reset) => (
               <EmptyState
                 variant="error"
-                title="This view fell into the well"
+                title={t("shell.viewFell")}
                 message={error.message}
                 action={
                   <Button variant="outline" onClick={reset}>
-                    <RefreshCw className="size-4" aria-hidden="true" /> Try again
+                    <RefreshCw className="size-4" aria-hidden="true" />{" "}
+                    {t("shell.tryAgain")}
                   </Button>
                 }
               />

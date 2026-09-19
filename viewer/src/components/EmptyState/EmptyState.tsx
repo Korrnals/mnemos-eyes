@@ -1,4 +1,5 @@
 import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
+import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,12 +21,6 @@ export interface EmptyStateProps {
   className?: string;
 }
 
-/** Extra copy for the offline variant (inventory §11: CORS note in dev). */
-const OFFLINE_NOTE =
-  "If you are running against a live mnemos, check that the API is up and " +
-  "that the dev proxy (/api → mnemos) is reachable. Browser requests stay " +
-  "CORS-gated during development.";
-
 export function EmptyState({
   variant = "empty",
   title,
@@ -34,6 +29,7 @@ export function EmptyState({
   action,
   className,
 }: EmptyStateProps) {
+  const t = useT();
   const isErrorLike = variant === "error" || variant === "not-found";
   return (
     <div
@@ -46,7 +42,10 @@ export function EmptyState({
       <IrisLogo
         size={64}
         decorative
-        className={cn("shrink-0", isErrorLike ? "opacity-70 saturate-50" : "opacity-40 grayscale")}
+        className={cn(
+          "shrink-0",
+          isErrorLike ? "opacity-70 saturate-50" : "opacity-40 grayscale",
+        )}
       />
       <p
         className={cn(
@@ -63,7 +62,9 @@ export function EmptyState({
         <p className="max-w-prose text-xs text-foreground-muted">{detail}</p>
       ) : null}
       {variant === "offline" ? (
-        <p className="max-w-prose text-xs text-foreground-muted">{OFFLINE_NOTE}</p>
+        <p className="max-w-prose text-xs text-foreground-muted">
+          {t("empty.offlineNote")}
+        </p>
       ) : null}
       {action ? <div className="mt-2">{action}</div> : null}
     </div>

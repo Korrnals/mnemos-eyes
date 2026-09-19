@@ -1,5 +1,6 @@
 import { Input } from "@/components/ui/input";
 import { TagBadge } from "@/components/TagBadge/TagBadge";
+import { useT } from "@/i18n";
 
 /**
  * Sorted, filterable tag list with counts (component-inventory §6). The shape
@@ -13,6 +14,7 @@ export interface TagInspectorProps {
 }
 
 export function TagInspector({ tags, onTagClick, className }: TagInspectorProps) {
+  const t = useT();
   // Sorted by count desc, then name (deterministic order for tests/SSR).
   const entries = Object.entries(tags).sort(([tagA, countA], [tagB, countB]) => {
     if (countB !== countA) return countB - countA;
@@ -21,7 +23,7 @@ export function TagInspector({ tags, onTagClick, className }: TagInspectorProps)
   const max = entries.reduce((acc, [, count]) => Math.max(acc, count), 1);
 
   if (entries.length === 0) {
-    return <p className={className}>No tags in the well yet.</p>;
+    return <p className={className}>{t("tags.noneInWell")}</p>;
   }
 
   return (
@@ -34,7 +36,7 @@ export function TagInspector({ tags, onTagClick, className }: TagInspectorProps)
             className="h-1 rounded-full bg-iris-dim"
             style={{ width: `${Math.max((count / max) * 100, 4)}%` }}
           />
-          <span className="sr-only">{count} memories</span>
+          <span className="sr-only">{t("tags.memoriesCount", { count })}</span>
         </li>
       ))}
     </ul>
@@ -51,17 +53,18 @@ export function TagFilterInput({
   onChange: (v: string) => void;
   id: string;
 }) {
+  const t = useT();
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={id} className="text-xs text-foreground-secondary">
-        Filter tags
+        {t("tags.filterLabel")}
       </label>
       <Input
         id={id}
         type="search"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="e.g. topic:fts"
+        placeholder={t("tags.filterPlaceholder")}
         className="max-w-xs"
       />
     </div>

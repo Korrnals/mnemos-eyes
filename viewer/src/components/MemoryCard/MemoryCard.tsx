@@ -6,9 +6,10 @@ import {
   memorySnippet,
   memoryTitle,
 } from "@/components/memory/memoryDisplay";
-import { statusBadgeVariant } from "@/components/memory/memoryBadges";
+import { statusBadgeVariant, statusLabelKey } from "@/components/memory/memoryBadges";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { useT } from "@/i18n";
 import type { Memory } from "@/gateway/types";
 
 /**
@@ -22,6 +23,7 @@ export interface MemoryCardProps {
 }
 
 export function MemoryCard({ memory, className }: MemoryCardProps) {
+  const t = useT();
   return (
     <Card className={className}>
       <CardHeader className="gap-1">
@@ -35,10 +37,12 @@ export function MemoryCard({ memory, className }: MemoryCardProps) {
               {memoryTitle(memory)}
             </Link>
           </h2>
-          <Badge variant={statusBadgeVariant(memory.status)}>{memory.status}</Badge>
+          <Badge variant={statusBadgeVariant(memory.status)}>
+            {t(statusLabelKey(memory.status))}
+          </Badge>
         </div>
         <p className="text-xs text-foreground-secondary">
-          {memory.agent || "unknown agent"} · {memory.project} ·{" "}
+          {memory.agent || t("memory.agentUnknown")} · {memory.project} ·{" "}
           <time dateTime={memory.created_at}>{formatTimestamp(memory.created_at)}</time>
         </p>
       </CardHeader>
@@ -54,7 +58,7 @@ export function MemoryCard({ memory, className }: MemoryCardProps) {
           {typeof memory.confidence === "number" ? (
             <span
               className="ml-auto text-xs text-confidence"
-              title={`confidence ${memory.confidence}`}
+              title={t("memory.confidenceTitle", { value: memory.confidence })}
             >
               {formatConfidence(memory.confidence)}
             </span>

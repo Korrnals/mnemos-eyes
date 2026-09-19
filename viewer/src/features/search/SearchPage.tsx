@@ -6,6 +6,7 @@ import { SearchResultList } from "@/components/SearchResultList/SearchResultList
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { Button } from "@/components/ui/button";
 import { useSearch } from "@/hooks/useSearch";
+import { useT } from "@/i18n";
 
 /**
  * `/` — the well: dashboard hero + unified search (component-inventory §3,
@@ -22,6 +23,7 @@ const DEBOUNCE_MS = 300; // perf budget: ≥300 ms before a keystroke fires the 
 const SEARCH_LIMIT = 20;
 
 export function SearchPage() {
+  const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlQuery = searchParams.get("q") ?? "";
   const type = parseType(searchParams.get("type"));
@@ -89,11 +91,11 @@ export function SearchPage() {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-3xl flex-col items-center justify-center gap-8">
         {/* The hero is imagery + a form; the h1 keeps one heading per page. */}
-        <h1 className="sr-only">Search</h1>
+        <h1 className="sr-only">{t("search.title")}</h1>
         {/* §8.1 hero: single breathing iris, glow on (motion budget). */}
         <div className="flex flex-col items-center gap-6 text-center">
           <IrisLogo size={160} glow breathing />
-          <p className="text-xl text-foreground-secondary">a gaze into oneself</p>
+          <p className="text-xl text-foreground-secondary">{t("search.tagline")}</p>
         </div>
         <div className="w-full max-w-xl">{searchBar}</div>
       </div>
@@ -102,7 +104,7 @@ export function SearchPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <h1 className="sr-only">Search</h1>
+      <h1 className="sr-only">{t("search.title")}</h1>
       <div>{searchBar}</div>
       <SearchResults query={urlQuery} type={type} />
     </div>
@@ -111,6 +113,7 @@ export function SearchPage() {
 
 /** Mounted only for non-empty queries so the search query never fires idle. */
 function SearchResults({ query, type }: { query: string; type: SearchTypeSetting }) {
+  const t = useT();
   const search = useSearch({ query, limit: SEARCH_LIMIT });
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -121,11 +124,11 @@ function SearchResults({ query, type }: { query: string; type: SearchTypeSetting
     return (
       <EmptyState
         variant="error"
-        title="Search failed"
+        title={t("search.failed")}
         message={search.error.message}
         action={
           <Button variant="outline" onClick={() => void search.refetch()}>
-            Retry
+            {t("common.retry")}
           </Button>
         }
       />
@@ -139,27 +142,22 @@ function SearchResults({ query, type }: { query: string; type: SearchTypeSetting
     return (
       <EmptyState
         variant="empty"
-        title="Nothing surfaced"
+        title={t("search.nothing")}
         message={
           type === "auto"
-            ? `No memories matched “${query}”.`
-            : `No ${type} hits for “${query}”. The pipeline may rank this query differently.`
+            ? t("search.noMatches", { query })
+            : t("search.noTypedMatches", { type, query })
         }
-        detail={
-          type === "auto"
-            ? "Try fewer or different words — the well is deep but literal."
-            : undefined
-        }
+        detail={type === "auto" ? t("search.noMatchesHint") : undefined}
       />
     );
   }
 
   return (
-    <section aria-label="Search results" aria-busy={search.isFetching}>
+    <section aria-label={t("search.resultsLabel")} aria-busy={search.isFetching}>
       <p className="text-xs text-foreground-muted" role="status">
-        {results.length}
-        {type === "auto" ? "" : ` ${type}`} hit{results.length === 1 ? "" : "s"} for “{query}”
-        {type !== "auto" ? " (client-side filter of server-ranked hits)" : ""}
+        {t("search.hitsCount", { count: results.length, query })}
+        {type === "auto" ? "" : t("search.hitsTypedSuffix")}
       </p>
       <SearchResultList results={results} queryTerms={terms} className="mt-3" />
     </section>

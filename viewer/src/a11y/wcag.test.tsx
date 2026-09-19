@@ -13,6 +13,7 @@ import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/features/auth/AuthProvider";
+import { I18nProvider } from "@/i18n";
 
 /**
  * T7 a11y regression guards (WCAG 2.2 AA fixes). renderToString keeps these
@@ -29,9 +30,13 @@ function renderTree(ui: React.ReactElement, path = "/"): string {
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <AuthProvider adapterMode="mock" endpoint="/api">
-            {/* No <Routes> wrapper: Shell's <Outlet> may stay empty and App owns
-             * its own routes — only router context is provided here. */}
-            <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
+            {/* English copy via initialLang — the a11y assertions pin English
+             * labels; semantics under test are language-independent. */}
+            <I18nProvider initialLang="en">
+              {/* No <Routes> wrapper: Shell's <Outlet> may stay empty and App owns
+               * its own routes — only router context is provided here. */}
+              <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
+            </I18nProvider>
           </AuthProvider>
         </ThemeProvider>
       </QueryClientProvider>

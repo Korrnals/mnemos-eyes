@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { formatDuration, formatTimestamp } from "@/components/memory/memoryDisplay";
+import { useT } from "@/i18n";
 import type { Trace } from "@/gateway/types";
 
 /**
@@ -29,7 +30,9 @@ function statusVariant(status: string): "success" | "iris" | "error" | "default"
 }
 
 export function TraceRow({ trace, className }: TraceRowProps) {
-  const status = typeof trace.status === "string" ? trace.status : "unknown";
+  const t = useT();
+  const status =
+    typeof trace.status === "string" ? trace.status : t("traces.unknownStatus");
   const started = typeof trace.started_at === "string" ? trace.started_at : undefined;
   const duration = typeof trace.duration_ms === "number" ? trace.duration_ms : null;
 
@@ -54,7 +57,7 @@ export function TraceRow({ trace, className }: TraceRowProps) {
       <td className="px-4 py-3">
         <details>
           <summary className="inline-flex min-h-6 cursor-pointer items-center text-xs text-iris-bright underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright">
-            Raw JSON
+            {t("traces.rawJson")}
           </summary>
           <pre
             className="mt-2 max-w-md overflow-x-auto rounded-md border border-border-subtle bg-scroll-bg p-3 text-xs text-foreground"

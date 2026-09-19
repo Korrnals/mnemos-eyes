@@ -3,12 +3,16 @@ import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { MemoryCard } from "./MemoryCard";
 import { MOCK_MEMORIES } from "@/gateway/fixtures";
+import { I18nProvider } from "@/i18n";
 
-/** renderToString keeps these tests DOM-free (node vitest env, no new deps). */
+/** renderToString keeps these tests DOM-free (node vitest env, no new deps).
+ * English copy via initialLang — these tests pin copy, not the ru default. */
 function render(memory: (typeof MOCK_MEMORIES)[number]): string {
   return renderToString(
     <MemoryRouter>
-      <MemoryCard memory={memory} />
+      <I18nProvider initialLang="en">
+        <MemoryCard memory={memory} />
+      </I18nProvider>
     </MemoryRouter>,
   );
 }

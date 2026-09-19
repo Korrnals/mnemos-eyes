@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { TagBadge } from "@/components/TagBadge/TagBadge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { useT } from "@/i18n";
 import type { SearchResult } from "@/gateway/types";
 import { highlight } from "./highlight";
 
@@ -17,13 +18,21 @@ export interface SearchResultCardProps {
   className?: string;
 }
 
-const TYPE_VARIANT: Record<SearchResult["search_type"], "default" | "iris" | "confidence"> = {
+const TYPE_VARIANT: Record<
+  SearchResult["search_type"],
+  "default" | "iris" | "confidence"
+> = {
   fts: "default",
   semantic: "confidence",
   hybrid: "iris",
 };
 
-export function SearchResultCard({ result, queryTerms = [], className }: SearchResultCardProps) {
+export function SearchResultCard({
+  result,
+  queryTerms = [],
+  className,
+}: SearchResultCardProps) {
+  const t = useT();
   return (
     <Card className={className}>
       <CardContent className="space-y-2 p-5">
@@ -38,10 +47,12 @@ export function SearchResultCard({ result, queryTerms = [], className }: SearchR
             </Link>
           </h2>
           <span className="flex shrink-0 items-center gap-1.5">
-            <Badge variant={TYPE_VARIANT[result.search_type]}>{result.search_type}</Badge>
+            <Badge variant={TYPE_VARIANT[result.search_type]}>
+              {result.search_type}
+            </Badge>
             <span
               className="rounded-sm bg-elevated px-2 py-0.5 text-xs font-medium text-iris-bright"
-              title={`relevance ${result.score}`}
+              title={t("search.relevanceTitle", { value: result.score })}
             >
               {result.score.toFixed(2)}
             </span>

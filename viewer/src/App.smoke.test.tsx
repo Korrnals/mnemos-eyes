@@ -7,6 +7,7 @@ import App from "./App";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { ThemeProvider } from "@/components/theme-provider";
+import { I18nProvider } from "@/i18n";
 
 /**
  * T5 mock-mode smoke: the full app mounts against the MockAdapter
@@ -26,9 +27,12 @@ function renderAppAt(path: string): string {
     <GatewayContext.Provider value={gateway}>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-          <MemoryRouter initialEntries={[path]}>
-            <App />
-          </MemoryRouter>
+          {/* English copy via initialLang — the smoke test pins English. */}
+          <I18nProvider initialLang="en">
+            <MemoryRouter initialEntries={[path]}>
+              <App />
+            </MemoryRouter>
+          </I18nProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </GatewayContext.Provider>,
@@ -55,7 +59,7 @@ describe("App (smoke)", () => {
 
   it("renders top-bar status indicator and theme toggle", () => {
     const html = renderAppAt("/");
-    expect(html).toContain("mnemos status:");
+    expect(html).toContain("status: ");
     expect(html).toContain("theme");
   });
 

@@ -1,3 +1,4 @@
+import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -9,7 +10,7 @@ export type HealthState = "ok" | "degraded" | "error" | "unknown";
 
 export interface StatusIndicatorProps {
   status: HealthState;
-  /** Visible label; defaults to the status word. */
+  /** Visible label; defaults to the localized status word. */
   label?: string;
   className?: string;
 }
@@ -22,13 +23,14 @@ const DOT_CLASS: Record<HealthState, string> = {
 };
 
 export function StatusIndicator({ status, label, className }: StatusIndicatorProps) {
+  const t = useT();
   return (
     <span role="status" className={cn("inline-flex items-center gap-2", className)}>
       <span
         aria-hidden="true"
         className={cn("inline-block size-2 rounded-full", DOT_CLASS[status])}
       />
-      <span className="sr-only">mnemos status: </span>
+      <span className="sr-only">{t("status.srBackendStatus")}</span>
       {label ?? status}
     </span>
   );

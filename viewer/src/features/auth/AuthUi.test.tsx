@@ -12,6 +12,7 @@ import type { AuthEvent } from "./authState";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { ThemeProvider } from "@/components/theme-provider";
+import { I18nProvider } from "@/i18n";
 
 /**
  * SSR render tests for the T6 auth surfaces. The project has no DOM
@@ -52,7 +53,10 @@ function renderWithProviders(
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <MemoryRouter initialEntries={["/"]}>
-            <AuthContext.Provider value={auth}>{ui}</AuthContext.Provider>
+            {/* English copy via initialLang — these tests pin copy. */}
+            <I18nProvider initialLang="en">
+              <AuthContext.Provider value={auth}>{ui}</AuthContext.Provider>
+            </I18nProvider>
           </MemoryRouter>
         </ThemeProvider>
       </QueryClientProvider>
