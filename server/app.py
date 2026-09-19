@@ -37,10 +37,16 @@ from .security import (
     validate_token_ref,
 )
 from .store import (
+    ASSIGNMENT_STATES,
+    AssignmentConflictError,
+    AssignmentError,
+    AssignmentNotFoundError,
+    AssignmentTokenError,
     REPORT_KINDS,
     Store,
     TASK_STATUSES,
     TaskLockedError,
+    TaskNotAssignableError,
     VALID_STATUSES,
 )
 from .task_inbox import _hits_of as _listing_hits_of
@@ -62,6 +68,22 @@ APP_DIR = Path(os.environ.get("VESMARO_APP_DIR", "/app/app"))
 # not configured every mutation answers 503. The Helm chart generates the
 # token; compose.yaml ships a dev default for local runs.
 BOARD_WRITE_TOKEN = os.environ.get("VESMARO_BOARD_TOKEN", "")
+
+# A1 (ADR 0009): two token classes from day one. UI token — owner-UI
+# assignment actions (create/cancel). Board (machine) token — the poller /
+# agent loop (claim/start/heartbeat/complete/fail) plus the existing
+# mutation surface (reports, moves, task CRUD). Legacy single-token mode:
+# when VESMARO_UI_TOKEN is unset, VESMARO_BOARD_TOKEN serves BOTH classes
+# and a warning is logged at startup; in split mode the board token is
+# REFUSED on UI routes — a machine token must not mint assignments (closes
+# the create-assignment injection vector). Env name is pinned by the Helm
+# chart (parallel task ARCH-6) — do not rename.
+UI_WRITE_TOKEN = os.environ.get("VESMARO_UI_TOKEN", "")
+if not UI_WRITE_TOKEN:
+    logging.getLogger("vesmaro.auth").warning(
+        "VESMARO_UI_TOKEN is not set — single-token legacy mode: "
+        "VESMARO_BOARD_TOKEN serves both UI and machine token classes")
+    UI_WRITE_TOKEN = BOARD_WRITE_TOKEN
 
 write_config_template(DATA_DIR / "memories.yaml")
 
@@ -194,7 +216,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.5.0", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.6.0", lifespan=lifespan)
 
 # --------------------------------------------------- security headers (Ф0a)
 # АРХКОМ-3 decision 13 / security verdict §5.2: on EVERY response — CSP,
@@ -553,6 +575,101 @@ class ReportsOut(_ApiModel):
     items: list[ReportOut]
 
 
+# Agent-bridge assignment contract (ADR 0009 phase 1). The public
+# ``Assignment`` shape follows ui-contract §11: claim_token and
+# spec_snapshot are NEVER part of the SSE/list payload — the token rides
+# only in the claim response, the snapshot only in the claim response (the
+# poller's immutable execution view, A2). spec_hash is public.
+class AssignmentOut(_ApiModel):
+    id: int
+    task_id: str
+    specialist: str = ""
+    harness: str = "zcode"
+    state: str
+    created_by: str = "owner"
+    claimed_by: str | None = None
+    note: str = ""
+    spec_hash: str = ""
+    executor_id: str = ""              # ARCH-9 designation, stored verbatim
+    claimed_by_executor: str = ""      # claim-time executor attribution
+    created_at: str
+    claimed_at: str | None = None
+    started_at: str | None = None
+    heartbeat_at: str | None = None
+    finished_at: str | None = None
+    # spec_snapshot is deliberately NOT a declared field: it must be absent
+    # from every serialized assignment except the claim response, where it
+    # rides as an extra key (extra="allow") for the machine consumer.
+
+
+class AssignmentsOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[AssignmentOut]
+
+
+class AssignmentCreate(BaseModel):
+    task_id: str = Field(min_length=1, max_length=100)
+    specialist: str = Field(min_length=1, max_length=120)
+    harness: str = "zcode"
+    executor_id: str = Field(default="", max_length=120)
+
+
+class AssignmentCreatedOut(_ApiModel):
+    ok: bool
+    assignment: AssignmentOut
+
+
+class AssignmentClaimBody(BaseModel):
+    claimed_by: str = Field(min_length=1, max_length=120)
+    executor_id: str = Field(default="", max_length=120)
+
+
+class AssignmentClaimedOut(_ApiModel):
+    ok: bool
+    assignment: AssignmentOut
+    claim_token: str
+    task: TaskOut | None = None
+
+
+class AssignmentTokenBody(BaseModel):
+    claim_token: str = Field(min_length=1, max_length=64)
+
+
+class AssignmentHeartbeatBody(BaseModel):
+    claim_token: str = Field(min_length=1, max_length=64)
+    note: str = Field(default="", max_length=2000)
+
+
+class AssignmentCompleteBody(BaseModel):
+    claim_token: str = Field(min_length=1, max_length=64)
+    final_report: str = Field(default="", max_length=16384)
+    note: str = Field(default="", max_length=2000)
+
+
+class AssignmentFailBody(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+    claim_token: str = Field(default="", max_length=64)
+    claimed_by: str = Field(default="", max_length=120)
+
+
+class AssignmentCancelBody(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+class AssignmentStateOut(_ApiModel):
+    ok: bool
+    assignment: AssignmentOut
+
+
+class AssignmentFinishedOut(_ApiModel):
+    ok: bool
+    assignment: AssignmentOut
+    task: TaskOut | None = None
+    moved: list[str] = []              # [from, to] when the task column moved
+    report: ReportOut | None = None    # final report written by complete
+
+
 # BE-7: task history timeline for the task modal — board audit events plus
 # linked memory checkpoints. Optional context keys (detail/source/ts) are
 # absent when empty (route sets response_model_exclude_none).
@@ -817,6 +934,21 @@ def _event_detail(e: dict[str, Any]) -> str:
         return f"{p.get('kind', 'отчёт')}, агент: {p.get('agent') or '—'}"
     if kind == "task.deleted":
         return ""
+    if kind == "assignment.created":
+        return (f"назначение #{p.get('assignment_id')} — "
+                f"{p.get('harness')}/{p.get('specialist')}")
+    if kind == "assignment.claimed":
+        return f"№{p.get('assignment_id')}: забрал {p.get('claimed_by') or '—'}"
+    if kind == "assignment.started":
+        return f"№{p.get('assignment_id')}: запуск"
+    if kind == "assignment.done":
+        return f"№{p.get('assignment_id')}: выполнено"
+    if kind in ("assignment.failed", "assignment.cancelled",
+                "assignment.expired"):
+        ru = {"assignment.failed": "провалено",
+              "assignment.cancelled": "отменено",
+              "assignment.expired": "истекло"}
+        return f"№{p.get('assignment_id')}: {ru[kind]}"
     text = str(p)[:200]
     return "" if text == "{}" else text
 
@@ -1667,6 +1799,258 @@ async def list_task_reports(task_id: str) -> ReportsOut:
             "count": len(reports), "items": reports}
 
 
+# -------------------------------------------------- assignments (ADR 0009 Ф1)
+# Variant A′ assignment queue: the owner nominates (UI token), the poller
+# decides (machine token). Rate limits follow the house pattern — UI class
+# 10/60 s like task-drafts, machine class 30/60 s like reports.
+_ASSIGNMENT_UI_RATE_LIMIT = 10        # requests per client ...
+_ASSIGNMENT_UI_RATE_WINDOW = 60.0     # ... per sliding window (seconds)
+_assignment_ui_limiter = RateLimiter(
+    limit=_ASSIGNMENT_UI_RATE_LIMIT, window=_ASSIGNMENT_UI_RATE_WINDOW)
+_ASSIGNMENT_RATE_LIMIT = 30           # requests per client ...
+_ASSIGNMENT_RATE_WINDOW = 60.0        # ... per sliding window (seconds)
+_assignment_limiter = RateLimiter(
+    limit=_ASSIGNMENT_RATE_LIMIT, window=_ASSIGNMENT_RATE_WINDOW)
+
+
+def _assignment_public(a: dict[str, Any], include_snapshot: bool = False) -> dict[str, Any]:
+    """SSE/list shape of an assignment: claim_token NEVER leaves the claim
+    response; spec_snapshot only there (machine consumer, A2). spec_hash,
+    executor_id and claimed_by_executor are public."""
+    out = {k: v for k, v in a.items()
+           if k not in ("claim_token", "spec_snapshot")}
+    if include_snapshot:
+        out["spec_snapshot"] = a.get("spec_snapshot", "")
+    return out
+
+
+def _assignment_http(exc: AssignmentError) -> HTTPException:
+    """Map store assignment errors onto the HTTP contract (ADR 0009):
+    404 unknown id / 403 token / 422 not assignable / 409 state+invariant."""
+    if isinstance(exc, AssignmentNotFoundError):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, AssignmentTokenError):
+        return HTTPException(403, str(exc))
+    if isinstance(exc, TaskNotAssignableError):
+        return HTTPException(422, str(exc))
+    if isinstance(exc, AssignmentConflictError):
+        return HTTPException(409, str(exc))
+    return HTTPException(409, str(exc))  # defensive: unknown subclass → 409
+
+
+def _assignment_rate_limit(request: Request, ui: bool) -> None:
+    limiter = _assignment_ui_limiter if ui else _assignment_limiter
+    limit = _ASSIGNMENT_UI_RATE_LIMIT if ui else _ASSIGNMENT_RATE_LIMIT
+    window = _ASSIGNMENT_UI_RATE_WINDOW if ui else _ASSIGNMENT_RATE_WINDOW
+    client_ip = request.client.host if request.client else "unknown"
+    if not limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"assignments rate limit exceeded "
+            f"({limit} per {window:.0f}s per client)",
+        )
+
+
+@app.get("/api/assignments")
+async def list_assignments(state: str = "", task_id: str = "") -> AssignmentsOut:
+    """Assignment queue projection (ADR 0009). OPEN read (no bearer), same
+    boundary as GET /api/board: the cluster ingress is the auth boundary.
+    ``state`` must be a dictionary value (422); ``task_id`` is an exact
+    filter. Items never carry claim_token or spec_snapshot — the SSE
+    dictionary §11 keeps them out for the same reason."""
+    if state and state not in ASSIGNMENT_STATES:
+        raise HTTPException(422, f"invalid state: {state}")
+    items = store.assignments(state=state or None, task_id=task_id or None)
+    public = [_assignment_public(i) for i in items]
+    return {"ok": True, "count": len(public), "items": public}
+
+
+@app.post("/api/assignments", status_code=201)
+async def create_assignment(body: AssignmentCreate,
+                            request: Request) -> AssignmentCreatedOut:
+    """Queue an execution attempt on a task (ADR 0009 §3). UI-token class
+    (A1) — the owner nominates, the poller decides (A3). 404 unknown task;
+    422 archived/terminal task; 409 while another active assignment holds
+    the task (≤1 invariant)."""
+    _guard_ui_write(request)
+    _assignment_rate_limit(request, ui=True)
+    if body.harness not in Store.KNOWN_HARNESSES:
+        # assignments feed the poller's (harness, specialist) → command
+        # allowlist: an unknown harness can never launch — refuse early
+        raise HTTPException(
+            422, f"unknown harness: {body.harness}; "
+                 f"known: {sorted(Store.KNOWN_HARNESSES)}")
+    try:
+        a = store.create_assignment(
+            body.task_id, body.specialist, body.harness,
+            executor_id=body.executor_id)
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    _notify_and_broadcast(
+        "work", f"{a['task_id']}: назначение ({body.specialist})",
+        f"специалист {body.specialist}, harness {body.harness}",
+        a["task_id"],
+        {"kind": "assignment.created",
+         "assignment": _assignment_public(a), "task_id": a["task_id"]},
+    )
+    return {"ok": True, "assignment": _assignment_public(a)}
+
+
+@app.post("/api/assignments/{assignment_id}/claim")
+async def claim_assignment(assignment_id: int, body: AssignmentClaimBody,
+                           request: Request) -> AssignmentClaimedOut:
+    """Atomic claim (A4): machine-token class. CAS on state='queued'; the
+    task column moves open → in-progress in the same transaction. The
+    response carries the claim_token (correctness boundary: a stale poller
+    cannot finish a re-claimed assignment) and the spec_snapshot (A2: the
+    poller executes the snapshot, never the live spec). 409 when another
+    poller got there first."""
+    _guard_write(request)
+    _assignment_rate_limit(request, ui=False)
+    try:
+        a, token, task, moved = store.claim_assignment(
+            assignment_id, body.claimed_by, executor_id=body.executor_id)
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    if moved and task is not None:
+        _broadcast({"kind": "task.moved", "task": task})
+    _broadcast({"kind": "assignment.claimed",
+                "assignment": _assignment_public(a),
+                "task_id": a["task_id"]})
+    return {"ok": True, "assignment": _assignment_public(a, include_snapshot=True),
+            "claim_token": token, "task": task}
+
+
+@app.post("/api/assignments/{assignment_id}/start")
+async def start_assignment(assignment_id: int, body: AssignmentTokenBody,
+                           request: Request) -> AssignmentStateOut:
+    """claimed → running (machine class + claim_token)."""
+    _guard_write(request)
+    _assignment_rate_limit(request, ui=False)
+    try:
+        a = store.start_assignment(assignment_id, body.claim_token)
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    _broadcast({"kind": "assignment.started",
+                "assignment": _assignment_public(a),
+                "task_id": a["task_id"]})
+    return {"ok": True, "assignment": _assignment_public(a)}
+
+
+@app.post("/api/assignments/{assignment_id}/heartbeat")
+async def heartbeat_assignment(assignment_id: int,
+                               body: AssignmentHeartbeatBody,
+                               request: Request) -> AssignmentStateOut:
+    """Executor liveness tick (machine class + claim_token). 409 unless
+    running — on an expired assignment that 409 doubles as the kill signal
+    to the poller (ADR 0009 §10). Deliberately NO SSE: heartbeats are noise."""
+    _guard_write(request)
+    _assignment_rate_limit(request, ui=False)
+    try:
+        a = store.heartbeat_assignment(assignment_id, body.claim_token,
+                                       note=body.note)
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    return {"ok": True, "assignment": _assignment_public(a)}
+
+
+@app.post("/api/assignments/{assignment_id}/complete")
+async def complete_assignment(assignment_id: int,
+                              body: AssignmentCompleteBody,
+                              request: Request) -> AssignmentFinishedOut:
+    """running → done (machine class + claim_token). The final report rides
+    inline: it is written through the existing reports store (kind='final',
+    agent = the declared claim identity) right after the terminal
+    transition — a 409/403 leaves no half-written report behind. Task maps
+    in-progress → resolved (acceptance resolved → done stays with the
+    owner)."""
+    _guard_write(request)
+    _assignment_rate_limit(request, ui=False)
+    final = body.final_report.strip()
+    report: dict[str, Any] | None = None
+    try:
+        a, task, moved_from, moved_to = store.finish_assignment(
+            assignment_id, "complete", note=body.note, token=body.claim_token)
+        if final:
+            try:
+                added = store.add_report(
+                    a["task_id"], final, "final",
+                    agent=(a.get("claimed_by") or ""))
+            except Exception:
+                # The terminal transition is already committed; a report
+                # failure must not turn a done assignment into a client 500
+                # (a retry would 409 and the report would be lost).
+                added = None
+            if added is not None:  # None only when the task vanished mid-flight
+                report, _superseded = added
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    if moved_from:
+        _broadcast({"kind": "task.moved", "task": task})
+    _notify_and_broadcast(
+        "work", f"{a['task_id']}: назначение выполнено",
+        (final or "финальный отчёт отсутствует")[:120], a["task_id"],
+        {"kind": "assignment.done",
+         "assignment": _assignment_public(a), "task_id": a["task_id"]},
+    )
+    return {"ok": True, "assignment": _assignment_public(a), "task": task,
+            "moved": [moved_from, moved_to] if moved_from else [],
+            "report": report}
+
+
+@app.post("/api/assignments/{assignment_id}/fail")
+async def fail_assignment(assignment_id: int, body: AssignmentFailBody,
+                          request: Request) -> AssignmentFinishedOut:
+    """Fail an execution attempt (machine class). Auth: claim_token OR a
+    claimed_by identity match — the poller's recovery sweep fails its own
+    claimed|running records after a restart, when tokens are gone. Task
+    maps in-progress → blocked."""
+    _guard_write(request)
+    _assignment_rate_limit(request, ui=False)
+    try:
+        a, task, moved_from, moved_to = store.finish_assignment(
+            assignment_id, "fail", note=body.reason,
+            token=body.claim_token or None,
+            claimed_by=body.claimed_by.strip() or None)
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    if moved_from:
+        _broadcast({"kind": "task.moved", "task": task})
+    _notify_and_broadcast(
+        "work", f"{a['task_id']}: назначение провалено",
+        body.reason[:120], a["task_id"],
+        {"kind": "assignment.failed",
+         "assignment": _assignment_public(a), "task_id": a["task_id"]},
+    )
+    return {"ok": True, "assignment": _assignment_public(a), "task": task,
+            "moved": [moved_from, moved_to] if moved_from else []}
+
+
+@app.post("/api/assignments/{assignment_id}/cancel")
+async def cancel_assignment(assignment_id: int, body: AssignmentCancelBody,
+                            request: Request) -> AssignmentFinishedOut:
+    """Cancel an assignment (UI-token class — an owner action). Legal from
+    queued/claimed/running; the task returns to open when it had moved to
+    in-progress. No claim token: the UI token is the auth."""
+    _guard_ui_write(request)
+    _assignment_rate_limit(request, ui=True)
+    try:
+        a, task, moved_from, moved_to = store.finish_assignment(
+            assignment_id, "cancel", note=body.reason, claimed_by="owner")
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    if moved_from:
+        _broadcast({"kind": "task.moved", "task": task})
+    _notify_and_broadcast(
+        "work", f"{a['task_id']}: назначение отменено",
+        body.reason[:120], a["task_id"],
+        {"kind": "assignment.cancelled",
+         "assignment": _assignment_public(a), "task_id": a["task_id"]},
+    )
+    return {"ok": True, "assignment": _assignment_public(a), "task": task,
+            "moved": [moved_from, moved_to] if moved_from else []}
+
+
 # --------------------------------------------------------- task inbox (AGG-1)
 # Mirror of task:queue memories from every active memory server, refreshed
 # by the background scanner (task_inbox.background_refresher) or on demand
@@ -2031,6 +2415,27 @@ def _guard_write(request: Request) -> None:
     expected = f"Bearer {BOARD_WRITE_TOKEN}"
     if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(401, "board write token required")
+
+
+def _guard_ui_write(request: Request) -> None:
+    """UI-class mutation guard (ADR 0009 A1): assignment create/cancel are
+    owner-UI actions and take VESMARO_UI_TOKEN. Fail-closed exactly like
+    _guard_write: when the effective UI token is empty (neither class
+    configured) every UI mutation answers 503. Legacy single-token mode
+    (VESMARO_UI_TOKEN unset → falls back to the board token at import) keeps
+    existing deployments working; in split mode the board token is REFUSED
+    here — a machine token must not mint assignments. Constant-time compare."""
+    if not UI_WRITE_TOKEN:
+        raise HTTPException(
+            503,
+            "ui mutation auth is not configured: set VESMARO_UI_TOKEN "
+            "(or VESMARO_BOARD_TOKEN for single-token legacy mode) to "
+            "enable assignment UI actions (fail-closed)",
+        )
+    auth = request.headers.get("Authorization", "")
+    expected = f"Bearer {UI_WRITE_TOKEN}"
+    if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(401, "ui write token required")
 
 
 # ------------------------------------------------------------------------ SSE

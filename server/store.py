@@ -13,6 +13,8 @@ and a memory speak the same lifecycle language.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import secrets
 import sqlite3
@@ -57,6 +59,47 @@ class TaskLockedError(Exception):
     """BE-12: a content edit hit the 24h edit window (HTTP 423 upstream).
     Retry the same PATCH with force=True to override; the override is
     recorded in the task.updated audit event (payload forced=true)."""
+
+
+# --------------------------------------------------------- assignments
+# ADR 0009 (variant A′): an assignment is ONE EXECUTION ATTEMPT on a task
+# (task : assignment = 1 : N, CI-run semantics). ``active`` = non-terminal
+# state; the ≤1-active-per-task invariant is enforced in create_assignment
+# and surfaces as HTTP 409 upstream.
+ASSIGNMENT_STATES = frozenset({
+    "queued", "claimed", "running", "done", "failed", "cancelled", "expired",
+})
+ACTIVE_ASSIGNMENT_STATES = ("queued", "claimed", "running")
+# Task workflow statuses an assignment can NOT be created for. ``blocked``
+# is deliberately NOT terminal — a blocked task can be re-taken into work.
+TERMINAL_TASK_STATUSES = frozenset({"resolved", "done", "withdrawn"})
+# ADR 0009 §9: snapshot cap 16K with plain truncation. spec_hash covers the
+# FULL spec (not the truncated copy), so the audit trail identifies the
+# exact content version the owner nominated.
+SPEC_SNAPSHOT_CAP = 16384
+
+
+class AssignmentError(Exception):
+    """Base class for assignment lifecycle violations (ADR 0009)."""
+
+
+class AssignmentNotFoundError(AssignmentError):
+    """Unknown assignment id (HTTP 404 upstream)."""
+
+
+class AssignmentConflictError(AssignmentError):
+    """State/invariant violation: CAS lost, wrong source state, or the task
+    already has an active assignment (HTTP 409 upstream)."""
+
+
+class AssignmentTokenError(AssignmentError):
+    """claim_token / claimed_by mismatch (HTTP 403 upstream). The token is a
+    correctness boundary — a stale poller must not finish a re-claimed
+    assignment — not a security boundary (ADR 0009 §3)."""
+
+
+class TaskNotAssignableError(AssignmentError):
+    """Target task is archived or workflow-terminal (HTTP 422 upstream)."""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS board_meta (
@@ -158,6 +201,30 @@ CREATE TABLE IF NOT EXISTS task_inbox (
     last_seen         TEXT NOT NULL,
     adopted_task_id   TEXT
 );
+CREATE TABLE IF NOT EXISTS task_assignments (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id             TEXT NOT NULL,
+    specialist          TEXT NOT NULL DEFAULT '',
+    harness             TEXT NOT NULL DEFAULT 'zcode',
+    state               TEXT NOT NULL DEFAULT 'queued'
+                        CHECK (state IN ('queued','claimed','running','done',
+                                         'failed','cancelled','expired')),
+    created_by          TEXT NOT NULL DEFAULT 'owner',
+    claimed_by          TEXT,
+    claim_token         TEXT,
+    note                TEXT NOT NULL DEFAULT '',
+    spec_snapshot       TEXT NOT NULL DEFAULT '',
+    spec_hash           TEXT NOT NULL DEFAULT '',
+    executor_id         TEXT NOT NULL DEFAULT '',
+    claimed_by_executor TEXT NOT NULL DEFAULT '',
+    created_at          TEXT NOT NULL,
+    claimed_at          TEXT,
+    started_at          TEXT,
+    heartbeat_at        TEXT,
+    finished_at         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_assignments_state ON task_assignments (state, id);
+CREATE INDEX IF NOT EXISTS idx_task_assignments_task ON task_assignments (task_id, id);
 """
 
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
@@ -509,9 +576,10 @@ class Store:
             cur = db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
             deleted = cur.rowcount > 0
             if deleted:
-                # reports are payload data attached to the task (unlike the
-                # events audit log) — they do not outlive it
+                # reports and assignments are payload data attached to the
+                # task (unlike the events audit log) — they do not outlive it
                 db.execute("DELETE FROM task_reports WHERE task_id=?", (task_id,))
+                db.execute("DELETE FROM task_assignments WHERE task_id=?", (task_id,))
                 self._log(db, "task.deleted", task_id, {})
         return deleted
 
@@ -895,6 +963,330 @@ class Store:
         for r in rows:
             r["superseded"] = bool(r["superseded"])
         return rows
+
+    # ------------------------------------------------------- assignments
+    # ADR 0009 phase 1: assignment queue (variant A′). One connection per
+    # call under the write lock; every multi-step transition (claim+move,
+    # finish+move) is a single transaction, so correctness is structural
+    # (SQLite single-writer) rather than conventional.
+
+    def _assignment(self, db: sqlite3.Connection,
+                    assignment_id: int) -> dict[str, Any] | None:
+        row = db.execute(
+            "SELECT * FROM task_assignments WHERE id=?", (assignment_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _claim_token_matches(stored: str | None, token: str | None) -> bool:
+        """Constant-time claim-token comparison (correctness boundary)."""
+        if not stored or not token:
+            return False
+        return hmac.compare_digest(stored, token)
+
+    @staticmethod
+    def _task_in_txn(db: sqlite3.Connection, task_id: str) -> dict[str, Any] | None:
+        row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if row is None:
+            return None
+        t = dict(row)
+        for k in ("agents", "specialists", "memory_ids", "mnemos_tags"):
+            t[k] = _loads(t[k])
+        return t
+
+    def create_assignment(self, task_id: str, specialist: str,
+                          harness: str = "zcode", created_by: str = "owner",
+                          executor_id: str = "") -> dict[str, Any]:
+        """Queue an execution attempt on a task (ADR 0009 §3).
+
+        Copies the task spec into an immutable ``spec_snapshot`` (capped at
+        SPEC_SNAPSHOT_CAP, plain truncation) plus ``spec_hash`` = sha256 hex
+        over the FULL spec. The poller executes the snapshot, never the live
+        spec (A2: closes the edit-after-review-before-claim TOCTOU window).
+        ``executor_id`` is a plain stored designation (ARCH-9 contract); no
+        registry exists in phase 1, so nothing validates it.
+
+        Raises:
+            AssignmentNotFoundError — task id unknown (404 upstream);
+            TaskNotAssignableError — task archived or workflow-terminal (422);
+            AssignmentConflictError — the task already has an active
+                                      assignment: the ≤1 invariant (409).
+        """
+        now = _now()
+        with self._lock, self._conn() as db:
+            task = db.execute(
+                "SELECT spec, archived, status FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if task is None:
+                raise AssignmentNotFoundError(f"task {task_id} not found")
+            if task["archived"]:
+                raise TaskNotAssignableError(
+                    f"task {task_id} is archived — assignment refused")
+            if task["status"] in TERMINAL_TASK_STATUSES:
+                raise TaskNotAssignableError(
+                    f"task {task_id} is terminal ({task['status']}) — "
+                    "assignment refused")
+            active = db.execute(
+                "SELECT COUNT(*) AS n FROM task_assignments "
+                "WHERE task_id=? AND state IN ('queued','claimed','running')",
+                (task_id,),
+            ).fetchone()["n"]
+            if active:
+                raise AssignmentConflictError(
+                    f"task {task_id} already has an active assignment")
+            spec = task["spec"] or ""
+            spec_hash = hashlib.sha256(spec.encode("utf-8")).hexdigest()
+            cur = db.execute(
+                """INSERT INTO task_assignments
+                       (task_id, specialist, harness, state, created_by, note,
+                        spec_snapshot, spec_hash, executor_id, created_at)
+                       VALUES (?,?,?,'queued',?,?,?,?,?,?)""",
+                (task_id, specialist.strip()[:120], harness,
+                 created_by[:120], "", spec[:SPEC_SNAPSHOT_CAP], spec_hash,
+                 executor_id.strip()[:120], now),
+            )
+            aid = int(cur.lastrowid)
+            self._log(db, "assignment.created", task_id, {
+                "assignment_id": aid, "specialist": specialist.strip()[:120],
+                "harness": harness, "created_by": created_by[:120],
+                "executor_id": executor_id.strip()[:120], "spec_hash": spec_hash,
+            })
+            return self._assignment(db, aid)  # type: ignore[return-value]
+
+    def assignments(self, state: str | None = None,
+                    task_id: str | None = None) -> list[dict[str, Any]]:
+        """Assignment listing (poller inbox + UI badge source). ``state`` /
+        ``task_id`` are optional exact filters; oldest first (queue order)."""
+        q = "SELECT * FROM task_assignments"
+        where: list[str] = []
+        params: list[Any] = []
+        if state is not None:
+            where.append("state=?")
+            params.append(state)
+        if task_id is not None:
+            where.append("task_id=?")
+            params.append(task_id)
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY id ASC"
+        with self._lock, self._conn() as db:
+            return [dict(r) for r in db.execute(q, params).fetchall()]
+
+    def claim_assignment(self, assignment_id: int, claimed_by: str,
+                         executor_id: str = ""
+                         ) -> tuple[dict[str, Any], str, dict[str, Any] | None, bool]:
+        """Atomic claim (ADR 0009 A4): CAS ``UPDATE ... WHERE state='queued'``
+        + rowcount check, with the task column move open → in-progress in
+        the SAME transaction. Two pollers racing → one 200, one 409.
+
+        ``executor_id`` (optional, ARCH-9 contract) is stored verbatim into
+        ``claimed_by_executor`` — attribution only, no phase-1 enforcement.
+
+        Returns (assignment, claim_token, task_after, moved). The token is
+        generated here (secrets.token_hex(16)) and handed to the caller —
+        it is never re-derivable afterwards.
+        """
+        token = secrets.token_hex(16)
+        now = _now()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT task_id FROM task_assignments WHERE id=?",
+                (assignment_id,),
+            ).fetchone()
+            if row is None:
+                raise AssignmentNotFoundError(
+                    f"assignment {assignment_id} not found")
+            task_id = row["task_id"]
+            cur = db.execute(
+                "UPDATE task_assignments SET state='claimed', claimed_by=?, "
+                "claim_token=?, claimed_at=?, claimed_by_executor=? "
+                "WHERE id=? AND state='queued'",
+                (claimed_by.strip()[:120], token, now,
+                 executor_id.strip()[:120], assignment_id),
+            )
+            if cur.rowcount != 1:
+                raise AssignmentConflictError(
+                    f"assignment {assignment_id} is not queued "
+                    "(already claimed or terminal)")
+            self._log(db, "assignment.claimed", task_id, {
+                "assignment_id": assignment_id,
+                "claimed_by": claimed_by.strip()[:120],
+                "executor_id": executor_id.strip()[:120],
+            })
+            # Task column move, same transaction, only from 'open': the ADR
+            # mapping is claim → open→in-progress (WF-1 §4.2 — an agent may
+            # move its own task). Any other column stays untouched.
+            moved = False
+            trow = db.execute(
+                "SELECT col FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if trow is not None and trow["col"] == "open":
+                pos = db.execute(
+                    "SELECT COALESCE(MAX(position)+1, 0) AS p FROM tasks "
+                    "WHERE col='in-progress'",
+                ).fetchone()["p"]
+                db.execute(
+                    "UPDATE tasks SET col='in-progress', status='in-progress', "
+                    "position=?, updated_at=? WHERE id=?",
+                    (pos, now, task_id),
+                )
+                self._log(db, "task.moved", task_id,
+                          {"from": "open", "to": "in-progress"})
+                moved = True
+            task = self._task_in_txn(db, task_id)
+            assignment = self._assignment(db, assignment_id)
+        return assignment, token, task, moved
+
+    def start_assignment(self, assignment_id: int, token: str) -> dict[str, Any]:
+        """claimed → running. ``heartbeat_at`` starts at start (executor
+        liveness baseline for the phase-3 reaper)."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM task_assignments WHERE id=?", (assignment_id,)
+            ).fetchone()
+            if row is None:
+                raise AssignmentNotFoundError(
+                    f"assignment {assignment_id} not found")
+            if not self._claim_token_matches(row["claim_token"], token):
+                raise AssignmentTokenError("claim_token mismatch")
+            if row["state"] != "claimed":
+                raise AssignmentConflictError(
+                    f"assignment {assignment_id} is {row['state']}, "
+                    "expected claimed")
+            now = _now()
+            db.execute(
+                "UPDATE task_assignments SET state='running', started_at=?, "
+                "heartbeat_at=? WHERE id=?", (now, now, assignment_id))
+            self._log(db, "assignment.started", row["task_id"],
+                      {"assignment_id": assignment_id})
+            return self._assignment(db, assignment_id)  # type: ignore[return-value]
+
+    def heartbeat_assignment(self, assignment_id: int, token: str,
+                             note: str = "") -> dict[str, Any]:
+        """Executor liveness tick (poller-driven, ~60 s). 409 unless running
+        — a 409 on an expired assignment doubles as the kill signal to the
+        poller (ADR 0009 §10). No audit event: heartbeats are noise."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM task_assignments WHERE id=?", (assignment_id,)
+            ).fetchone()
+            if row is None:
+                raise AssignmentNotFoundError(
+                    f"assignment {assignment_id} not found")
+            if not self._claim_token_matches(row["claim_token"], token):
+                raise AssignmentTokenError("claim_token mismatch")
+            if row["state"] != "running":
+                raise AssignmentConflictError(
+                    f"assignment {assignment_id} is {row['state']}, "
+                    "expected running")
+            db.execute(
+                "UPDATE task_assignments SET heartbeat_at=?, "
+                "note=COALESCE(NULLIF(?,''), note) WHERE id=?",
+                (_now(), note, assignment_id),
+            )
+            return self._assignment(db, assignment_id)  # type: ignore[return-value]
+
+    # Terminal outcome → assignment state (the audit/SSE kind mirrors it).
+    _FINISH_TARGET_STATE = {
+        "complete": "done", "fail": "failed",
+        "cancel": "cancelled", "expired": "expired",
+    }
+    # Source states each outcome is legal from (ADR 0009 §3 diagram).
+    _FINISH_SOURCE_STATES = {
+        "complete": ("running",),
+        "fail": ("claimed", "running"),
+        "cancel": ("queued", "claimed", "running"),
+        "expired": ("claimed", "running"),   # reaper only (phase 3)
+    }
+    # Task column mapping (ADR 0009 §3) — applied only for the task's LAST
+    # active assignment and only from the source column:
+    #   complete → resolved (NOT done: acceptance resolved→done stays owner);
+    #   fail/expired → blocked ("in-progress with no live executor" is a lie);
+    #   cancel → open.
+    _FINISH_TASK_TARGET = {
+        "complete": ("in-progress", "resolved"),
+        "fail": ("in-progress", "blocked"),
+        "expired": ("in-progress", "blocked"),
+        "cancel": ("in-progress", "open"),
+    }
+
+    def finish_assignment(self, assignment_id: int, outcome: str,
+                          note: str = "", *, token: str | None = None,
+                          claimed_by: str | None = None,
+                          ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None, str | None]:
+        """Terminal transition + task column mapping.
+
+        Token policy (correctness boundary, not security):
+        - complete: claim_token required, must match;
+        - fail: claim_token OR a claimed_by identity match (the poller's
+          recovery sweep fails its own claimed|running records after a
+          restart, when tokens are gone);
+        - cancel: no claim token — the owner's UI token is the auth (route);
+        - expired: in-process reaper (phase 3), no token by construction.
+
+        Returns (assignment, task_after, moved_from, moved_to); the move
+        applies only when no OTHER active assignment holds the task.
+        """
+        target = self._FINISH_TARGET_STATE.get(outcome)
+        if target is None:
+            raise ValueError(f"invalid outcome: {outcome}")
+        allowed_states = self._FINISH_SOURCE_STATES[outcome]
+        now = _now()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM task_assignments WHERE id=?", (assignment_id,)
+            ).fetchone()
+            if row is None:
+                raise AssignmentNotFoundError(
+                    f"assignment {assignment_id} not found")
+            if outcome == "complete" and not self._claim_token_matches(
+                    row["claim_token"], token):
+                raise AssignmentTokenError("claim_token mismatch")
+            if outcome == "fail" and not (
+                    self._claim_token_matches(row["claim_token"], token)
+                    or (claimed_by and row["claimed_by"] == claimed_by.strip())):
+                raise AssignmentTokenError(
+                    "claim_token or claimed_by match required to fail "
+                    "an assignment")
+            if row["state"] not in allowed_states:
+                raise AssignmentConflictError(
+                    f"assignment {assignment_id} is {row['state']}; "
+                    f"'{outcome}' requires {' or '.join(allowed_states)}")
+            db.execute(
+                "UPDATE task_assignments SET state=?, finished_at=?, "
+                "note=COALESCE(NULLIF(?,''), note) WHERE id=?",
+                (target, now, note, assignment_id))
+            self._log(db, f"assignment.{target}", row["task_id"], {
+                "assignment_id": assignment_id, "outcome": outcome,
+                "by": (claimed_by or row["claimed_by"] or "")[:120],
+            })
+            # Sibling guard: the column mapping belongs to the task's LAST
+            # active assignment. The ≤1 create-side invariant keeps this a
+            # no-op today; it stays as defense in depth for reaper paths.
+            others = db.execute(
+                "SELECT COUNT(*) AS n FROM task_assignments "
+                "WHERE task_id=? AND id<>? "
+                "AND state IN ('queued','claimed','running')",
+                (row["task_id"], assignment_id),
+            ).fetchone()["n"]
+            moved_from = moved_to = None
+            src, dst = self._FINISH_TASK_TARGET[outcome]
+            trow = db.execute(
+                "SELECT col FROM tasks WHERE id=?", (row["task_id"],)
+            ).fetchone()
+            if trow is not None and not others and trow["col"] == src:
+                pos = db.execute(
+                    "SELECT COALESCE(MAX(position)+1, 0) AS p FROM tasks "
+                    "WHERE col=?", (dst,),
+                ).fetchone()["p"]
+                db.execute(
+                    "UPDATE tasks SET col=?, status=?, position=?, updated_at=? "
+                    "WHERE id=?", (dst, dst, pos, now, row["task_id"]))
+                self._log(db, "task.moved", row["task_id"],
+                          {"from": src, "to": dst})
+                moved_from, moved_to = src, dst
+            task = self._task_in_txn(db, row["task_id"])
+            assignment = self._assignment(db, assignment_id)
+        return assignment, task, moved_from, moved_to
 
     # ------------------------------------------------- reports backfill
     BACKFILL_META_KEY = "reports_backfill"

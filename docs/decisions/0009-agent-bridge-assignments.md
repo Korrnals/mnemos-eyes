@@ -235,3 +235,101 @@ Consequences of the re-homing:
 
 Owner ratification of this ADR remains open; the ratified convergence
 roadmap already schedules the token-split leg as a live precondition.
+
+## Amendment 2 (2026-09-19) — multi-executor frame (АРХКОМ-4)
+
+Owner vector: the bridge is not laptop-bound — harnesses join from multiple
+sources (local and remote); assignment targets a specific agent OR a default;
+agent work is tracked in a dedicated vesmaro-eyes section. Six committee
+verdicts synthesized; protocol: `archcom-2026-09-19-archcom-session4.md`,
+section spec: `docs/design/2026-09-19-agents-section-spec.md`.
+
+1. **One lifecycle, many transports.** This ADR defines the execution
+   contract (lifecycle, ui/machine tokens, CAS claim, snapshot discipline,
+   reaper). Transport — where claim traffic physically travels — is below
+   the contract. The laptop poller (phase 2) is transport #1, not the
+   executor model: assignments record the declared executor identity and an
+   optional executor pin; "laptop" never becomes an identity or API concept.
+2. **Remote harnesses are transport #2+**, carried by mnemos-mesh (R4,
+   ROADMAP-v2 W4). The mesh must not touch the state machine, token model,
+   CAS semantics, or reaper; the board remains the sole assignment state
+   store. mnemos owns the data, vesmaro-eyes owns the interface, the mesh
+   owns the wires. On the mesh leg the executor token is mandatory (the
+   machine token is not accepted — a mesh node must not hold board-class
+   credentials); the reference poller generalizes via a `board_url` config
+   pointing at either direct HTTPS or a local mesh endpoint.
+3. **Executor instance — the third entity** (specialist ≠ harness ≠
+   executor, extending ADR 0005): a registry table `executors` (id, name,
+   harness, host, transport `local-poll|mesh-r4`, capabilities JSON,
+   enabled, last_seen; presence is **computed on read** from TTL — no state
+   column, the offline sweeper never mutates rows). Assignments nominate
+   (specialist, harness) + optional `executor_id` pin; claim records
+   `claimed_by_executor`. v0/v1: executors are a derived view (assignment
+   history + declared fields); the registry materializes as task ARCH-9
+   after phase 1 merges and is **mandatory before any multi-harness
+   rollout** (trigger T1 — one trigger, two consequences: per-executor
+   tokens + first-class registry).
+4. **Registration & tokens (ladder L0–L2).** L0: the board mints
+   `executor_secret` at registration (stored hashed, shown once — the
+   `claim_token` pattern, long-lived); registration via the machine token
+   creates a `pending` record; the owner approves via ui-token
+   (capabilities are owner-declared, never executor-self-expanded); routing
+   considers approved+enabled executors only. The phase-1 two-env split is
+   the L0 bootstrap (executor #1 = "laptop-poller"); the chart needs no
+   token map — executor secrets live server-side. L1: mesh carries the
+   token as opaque payload (no mesh minting/validation — W4 "transport
+   only"). L2 (optional, separate decision): mnemos as the single mint
+   authority. Explicit-assignment claims must enforce the executor token
+   from the first day of the registry (spoofing gate, CWE-290).
+5. **Default executor = resolution rule, never auto-launch.**
+   Chain: explicit pin → assignment specialist → task specialists →
+   project default → global default → visible-to-all. Computed server-side
+   on every GET (stored nowhere — no staleness; defaults live in
+   `board_meta` with a reserved scope field), emitted as a routing
+   annotation `{resolved, reason}`. Only explicit pins are enforced at
+   claim (mismatch → 409 in the same transaction); the rest is a visibility
+   filter — CAS stays the single arbiter. v1 UI: one global default + one
+   fallback in `/system/settings` with live route preview and **no silent
+   substitution**; auto-dispatch is T2-gated and out of v1. Gates
+   (Security): default set/change ui-token only + audit old→new; approved +
+   live heartbeat required; remote executors ineligible as default until
+   R4; kill-switch via token revocation.
+6. **Two-clock discipline.** The reaper reads only assignment clocks
+   (claimed > 10 min without start; running > 30 min without heartbeat);
+   presence reads only executor clocks (initial thresholds: online ≤ 2 min,
+   stale 2–10 min, offline > 10 min — server-documented constants). The two
+   never collapse: an offline executor keeps its claim until the reaper
+   fires.
+7. **SSE & audit additions (additive-only).** Reserve `executor.{
+   registered, updated, deleted, online, offline}` — emitted on presence
+   *change* only, payload `{executor, prev_state, state, last_seen_at}`;
+   per-heartbeat events are forbidden (clients render ages from GET + a
+   local 1 Hz ticker); the reconnect re-fetch rule extends to executors.
+   Audit adds: executor registered/approved/revoked (approver, token_id —
+   never material), default.changed (actor, old→new), token issued/rotated/
+   revoked (token_id only), `executor_id` + `transport` on assignment
+   events, and an `identity_mismatch` flag where the declared agent string
+   disagrees with the token-backed executor (spoofing signal, not just
+   retrospection).
+8. **UI frame.** The «Агенты» section splits across convergence waves:
+   a phase-2 tail (assignment badge + «Исполнение» tab on the task page,
+   read-only) and the phase-3 block together with the ARCH-8 trigger
+   (execution page, UI-10 event feed, executor sheet, ui-token mutations);
+   the executor registry UI is capability-gated. `/agents` aliases
+   `/agents/execution`; assignment details are a drawer, not a route;
+   «исполнитель» is the UI term, «агент» is not used in section strings.
+   `claim_token`/`spec_snapshot` are excluded from UI-facing REST
+   representations (hash only). The «Живой офис» north-star is a
+   foundation, not a v1 feature: executor as primary visual entity, events
+   as narratives, stable ids / presence trail / per-executor history
+   reserved now; personification is gated on T1–T3 (no trust theater over
+   unverified strings).
+9. **Cross-advice groundwork (swarm, ROADMAP-v2 §2.1).** Assignments carry
+   denormalized `topics` (project/domain tags, metadata tier) — the only
+   genuinely new field, needed because mesh subscription filters cannot
+   join through mnemos; every execution event carries stable ids
+   (assignment, task, memory, specialist, harness, executor); agent→agent
+   writes bypassing the board remain structurally forbidden — future
+   cross-advice lands as board-mediated proposals.
+
+Owner ratification of this amendment travels with the ADR body.

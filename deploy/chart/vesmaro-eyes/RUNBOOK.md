@@ -102,7 +102,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
   -X POST https://vesmaro.abyss.lab/api/tasks -H 'Content-Type: application/json' \
   -d '{"title":"smoke"}'                                        # 201/4xx, но не 503
 # 503 = VESMARO_BOARD_TOKEN не долетел до пода; 401 = токен не совпал
-# (значит секрет перезаписан другим значением — см. §6).
+# (значит секрет перезаписан другим значением — см. §7).
 ```
 
 Проверка mnemos-пути (побочный эффект патча, ожидаемое восстановление):
@@ -147,6 +147,7 @@ hostNetwork-порт 8080 при откате снова займётся под
 | `vesmaro-eyes-mnemos` | вне-helm, вручную (см. `deploy/k8s/vesmaro-eyes.yaml`, шапка) | `MNEMOS_TOKEN` (`mnk_…`, totp_required=0) | только читает (existingSecret) |
 | `vesmaro-eyes-laptop` | вне-helm, вручную | `MNEMOS_LAPTOP_TOKEN` | только читает (existingSecret) |
 | `vesmaro-eyes-board-token` | **чарт** (lookup+randAlphaNum 48, keep при uninstall) | `VESMARO_BOARD_TOKEN` | создаёт/переиспользует |
+| `vesmaro-eyes-ui-token` | **чарт** (lookup+randAlphaNum 48, keep при uninstall; ADR 0009 A1) | `VESMARO_UI_TOKEN` | создаёт/переиспользует |
 | `vesmaro-eyes-tls` | `scripts/gen-tls-secret.sh`, 825d | `tls.crt`/`tls.key` (self-signed) | только читает (ingress.tls) |
 | `ghcr-pull` | вне-helm (registry pull) | dockerconfigjson | только читает (imagePullSecrets) |
 
@@ -155,7 +156,63 @@ hostNetwork-порт 8080 при откате снова займётся под
 **не применять руками**; при желании зафиксировать токен заранее —
 `boardToken.existingSecret`.
 
-## 6. Известные риски и операционные заметки
+## 6. Два борд-токена (сплит по ADR 0009 §2 A1)
+
+С фазы ARCH-6 (серверная часть — ARCH-4) у борда два bearer-токена вместо
+одного; назначение сплита — coarse action origin: утечка machine-токена не
+даёт права создавать assignments (инъекционный вектор закрыт), агент не
+может минтовать назначения.
+
+| Токен | Секрет / ключ env | Кто пользует | Что может |
+|---|---|---|---|
+| **ui-token** | `vesmaro-eyes-ui-token` / `VESMARO_UI_TOKEN` | UI владельца (браузер, ноутбук) | только assignment-класс: создание и отмена назначений (POST /api/assignments, cancel). Task-мутации (CRUD задач, колонки) остались на board-токене — ui-класс расширяется волной Ф3 конвергенции |
+| **machine-token** (он же legacy board-token) | `vesmaro-eyes-board-token` / `VESMARO_BOARD_TOKEN` | поллер и агенты (laptop, харнесы) | claim / start / heartbeat / complete / fail, reports, move своих задач, весь остальной write-API (task CRUD — до миграции классов) |
+
+Оба секрета создаёт чарт при первом install (randAlphaNum 48); на upgrade
+значение переиспользуется через `lookup` — `helm upgrade` НИКОГДА не
+регенерирует существующий токен; оба переживают uninstall/rollback
+(`helm.sh/resource-policy: keep`). `helm template` рендерит случайные
+значения — вывод template вручную не применять (§5).
+
+**Получить значения** (на машине оператора; не печатать в логи/чат):
+
+```bash
+kubectl -n kube-agents get secret vesmaro-eyes-ui-token \
+  -o jsonpath='{.data.VESMARO_UI_TOKEN}' | base64 -d; echo
+kubectl -n kube-agents get secret vesmaro-eyes-board-token \
+  -o jsonpath='{.data.VESMARO_BOARD_TOKEN}' | base64 -d; echo
+```
+
+**Legacy-режим (отсутствие ui-токена).** Если `VESMARO_UI_TOKEN` не
+прокинут в контейнер, сервер обслуживает оба канала токеном
+`VESMARO_BOARD_TOKEN` и пишет warning при старте. В чарте включается
+флагом `--set uiToken.enabled=false` (исчезают секрет и env; сам секрет в
+кластере остаётся благодаря keep). Это escape-hatch для диагностики
+сплита, не штатный режим. Голый аварийный манифест
+`deploy/k8s/vesmaro-eyes.yaml` не содержит ни одного токена — там
+fail-closed (мутации 503), как и до сплита.
+
+**Ротация** (каждый токен независимо; чарт переиспользует значение из
+кластера, поэтому ручная запись в секрет стабильна между upgrade):
+
+```bash
+NEW=$(openssl rand -hex 24)   # 48 символов, как у чарта
+kubectl -n kube-agents patch secret vesmaro-eyes-ui-token \
+  -p "{\"data\":{\"VESMARO_UI_TOKEN\":\"$(echo -n "$NEW" | base64)\"}}"
+kubectl -n kube-agents rollout restart deployment/vesmaro-eyes
+# затем раздать новое значение потребителю:
+#   ui-token    → UI владельца (браузер / конфиг на ноутбуке)
+#   board-token → конфиг поллера (~/.config/mnemos-eyes/poller.yaml) + конфиги агентов
+```
+
+Порядок: ui-token — в любой момент (потребитель один, владелец);
+board-token — в тихий период: пока конфиги поллера/агентов не обновлены,
+их запросы получают 401 (fail-closed), «полузабранных» assignments не
+возникает — claim атомарен (ADR 0009 A4). Ротация с заранее известным
+значением — через `uiToken.existingSecret` / `boardToken.existingSecret`
+(§2.1).
+
+## 7. Известные риски и операционные заметки
 
 1. **`/api/health` медленный** — на каждый проб пингуются ВСЕ серверы
    registry (кластер + ноутбук по LAN). Тайминги проб в values выставлены с
@@ -179,7 +236,7 @@ hostNetwork-порт 8080 при откате снова займётся под
    свежим инсталляциям: `memoryRegistry.configMap.create=true` + content в
    values, монтируется в `/config`, не затирая `/data`).
 
-## 7. Версии (archcom C5)
+## 8. Версии (archcom C5)
 
 Единственный источник версии — `server/app.py`
 (`FastAPI(title="vesmaro-eyes", version=…)`). Распространение:
