@@ -1,12 +1,30 @@
 import type { MemoryGateway } from "./MemoryGateway";
+import type { InboxParams } from "./BoardAdapter";
 import { ApiError } from "@/lib/errors";
 import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
+import {
+  MOCK_ARCHIVE,
+  MOCK_BOARD,
+  MOCK_HISTORY,
+  MOCK_INBOX,
+  MOCK_REPORTS,
+  MOCK_TASK_MEMORIES,
+  MOCK_TASKS,
+} from "./boardFixtures";
 import type {
+  ArchivePage,
+  ArchiveParams,
   BoardHealthDetail,
+  BoardSummary,
   MemoryPulse,
   MemoryPulseItem,
   PulseParams,
+  TaskHistory,
+  TaskInbox,
+  TaskMemories,
+  TaskReports,
 } from "./boardTypes";
+import type { BoardTask } from "./boardTypes";
 import type {
   A2ASession,
   HealthStatus,
@@ -250,6 +268,96 @@ export class MockAdapter implements MemoryGateway {
     };
   }
 
+  // --- Ф2 task domain (boardFixtures.ts — corpus-shaped deterministic data) ----
+
+  /** Board projection with the server's optional ?status= filter semantics. */
+  async board(status?: string, signal?: AbortSignal): Promise<BoardSummary> {
+    await this.delay(signal);
+    const tasks = status
+      ? MOCK_BOARD.tasks.filter((task) => task.status === status)
+      : MOCK_BOARD.tasks;
+    return { ...MOCK_BOARD, tasks: tasks.map((task) => ({ ...task })) };
+  }
+
+  /** Inbox read; the mock honours the wire's `include_adopted` switch. */
+  async inbox(params: InboxParams = {}, signal?: AbortSignal): Promise<TaskInbox> {
+    await this.delay(signal);
+    const items = MOCK_INBOX.items
+      .filter((item) => params.include_adopted || !item.adopted)
+      .filter((item) => !params.project || item.project === params.project)
+      .map((item) => ({ ...item }));
+    return { ...MOCK_INBOX, items, count: items.length };
+  }
+
+  async reports(taskId: string, signal?: AbortSignal): Promise<TaskReports> {
+    await this.delay(signal);
+    requireMockTask(taskId);
+    if (taskId !== MOCK_REPORTS.task_id) {
+      return { ok: true, task_id: taskId, count: 0, items: [] };
+    }
+    return { ...MOCK_REPORTS, items: MOCK_REPORTS.items.map((item) => ({ ...item })) };
+  }
+
+  async history(taskId: string, signal?: AbortSignal): Promise<TaskHistory> {
+    await this.delay(signal);
+    requireMockTask(taskId);
+    if (taskId !== MOCK_REPORTS.task_id) {
+      return { events: [], memories: [] };
+    }
+    return {
+      events: MOCK_HISTORY.events.map((event) => ({ ...event })),
+      memories: MOCK_HISTORY.memories.map((memory) => ({ ...memory })),
+    };
+  }
+
+  async taskMemories(taskId: string, signal?: AbortSignal): Promise<TaskMemories> {
+    await this.delay(signal);
+    requireMockTask(taskId);
+    if (taskId !== MOCK_REPORTS.task_id) {
+      return { items: {}, unresolved: [], sources: {} };
+    }
+    return {
+      items: { ...MOCK_TASK_MEMORIES.items },
+      unresolved: MOCK_TASK_MEMORIES.unresolved.map((row) => ({ ...row })),
+      sources: { ...MOCK_TASK_MEMORIES.sources },
+    };
+  }
+
+  async archive(params: ArchiveParams = {}, signal?: AbortSignal): Promise<ArchivePage> {
+    await this.delay(signal);
+    const q = (params.q ?? "").trim().toLowerCase();
+    const rows = MOCK_ARCHIVE.items.filter((task) => {
+      if (q && !(`${task.title} ${task.summary}`.toLowerCase().includes(q))) return false;
+      if (params.status && task.status !== params.status) return false;
+      if (params.col && task.col !== params.col) return false;
+      if (params.agent && !task.agents.includes(params.agent)) return false;
+      if (params.project && task.project !== params.project) return false;
+      return true;
+    });
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? 50;
+    return {
+      ok: true,
+      count: rows.length,
+      total: rows.length,
+      limit,
+      offset,
+      items: rows.slice(offset, offset + limit).map((task) => ({ ...task })),
+      projects: { ...MOCK_ARCHIVE.projects },
+    };
+  }
+
+  async taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask> {
+    await this.delay(signal);
+    const task = MOCK_TASKS.find((candidate) => candidate.id === taskId);
+    if (!task) {
+      throw new ApiError(404, `task '${taskId}' not found on the board`, {
+        url: "mock:/api/board",
+      });
+    }
+    return { ...task };
+  }
+
   async metrics(signal?: AbortSignal): Promise<Metrics> {
     await this.delay(signal);
     const byStatus: Record<string, number> = {};
@@ -325,8 +433,16 @@ export class MockAdapter implements MemoryGateway {
   }
 }
 
-// --- Search heuristics (FTS/semantic imitation) ------------------------------
+/** Honest 404 mirror of the board routes for unknown task ids. */
+function requireMockTask(taskId: string): void {
+  if (!MOCK_TASKS.some((task) => task.id === taskId)) {
+    throw new ApiError(404, `task '${taskId}' not found on the board`, {
+      url: "mock:/api/tasks/" + encodeURIComponent(taskId),
+    });
+  }
+}
 
+// --- Search heuristics (FTS/semantic imitation) ------------------------------
 interface MemoryMatch {
   score: number;
   searchType: SearchResult["search_type"];

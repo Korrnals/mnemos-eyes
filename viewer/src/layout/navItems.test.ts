@@ -23,9 +23,9 @@ describe("domain map", () => {
     ]);
   });
 
-  it("marks only the phase-2+ domains as soon-slots", () => {
+  it("marks only the phase-4+ domains as soon-slots (Ф2 activates Tasks)", () => {
     const slots = NAV_DOMAINS.filter((d) => d.soonKey).map((d) => d.to);
-    expect(slots).toEqual(["/tasks", "/agents", "/stores"]);
+    expect(slots).toEqual(["/agents", "/stores"]);
   });
 
   it("never links a domain at a path without a route (no dead links)", () => {
@@ -52,7 +52,22 @@ describe("domain map", () => {
     expect(isPathActive("/memoryx", "/memory")).toBe(false);
     expect(activeDomain("/memory/pulse")?.to).toBe("/memory");
     expect(activeDomain("/system/status")?.to).toBe("/system");
-    expect(activeDomain("/tasks")?.to).toBeUndefined(); // slot, no pages
+    // Ф2: the task domain is live — its pages resolve the domain.
+    expect(activeDomain("/tasks")?.to).toBe("/tasks");
+    expect(activeDomain("/tasks/TB-1")?.to).toBe("/tasks");
+    expect(activeDomain("/agents")?.to).toBeUndefined(); // still a slot
+  });
+
+  it("gives the task domain its Ф2 sections (list / inbox / archive)", () => {
+    const tasks = NAV_DOMAINS.find((d) => d.to === "/tasks");
+    expect(tasks?.soonKey).toBeUndefined();
+    expect(tasks?.sections?.map((s) => s.to)).toEqual([
+      "/tasks",
+      "/tasks/inbox",
+      "/tasks/archive",
+    ]);
+    // The inbox section carries the live counter wiring.
+    expect(tasks?.sections?.find((s) => s.to === "/tasks/inbox")?.counter).toBe("inbox");
   });
 });
 
@@ -86,6 +101,26 @@ describe("breadcrumbs (last crumb is not a link)", () => {
       { to: "/system", key: "nav.system" },
       { to: "/system/sessions", key: "nav.sessions" },
       { key: "nav.session" },
+    ]);
+    expect(crumbsFor("/tasks/TB-1")).toEqual([
+      { to: "/tasks", key: "nav.tasks" },
+      { to: "/tasks", key: "nav.taskList" },
+      { key: "nav.task" },
+    ]);
+  });
+
+  it("trails the Ф2 task pages (list / inbox / archive)", () => {
+    expect(crumbsFor("/tasks")).toEqual([
+      { to: "/tasks", key: "nav.tasks" },
+      { key: "nav.taskList" },
+    ]);
+    expect(crumbsFor("/tasks/inbox")).toEqual([
+      { to: "/tasks", key: "nav.tasks" },
+      { key: "nav.taskInbox" },
+    ]);
+    expect(crumbsFor("/tasks/archive")).toEqual([
+      { to: "/tasks", key: "nav.tasks" },
+      { key: "nav.taskArchive" },
     ]);
   });
 

@@ -1,0 +1,478 @@
+import type {
+  ArchivePage,
+  BoardSummary,
+  TaskHistory,
+  TaskInbox,
+  TaskMemories,
+  TaskReports,
+} from "./boardTypes";
+import type { BoardTask } from "./boardTypes";
+
+/**
+ * Deterministic task-domain dataset for the MockAdapter (Ф2, ADR 0011 §6).
+ *
+ * Shaped from the RECORDED CORPUS (2026-09-19, live board 1.5.0-dev on
+ * :8141 — seeded store, real mnemos on :8787 as the "laptop" server): every
+ * row mirrors the exact `TaskOut`/`ReportOut`/`EventItem`/`MemoryItem`/
+ * `TaskInboxItem` keys the wire serves, so mock mode renders what production
+ * renders. Like fixtures.ts: no `Date.now()`, no `Math.random()` — two
+ * MockAdapter instances answer byte-identically.
+ *
+ * Coverage matrix (12 tasks): all five columns × all four priorities × three
+ * projects × four envs; one task with 3 reports (superseded final), one with
+ * memory links, plus one archived row for the archive page.
+ */
+
+const TASK_COLUMNS = ["open", "in-progress", "blocked", "resolved", "done"] as const;
+
+export const MOCK_TASKS: BoardTask[] = [
+  {
+    id: "TB-1",
+    col: "in-progress",
+    position: 0,
+    title: "Достроить борд v0.3: центральные модалки, управление хранилищами, кластеры",
+    summary:
+      "Операционный кокпит vesmaro-программы: задачи × статусы × агенты × среды × живая память. " +
+      "v0.3 = замечания владельца от 2026-09-15: модалка задачи по центру, полный CRUD хранилищ.",
+    spec:
+      "Контекст: владелец подтвердил подключение к vesmaro.abyss.lab.\n\n" +
+      "Acceptance criteria:\n— [x] задача открывается центральным модальным окном\n" +
+      "— [ ] CRUD хранилищ без перезагрузки\n— [ ] кластеры памяти как интерфейсная сущность",
+    agents: ["zcode"],
+    specialists: ["@GCW: Tech Lead"],
+    env: "cluster",
+    project: "mnemos-eyes",
+    memory_ids: ["25cdc0e9-1912-4217-aaf0-0e7c48912df1"],
+    mnemos_tags: ["project:mnemos-eyes", "agent:zcode", "mnemos:decision"],
+    created_at: "2026-09-12T09:00:00+00:00",
+    updated_at: "2026-09-18T14:30:00+00:00",
+    archived: 0,
+    status: "in-progress",
+    priority: "critical",
+    archived_from: "",
+  },
+  {
+    id: "T6",
+    col: "in-progress",
+    position: 1,
+    title: "Подключить L1 viewer к живому mnemos: HttpAdapter + auth flow",
+    summary:
+      "Backend-гейт (CORS + auth/2FA) снят 2026-06-17. Осталось подключить HttpAdapter к живому API.",
+    spec:
+      "Контекст: бэкенд-сессия mnemos завершена (HEAD 4331a22).\n\n" +
+      "Acceptance criteria:\n— [ ] Authorization: Bearer mnk_… работает в HttpAdapter\n" +
+      "— [ ] TOTP-флоу для remote-сессий",
+    agents: ["zcode", "claude"],
+    specialists: ["@GCW: Senior Frontend Developer", "@GCW: Tech Lead"],
+    env: "cluster",
+    project: "mnemos-eyes",
+    memory_ids: ["25cdc0e9-1912-4217-aaf0-0e7c48912df1"],
+    mnemos_tags: ["project:mnemos-eyes", "agent:zcode"],
+    created_at: "2026-09-10T11:20:00+00:00",
+    updated_at: "2026-09-17T08:15:00+00:00",
+    archived: 0,
+    status: "in-progress",
+    priority: "high",
+    archived_from: "",
+  },
+  {
+    id: "TB-3",
+    col: "open",
+    position: 0,
+    title: "Свести документацию конвергенции в единый трекер фаз",
+    summary: "Фазы Ф0–Ф4 размазаны по ADR и вердиктам; нужен один трекер с гейтами.",
+    spec: "Acceptance criteria:\n— [ ] таблица фаз с гейтами\n— [ ] ссылки на ADR 0011",
+    agents: ["zcode"],
+    specialists: ["@GCW: Tech Lead"],
+    env: "laptop",
+    project: "mnemos-eyes",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos-eyes"],
+    created_at: "2026-09-14T16:45:00+00:00",
+    updated_at: "2026-09-14T16:45:00+00:00",
+    archived: 0,
+    status: "open",
+    priority: "normal",
+    archived_from: "",
+  },
+  {
+    id: "TB-4",
+    col: "open",
+    position: 1,
+    title: "Прогнать UX-пейринг QR-устройств по §6 концепта",
+    summary: "Проверить терминологию и флоу пейринга до реализации.",
+    spec: "Acceptance criteria:\n— [ ] матрица состояний согласована",
+    agents: [],
+    specialists: ["owner"],
+    env: "laptop",
+    project: "mnemos",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos"],
+    created_at: "2026-09-15T10:05:00+00:00",
+    updated_at: "2026-09-15T10:05:00+00:00",
+    archived: 0,
+    status: "open",
+    priority: "low",
+    archived_from: "",
+  },
+  {
+    id: "RB-2",
+    col: "blocked",
+    position: 0,
+    title: "Защитить publish-токены: fine-grained + атмосферу секретов",
+    summary: "Push-токен Korrnals не имеет org в Repository access (403) — ждать владельца.",
+    spec: "Acceptance criteria:\n— [ ] плейсхолдеры выданы\n— [ ] 403 снят",
+    agents: ["zcode"],
+    specialists: ["@GCW: Tech Lead", "@GCW: Senior Security Engineer"],
+    env: "laptop",
+    project: "mnemos",
+    memory_ids: ["754f83a7-466e-4a42-a884-76382c7ea6d4"],
+    mnemos_tags: ["project:mnemos", "topic:security"],
+    created_at: "2026-09-11T13:00:00+00:00",
+    updated_at: "2026-09-16T17:40:00+00:00",
+    archived: 0,
+    status: "blocked",
+    priority: "high",
+    archived_from: "",
+  },
+  {
+    id: "TB-5",
+    col: "blocked",
+    position: 1,
+    title: "Спроектировать SSE-слой viewer: подписки и точечный патч кеша",
+    summary: "Живые события без рефетча всего борда — маппинг события → ключи.",
+    spec: "Acceptance criteria:\n— [ ] EventStream обёртка\n— [ ] патч tasks.board",
+    agents: ["zcode"],
+    specialists: ["@GCW: Senior Frontend Developer"],
+    env: "local",
+    project: "mnemos-eyes",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos-eyes", "topic:sse"],
+    created_at: "2026-09-16T09:30:00+00:00",
+    updated_at: "2026-09-16T09:30:00+00:00",
+    archived: 0,
+    status: "blocked",
+    priority: "critical",
+    archived_from: "",
+  },
+  {
+    id: "TB-6",
+    col: "resolved",
+    position: 0,
+    title: "Снять recorded-corpus с merge-API для BoardAdapter-контрактов",
+    summary: "Корпус снят с живого сервера: board/reports/history/memories/inbox/archive.",
+    spec: "Acceptance criteria:\n— [x] корпус зашит в тесты",
+    agents: ["zcode"],
+    specialists: ["@GCW: Senior QA Engineer"],
+    env: "local",
+    project: "mnemos-eyes",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos-eyes", "topic:qa"],
+    created_at: "2026-09-13T08:00:00+00:00",
+    updated_at: "2026-09-18T19:10:00+00:00",
+    archived: 0,
+    status: "resolved",
+    priority: "normal",
+    archived_from: "",
+  },
+  {
+    id: "TB-7",
+    col: "resolved",
+    position: 1,
+    title: "Согласовать IA домена «Задачи» с архкомом",
+    summary: "Список-вид против канбана: вердикт §3 — таблица на dense-токенах, канбан Ф3.",
+    spec: "Acceptance criteria:\n— [x] вердикт ратифицирован",
+    agents: [],
+    specialists: ["@GCW: Architectural Committee"],
+    env: "cloud",
+    project: "mnemos",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos", "mnemos:decision"],
+    created_at: "2026-09-09T12:00:00+00:00",
+    updated_at: "2026-09-15T18:00:00+00:00",
+    archived: 0,
+    status: "resolved",
+    priority: "low",
+    archived_from: "",
+  },
+  {
+    id: "TB-8",
+    col: "done",
+    position: 0,
+    title: "Задеплоить /app с history-fallback и заголовками безопасности",
+    summary: "Ф0a: multi-stage Containerfile, VESMARO_APP_DIR, CSP — в проде.",
+    spec: "Acceptance criteria:\n— [x] деплой 1.4.0",
+    agents: ["zcode"],
+    specialists: ["@GCW: SRE/DevOps"],
+    env: "cloud",
+    project: "vesmaro",
+    memory_ids: [],
+    mnemos_tags: ["project:vesmaro"],
+    created_at: "2026-09-05T07:45:00+00:00",
+    updated_at: "2026-09-06T10:20:00+00:00",
+    archived: 0,
+    status: "done",
+    priority: "high",
+    archived_from: "",
+  },
+  {
+    id: "TB-9",
+    col: "done",
+    position: 1,
+    title: "Написать RU/EN слой i18n для оболочки viewer",
+    summary: "Хэнд-ролл ~100 строк, типизированные ключи, без i18next.",
+    spec: "Acceptance criteria:\n— [x] ru.ts/en.ts parity",
+    agents: ["zcode"],
+    specialists: ["@GCW: Senior Frontend Developer"],
+    env: "laptop",
+    project: "vesmaro",
+    memory_ids: [],
+    mnemos_tags: ["project:vesmaro", "topic:i18n"],
+    created_at: "2026-09-07T15:30:00+00:00",
+    updated_at: "2026-09-08T09:00:00+00:00",
+    archived: 0,
+    status: "done",
+    priority: "normal",
+    archived_from: "",
+  },
+  {
+    id: "TB-10",
+    col: "open",
+    position: 2,
+    title: "Перенести тег-инспектор в домен «Память» нового app",
+    summary: "Ре-парентинг /tags → /memory/tags с редиректами.",
+    spec: "Acceptance criteria:\n— [ ] редиректы живут",
+    agents: ["zcode"],
+    specialists: ["@GCW: Senior Frontend Developer"],
+    env: "cluster",
+    project: "vesmaro",
+    memory_ids: [],
+    mnemos_tags: ["project:vesmaro"],
+    created_at: "2026-09-17T11:10:00+00:00",
+    updated_at: "2026-09-17T11:10:00+00:00",
+    archived: 0,
+    status: "open",
+    priority: "normal",
+    archived_from: "",
+  },
+  {
+    id: "TB-11",
+    col: "in-progress",
+    position: 2,
+    title: "Собрать densité-токены и проверить контраст AA",
+    summary: "--row-h режимы + проверка 4.5:1 в обеих темах.",
+    spec: "Acceptance criteria:\n— [x] токены заморожены",
+    agents: [],
+    specialists: ["@GCW: Senior Frontend Developer"],
+    env: "local",
+    project: "mnemos",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos", "topic:design"],
+    created_at: "2026-09-18T06:25:00+00:00",
+    updated_at: "2026-09-18T13:55:00+00:00",
+    archived: 0,
+    status: "in-progress",
+    priority: "low",
+    archived_from: "",
+  },
+];
+
+/** Archived row (the board projection never carries archived=1 rows). */
+export const MOCK_ARCHIVED_TASK: BoardTask = {
+  id: "RB-1",
+  col: "blocked",
+  position: 2,
+  title: "Провести день регистраций vesmaro: org+плейсхолдеры → PyPI/npm → домены",
+  summary: "Имя vesmaro подтверждено владельцем. Ждём «да» на runbook.",
+  spec: "Acceptance criteria:\n— [ ] фаза A: GitHub org\n— [ ] фаза B: PyPI+npm",
+  agents: ["zcode"],
+  specialists: ["@GCW: Tech Lead", "owner"],
+  env: "laptop",
+  project: "mnemos",
+  memory_ids: [],
+  mnemos_tags: ["project:mnemos", "naming"],
+  created_at: "2026-09-10T09:00:00+00:00",
+  updated_at: "2026-09-18T20:00:00+00:00",
+  archived: 1,
+  status: "blocked",
+  priority: "normal",
+  archived_from: "blocked",
+};
+
+function countByColumn(tasks: readonly BoardTask[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const column of TASK_COLUMNS) counts[column] = 0;
+  for (const task of tasks) {
+    counts[task.col] = (counts[task.col] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export const MOCK_BOARD: BoardSummary = {
+  columns: [...TASK_COLUMNS],
+  tasks: MOCK_TASKS.map((task) => ({ ...task })),
+  counts: countByColumn(MOCK_TASKS),
+};
+
+/** Reports for TB-1 — corpus shape: oldest first, one superseded live final. */
+export const MOCK_REPORTS: TaskReports = {
+  ok: true,
+  task_id: "TB-1",
+  count: 3,
+  items: [
+    {
+      id: 1,
+      task_id: "TB-1",
+      kind: "intermediate",
+      agent: "zcode",
+      body: "Промежуточный отчёт: разведка завершена, роуты Tasks подтверждены.",
+      superseded: false,
+      created_at: "2026-09-18T14:20:00+00:00",
+    },
+    {
+      id: 2,
+      task_id: "TB-1",
+      kind: "final",
+      agent: "zcode",
+      body: "Финальный отчёт v1: список страниц свёрстан.",
+      superseded: true,
+      created_at: "2026-09-18T14:25:00+00:00",
+    },
+    {
+      id: 3,
+      task_id: "TB-1",
+      kind: "final",
+      agent: "zcode",
+      body: "Финальный отчёт v2: список + страница задачи готовы, правки внесены.",
+      superseded: false,
+      created_at: "2026-09-18T14:30:00+00:00",
+    },
+  ],
+};
+
+/** History for TB-1 — corpus shape: events desc, memory checkpoints desc. */
+export const MOCK_HISTORY: TaskHistory = {
+  events: [
+    { ts: "2026-09-18T14:30:00+00:00", title: "task.report", detail: "final, агент: zcode" },
+    { ts: "2026-09-18T14:25:00+00:00", title: "task.report", detail: "final, агент: zcode" },
+    { ts: "2026-09-18T14:20:00+00:00", title: "task.report", detail: "intermediate, агент: zcode" },
+    { ts: "2026-09-18T14:10:00+00:00", title: "task.moved", detail: "open → in-progress" },
+    { ts: "2026-09-18T14:00:00+00:00", title: "task.updated", detail: "поля: summary" },
+    { ts: "2026-09-12T09:00:00+00:00", title: "task.created", detail: "колонка open" },
+  ],
+  memories: [
+    {
+      ts: "2026-07-27T09:26:20.643428Z",
+      title: "Session checkpoint — 2026-07-27",
+      source: "laptop",
+      detail: "# Session checkpoint\n\n## Goals\nUpdate mnemos to latest version, run full code+QA review…",
+    },
+  ],
+};
+
+/** Resolved memory links for TB-1 — corpus shape: excerpt-only cards. */
+export const MOCK_TASK_MEMORIES: TaskMemories = {
+  items: {
+    "25cdc0e9-1912-4217-aaf0-0e7c48912df1": {
+      id: "25cdc0e9-1912-4217-aaf0-0e7c48912df1",
+      title: "Session checkpoint — 2026-07-27",
+      excerpt: "# Session checkpoint\n\n## Goals\nUpdate mnemos to latest version…",
+      status: "published",
+      tags: ["project:mnemos-eyes", "mnemos:checkpoint"],
+    },
+  },
+  unresolved: [
+    { id: "86ce17e7-1099-4e94-aa1b-eba431522560", status: "not_found", server: "laptop" },
+  ],
+  sources: { "25cdc0e9-1912-4217-aaf0-0e7c48912df1": "laptop" },
+};
+
+/** Inbox mirror — corpus shape (38 live rows distilled to 4 representative). */
+export const MOCK_INBOX: TaskInbox = {
+  items: [
+    {
+      memory_id: "bd945a48-0888-4b1f-9ebb-841519e5f8b9",
+      server: "laptop",
+      project: "mnemos",
+      title: "Снять corpus с живого борда для Ф2",
+      excerpt: "Правило QA: recorded corpus вместо выдуманного дубля…",
+      tags: ["project:mnemos", "task:queue"],
+      priority: "high",
+      specialist: "@GCW: Senior System Engineer",
+      created_at: "2026-09-18T07:00:00+00:00",
+      last_seen: "2026-09-19T09:00:00+00:00",
+      stale: false,
+      adopted: false,
+      adopted_task_id: null,
+    },
+    {
+      memory_id: "c2a111f3-5a44-4bb7-9d0e-6f7a2b3c4d5e",
+      server: "laptop",
+      project: "vesmaro",
+      title: "Спроектировать PWA-минимум для /app",
+      excerpt: "manifest + theme-color + иконки 192/512 + passthrough SW…",
+      tags: ["project:vesmaro", "task:queue"],
+      priority: "normal",
+      specialist: "",
+      created_at: "2026-09-17T16:30:00+00:00",
+      last_seen: "2026-09-19T09:00:00+00:00",
+      stale: false,
+      adopted: false,
+      adopted_task_id: null,
+    },
+    {
+      memory_id: "d41b22c4-6b55-4cc8-8e1f-7a8b3c4d5e6f",
+      server: "ai-agent",
+      project: "mnemos",
+      title: "Устранить дрейф FTS5 после переименования тегов",
+      excerpt: "Симптом: поиск отдаёт устаревшие сниппеты…",
+      tags: ["project:mnemos", "task:queue"],
+      priority: "critical",
+      specialist: "@GCW: Senior DBA",
+      created_at: "2026-09-15T22:10:00+00:00",
+      last_seen: "2026-09-18T06:00:00+00:00",
+      stale: true,
+      adopted: false,
+      adopted_task_id: null,
+    },
+    {
+      memory_id: "e52c33d5-7c66-4dd9-9f2a-8b9c4d5e6f70",
+      server: "laptop",
+      project: "mnemos-eyes",
+      title: "Свести ADR 0011 в трекер фаз",
+      excerpt: "Уже принято как задача TB-3.",
+      tags: ["project:mnemos-eyes", "task:queue"],
+      priority: "low",
+      specialist: "",
+      created_at: "2026-09-14T11:00:00+00:00",
+      last_seen: "2026-09-19T09:00:00+00:00",
+      stale: false,
+      adopted: true,
+      adopted_task_id: "TB-3",
+    },
+  ],
+  count: 4,
+  refreshed_at: "2026-09-19T09:00:00+00:00",
+};
+
+/** Archive page for the default query — corpus shape with project grouping. */
+export const MOCK_ARCHIVE: ArchivePage = {
+  ok: true,
+  count: 1,
+  total: 1,
+  limit: 50,
+  offset: 0,
+  items: [{ ...MOCK_ARCHIVED_TASK }],
+  projects: {
+    mnemos: [
+      {
+        id: "RB-1",
+        title: MOCK_ARCHIVED_TASK.title,
+        col: "blocked",
+        agents: ["zcode"],
+        env: "laptop",
+        updated_at: "2026-09-18T20:00:00+00:00",
+      },
+    ],
+  },
+};

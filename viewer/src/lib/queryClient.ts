@@ -23,6 +23,14 @@ export const STALE_TIMES = {
   tags: 60_000,
   /** Ф1 pulse — a recency feed: cheap to revalidate, never stale for long */
   pulse: 15_000,
+  /** Ф2 board projection — SSE patches keep it fresh; refetch is the fallback */
+  taskBoard: 30_000,
+  /** Ф2 task detail views (reports / history / memory links) */
+  taskDetail: 60_000,
+  /** Ф2 archive — append-mostly, slowly changing */
+  taskArchive: 60_000,
+  /** Ф2 inbox mirror — refreshed by the server-side scanner */
+  taskInbox: 60_000,
 } as const;
 
 export const GC_TIMES = {
@@ -34,6 +42,10 @@ export const GC_TIMES = {
   sessions: 5 * 60_000,
   tags: 5 * 60_000,
   pulse: 60_000,
+  taskBoard: 5 * 60_000,
+  taskDetail: 10 * 60_000,
+  taskArchive: 10 * 60_000,
+  taskInbox: 5 * 60_000,
 } as const;
 
 /**

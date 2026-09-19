@@ -50,12 +50,6 @@ app.kubernetes.io/component: board
 {{- default (printf "%s-board-token" (include "vesmaro-eyes.fullname" .)) .Values.boardToken.existingSecret }}
 {{- end }}
 
-{{/* UI-token secret name (ADR 0009 §2 A1): externally managed or
-chart-generated. Same pattern as the board token. */}}
-{{- define "vesmaro-eyes.uiTokenSecretName" -}}
-{{- default (printf "%s-ui-token" (include "vesmaro-eyes.fullname" .)) .Values.uiToken.existingSecret }}
-{{- end }}
-
 {{/* PVC claim name */}}
 {{- define "vesmaro-eyes.pvcName" -}}
 {{- default (printf "%s-data" (include "vesmaro-eyes.fullname" .)) .Values.persistence.existingClaim }}

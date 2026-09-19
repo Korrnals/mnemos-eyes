@@ -3,6 +3,7 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
+import { useTaskInbox } from "@/features/tasks/useTasks";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
 import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
@@ -160,10 +161,13 @@ function SectionLink({ section, pathname }: { section: NavSection; pathname: str
   const label = t(section.key);
   // Records ("/memory") must highlight on its detail route too
   // ("/memory/:id") — the list is the master of the master-detail pair.
+  // The task list ("/tasks") likewise owns its detail route ("/tasks/:id").
   const active =
     section.to === "/memory"
       ? pathname === "/memory" || /^\/memory\/[^/]+$/.test(pathname)
-      : isPathActive(pathname, section.to, section.end);
+      : section.to === "/tasks"
+        ? pathname === "/tasks" || /^\/tasks\/[^/]+$/.test(pathname)
+        : isPathActive(pathname, section.to, section.end);
   return (
     <Link
       to={section.to}
@@ -178,6 +182,29 @@ function SectionLink({ section, pathname }: { section: NavSection; pathname: str
     >
       <Icon className="size-3.5 shrink-0" aria-hidden="true" />
       <span className="hidden whitespace-nowrap md:inline">{label}</span>
+      {section.counter === "inbox" ? <InboxCount /> : null}
     </Link>
+  );
+}
+
+/**
+ * Live inbox counter (Ф2): the count of NOT-yet-adopted queue records. One
+ * cached read (no polling — the mirror changes via the server scanner);
+ * hidden while unknown, zero or on incapable gateways (honest absence
+ * instead of a dead "0").
+ */
+function InboxCount() {
+  const t = useT();
+  const inbox = useTaskInbox();
+  const count = inbox.data?.count ?? 0;
+  if (inbox.isPending || inbox.isError || count === 0) return null;
+  return (
+    <span
+      title={t("tasks.inboxCount", { count })}
+      aria-label={t("tasks.inboxCount", { count })}
+      className="ml-auto inline-flex items-center rounded-full bg-iris/15 px-1.5 font-mono text-xs text-iris-bright"
+    >
+      {count}
+    </span>
   );
 }

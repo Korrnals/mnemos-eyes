@@ -1,12 +1,15 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
+  Archive,
   Database,
   Files,
   HeartPulse,
   Home,
+  Inbox,
   KanbanSquare,
   LayoutGrid,
+  ListTodo,
   Search,
   ServerCog,
   Tag,
@@ -28,6 +31,11 @@ export interface NavSection {
   icon: LucideIcon;
   /** Exact-path match (section roots). */
   end?: boolean;
+  /**
+   * Optional live count badge next to the label (Ф2: the inbox counter).
+   * The Sidebar renders the matching counter component; undefined = none.
+   */
+  counter?: "inbox";
 }
 
 export interface NavDomain {
@@ -60,8 +68,19 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
       { to: "/memory/tags", key: "nav.tags", icon: Tag, end: true },
     ],
   },
-  // Phase-2 slot (task domain — board pages land with Ф2, DnD with Ф3).
-  { to: "/tasks", key: "nav.tasks", icon: KanbanSquare, soonKey: "nav.soonTasks" },
+  // Task domain (Ф2, ADR 0011): the reading surfaces are live; the kanban
+  // view (/tasks/board, DnD) is a Ф3 deliverable and stays an unregistered
+  // slot — empty slots are not rendered (concept §2.1 principle).
+  {
+    to: "/tasks",
+    key: "nav.tasks",
+    icon: KanbanSquare,
+    sections: [
+      { to: "/tasks", key: "nav.taskList", icon: ListTodo, end: true },
+      { to: "/tasks/inbox", key: "nav.taskInbox", icon: Inbox, end: true, counter: "inbox" },
+      { to: "/tasks/archive", key: "nav.taskArchive", icon: Archive, end: true },
+    ],
+  },
   // Phase-4 slots (agents / stores — ARCH-2 Ф4 and the registry wave).
   { to: "/agents", key: "nav.agents", icon: Bot, soonKey: "nav.soonAgents" },
   { to: "/stores", key: "nav.stores", icon: Database, soonKey: "nav.soonStores" },
@@ -107,6 +126,7 @@ export interface Crumb {
 
 const MEMORY_CRUMB: Crumb = { to: "/memory", key: "nav.memory" };
 const SYSTEM_CRUMB: Crumb = { to: "/system", key: "nav.system" };
+const TASKS_CRUMB: Crumb = { to: "/tasks", key: "nav.tasks" };
 
 /**
  * Breadcrumb trail for a pathname (level 2–3 pages; the root has none).
@@ -129,6 +149,12 @@ export function crumbsFor(pathname: string): Crumb[] {
       return [SYSTEM_CRUMB, { key: "nav.sessions" }];
     case "/system/traces":
       return [SYSTEM_CRUMB, { key: "nav.traces" }];
+    case "/tasks":
+      return [TASKS_CRUMB, { key: "nav.taskList" }];
+    case "/tasks/inbox":
+      return [TASKS_CRUMB, { key: "nav.taskInbox" }];
+    case "/tasks/archive":
+      return [TASKS_CRUMB, { key: "nav.taskArchive" }];
   }
   if (pathname.startsWith("/memory/")) {
     // Detail scroll (`/memory/:id`) sits under the records list.
@@ -140,6 +166,10 @@ export function crumbsFor(pathname: string): Crumb[] {
       { to: "/system/sessions", key: "nav.sessions" },
       { key: "nav.session" },
     ];
+  }
+  if (/^\/tasks\/[^/]+$/.test(pathname)) {
+    // Task page (`/tasks/:id`) sits under the list (its master view).
+    return [TASKS_CRUMB, { to: "/tasks", key: "nav.taskList" }, { key: "nav.task" }];
   }
   return [];
 }

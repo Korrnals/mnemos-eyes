@@ -69,10 +69,11 @@ describe("App (smoke)", () => {
     ]) {
       expect(html).toContain(label);
     }
-    // Phase-2+ slots are honest disabled items with a visible "soon" badge —
-    // never dead links (no href to /tasks et al).
+    // Ф2: the Tasks domain is LIVE — a real link, not a soon-slot anymore.
+    expect(html).toContain('href="/tasks"');
+    // Phase-4+ slots stay honest disabled items with a visible "soon" badge —
+    // never dead links (no href to /agents or /stores).
     expect(html).toContain(">soon<");
-    expect(html).not.toContain('href="/tasks"');
     expect(html).not.toContain('href="/agents"');
     expect(html).not.toContain('href="/stores"');
   });
