@@ -71,6 +71,15 @@ FINISH_RETRIES = 5               # complete/fail retries on transient errors
 SWEEP_FAIL_REASON = "poller restart, no local process"
 FALLBACK_FINAL_REPORT = "exit 0, agent report above"
 ALLOWED_PLACEHOLDERS = frozenset({"specialist", "envelope_file"})
+# Minimal child environment (ADR 0009 §9: autostarted specialists run in
+# an unprivileged profile). The machine token IS passed deliberately —
+# the envelope's REPORTS block requires the agent to post reports; it is
+# the only credential a child gets. Extend this list consciously: every
+# key here is handed to autostarted agent processes.
+CHILD_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "VESMARO_BOARD_TOKEN")
+# stdin envelope delivery relies on the OS pipe buffer; anything larger
+# would block the poller on write. Deliver via {envelope_file} instead.
+STDIN_ENVELOPE_CAP = 60_000
 
 # _now() mirrors server.store._now(): ISO UTC, seconds — audit ts and the
 # report-freshness comparisons rely on the shared format.
@@ -136,6 +145,12 @@ class PollerConfig:
     poll_jitter: float = POLL_JITTER_DEFAULT
     heartbeat_interval: float = HEARTBEAT_INTERVAL_DEFAULT
     ca_bundle: str = ""                  # lab CA for self-signed board TLS
+    # This poller's OWN executor designation (ARCH-9 derived view). NEVER
+    # the assignment's executor pin: forwarding the pin would attribute
+    # laptop claims to a remote executor and, once pin-enforcement lands
+    # (mismatch → 409), let this poller claim-pin other executors'
+    # assignments. Empty by default (phase 1 stores it verbatim only).
+    executor_id: str = ""
     audit_path: Path = field(default_factory=lambda: _state_dir() / "poller-audit.jsonl")
     lock_path: Path = field(default_factory=lambda: _state_dir() / "poller.lock")
 
@@ -223,6 +238,7 @@ class PollerConfig:
                                        HEARTBEAT_INTERVAL_DEFAULT,
                                        positive=True),
             ca_bundle=ca_bundle,
+            executor_id=str(raw.get("executor_id") or "").strip()[:120],
             audit_path=Path(audit).expanduser() if audit
             else _state_dir() / "poller-audit.jsonl",
             lock_path=Path(lock).expanduser() if lock
@@ -538,11 +554,13 @@ class AssignmentPoller:
 
     def __init__(self, config: PollerConfig, board: BoardClient,
                  audit: AuditLog, *,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 dry_run: bool = False):
         self.config = config
         self.board = board
         self.audit = audit
         self._clock = clock
+        self.dry_run = dry_run
         self._children: dict[int, _Child] = {}
         self._refused: set[int] = set()   # allowlist-miss dedup (per process)
         self._stop = threading.Event()
@@ -557,8 +575,15 @@ class AssignmentPoller:
         return tuple(self._children)
 
     def run(self, max_cycles: int | None = None) -> None:
-        """Main loop; ``max_cycles=1`` is the --once smoke mode."""
-        self.recovery_sweep()
+        """Main loop; ``max_cycles=1`` bounds it to a single cycle. In
+        dry-run mode nothing is mutated: the sweep is skipped and polling
+        only logs launch decisions (no claims, no children — a child
+        outliving the process would strand its claim token)."""
+        if self.dry_run:
+            log.info("dry-run: recovery sweep skipped (would fail own "
+                     "claimed|running leftovers)")
+        else:
+            self.recovery_sweep()
         cycles = 0
         while not self._stop.is_set():
             self.step()
@@ -579,11 +604,14 @@ class AssignmentPoller:
 
     # -- recovery sweep (ADR 0009 §4) ---------------------------------------
     def recovery_sweep(self) -> int:
-        """On start: fail own claimed|running records with no live local
-        process (claim tokens are gone after a restart — at-most-once close).
-        Best effort: an audited orphan pid that still runs and still looks
-        like one of OUR commands gets SIGTERM first (it can never be
-        completed without the token; letting it burn tokens is worse)."""
+        """On start: FAIL every own claimed|running record — unconditionally,
+        there is no liveness check (after a restart the claim tokens are
+        gone, so nothing could complete those assignments anyway; the
+        at-most-once window closes here). Best-effort extra: when the
+        audit log still names a pid for the assignment and it looks like
+        one of OUR commands (exact argv0 basename), it gets SIGTERM
+        first — a surviving orphan can never be completed and would only
+        burn tokens."""
         swept = 0
         for state in ("claimed", "running"):
             try:
@@ -620,19 +648,22 @@ class AssignmentPoller:
 
     def _kill_orphan_if_ours(self, assignment: dict[str, Any]) -> None:
         pid = self.audit.last_pid_for(assignment["id"])
-        if not pid:
+        if not pid or pid == os.getpid():
             return
         entry = self.config.resolve(assignment.get("harness") or "",
                                     assignment.get("specialist") or "")
         expected = entry.command[0] if entry else sys.executable
         # Verify plausibility before signalling: a reused pid must never be
         # killed. argv0 = first NUL-separated /proc token; never logged.
+        # EXACT basename equality — substring matching would let "zcode"
+        # kill "zcode-helper".
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as fh:
                 argv0 = fh.read().split(b"\0", 1)[0]
         except OSError:
             return  # gone (or not Linux) — nothing to kill
-        if os.path.basename(expected).encode() not in argv0:
+        if os.path.basename(argv0.decode(errors="replace")) != \
+                os.path.basename(expected):
             return
         try:
             os.kill(pid, signal.SIGTERM)
@@ -650,6 +681,9 @@ class AssignmentPoller:
         except BoardError as exc:
             log.error("poll: %s", exc)
             return
+        if self.dry_run:
+            self._dry_run_decisions(queued)
+            return
         for a in queued:
             if not isinstance(a.get("id"), int):
                 log.error("poll: malformed assignment record skipped: %r",
@@ -666,7 +700,7 @@ class AssignmentPoller:
             try:
                 assignment, claim_token = self.board.claim(
                     a["id"], claimed_by=self.config.executor_name,
-                    executor_id=(a.get("executor_id") or "").strip())
+                    executor_id=self.config.executor_id)
             except BoardConflict:
                 log.info("poll: assignment %s scooped by another poller", a["id"])
                 continue
@@ -676,6 +710,27 @@ class AssignmentPoller:
             log.info("poll: claimed assignment %s (task %s, %s/%s)",
                      a["id"], assignment.get("task_id"), harness, specialist)
             self._launch(assignment, claim_token, entry)
+
+    def _dry_run_decisions(self, queued: list[dict[str, Any]]) -> None:
+        """--once smoke mode: log what WOULD happen per queued assignment.
+        No claim, no launch, no report, no audit — dry-run never mutates
+        board or local state (a spawned child outliving the process would
+        strand the claim token with no one to complete it)."""
+        for a in queued:
+            if not isinstance(a.get("id"), int):
+                continue
+            harness = a.get("harness") or ""
+            specialist = a.get("specialist") or ""
+            entry = self.config.resolve(harness, specialist)
+            if entry is None:
+                log.info("dry-run: assignment %s (task %s) — allowlist miss "
+                         "for %s/%s, would stay queued (fail-closed)",
+                         a["id"], a.get("task_id"), harness, specialist)
+            else:
+                log.info("dry-run: assignment %s (task %s) — would claim as "
+                         "%s and launch %s",
+                         a["id"], a.get("task_id"),
+                         self.config.executor_name, list(entry.command))
 
     def _refuse(self, assignment: dict[str, Any], harness: str,
                 specialist: str) -> None:
@@ -711,27 +766,56 @@ class AssignmentPoller:
         envelope = render_envelope(assignment,
                                    board_url=self.config.board_url,
                                    executor_name=self.config.executor_name)
+        # Launch temp files live in the state dir (audit parent), NOT the
+        # system tmp: they are launch artifacts, cleaned after the run.
+        run_dir = self.config.audit_path.parent
+        run_dir.mkdir(parents=True, exist_ok=True)
         envelope_path: Path | None = None
         out_fd = err_fd = -1
         out_name = err_name = ""
         try:
             subst = {"specialist": specialist, "envelope_file": ""}
             if any("{envelope_file}" in tok for tok in entry.command):
-                fd, name = tempfile.mkstemp(prefix=f"assign-{aid}-", suffix=".md")
+                fd, name = tempfile.mkstemp(prefix=f"assign-{aid}-",
+                                            suffix=".md", dir=run_dir)
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(envelope)
                 envelope_path = Path(name)
                 subst["envelope_file"] = name
+            elif len(envelope.encode("utf-8")) > STDIN_ENVELOPE_CAP:
+                # Would block the poller on the stdin pipe write — refuse
+                # loudly instead of hanging (switch the template to
+                # {envelope_file} delivery for payloads this big).
+                reason = (f"launch refused: envelope "
+                          f"{len(envelope.encode('utf-8'))} bytes exceeds "
+                          f"stdin cap {STDIN_ENVELOPE_CAP} (use "
+                          "{{envelope_file}} delivery)")
+                log.error("launch %s: %s", aid, reason)
+                try:
+                    self.board.fail(aid, reason, claim_token=claim_token)
+                except BoardConflict:
+                    pass   # terminal already reached (cancel race)
+                except BoardError as exc:
+                    log.error("oversize-fail report for %s failed: %s",
+                              aid, exc)
+                self.audit.append(assignment_id=aid, specialist=specialist,
+                                  spec_hash=assignment.get("spec_hash") or "",
+                                  pid=None, outcome="launch-error")
+                return
             # Trusted template from config + data values via str.format —
             # the snapshot NEVER passes through a shell or a template.
             argv = [tok.format(**subst) for tok in entry.command]
-            out_fd, out_name = tempfile.mkstemp(prefix=f"assign-{aid}-out-")
-            err_fd, err_name = tempfile.mkstemp(prefix=f"assign-{aid}-err-")
+            out_fd, out_name = tempfile.mkstemp(prefix=f"assign-{aid}-out-",
+                                                dir=run_dir)
+            err_fd, err_name = tempfile.mkstemp(prefix=f"assign-{aid}-err-",
+                                                dir=run_dir)
             proc = subprocess.Popen(
                 argv,
                 stdin=subprocess.PIPE if envelope_path is None else subprocess.DEVNULL,
                 stdout=out_fd,
                 stderr=err_fd,
+                env={key: os.environ[key] for key in CHILD_ENV_KEYS
+                     if key in os.environ},   # minimal, unprivileged profile
                 start_new_session=True,   # children survive terminal signals
             )
             os.close(out_fd)
@@ -762,8 +846,22 @@ class AssignmentPoller:
         try:
             self.board.start(aid, claim_token)
         except BoardError as exc:
-            log.error("start %s failed: %s — terminating child", aid, exc)
+            # The child is terminated AND the assignment must leave
+            # 'claimed': the claim token lives only in this process and
+            # nothing else (no reaper yet, poller scans only 'queued')
+            # would ever move it — the task would lie in-progress forever.
             _terminate(proc)
+            log.error("start %s failed: %s — child terminated, failing "
+                      "assignment", aid, exc)
+            try:
+                self.board.fail(aid, f"start failed: {exc}",
+                                claim_token=claim_token)
+            except BoardConflict:
+                pass   # already terminal server-side (cancel race)
+            except BoardError as fail_exc:
+                log.error("start-fail report for %s failed too: %s — the "
+                          "recovery sweep will fail it on next start",
+                          aid, fail_exc)
             self.audit.append(assignment_id=aid, specialist=specialist,
                               spec_hash=assignment.get("spec_hash") or "",
                               pid=proc.pid, outcome="start-failed")
@@ -772,9 +870,9 @@ class AssignmentPoller:
         # Snapshot the final-report ids now: a NEW final after exit means
         # the agent wrote its own (no server clock math needed).
         try:
-            finals_before = frozenset(
-                r["id"] for r in self.board.task_reports(assignment["task_id"])
-                if r.get("kind") == "final")
+            finals_before = _final_report_ids(
+                self.board.task_reports(assignment["task_id"]),
+                context=f"assignment {aid} start")
         except BoardError:
             finals_before = frozenset()   # complete falls back — safe side
         self._children[aid] = _Child(
@@ -853,9 +951,9 @@ class AssignmentPoller:
 
     def _complete(self, aid: int, child: _Child) -> None:
         try:
-            finals_now = {r["id"] for r in
-                          self.board.task_reports(child.assignment["task_id"])
-                          if r.get("kind") == "final"}
+            finals_now = _final_report_ids(
+                self.board.task_reports(child.assignment["task_id"]),
+                context=f"assignment {aid} complete")
         except BoardError:
             finals_now = set(child.finals_before)  # cannot prove → fallback
         agent_wrote_final = bool(finals_now - child.finals_before)
@@ -876,6 +974,24 @@ class AssignmentPoller:
                        child.stderr_path)
         del self._children[aid]
         log.info("supervise: assignment %s → %s", aid, outcome)
+
+
+def _final_report_ids(reports: list[dict[str, Any]], *,
+                      context: str) -> frozenset[int]:
+    """Ids of kind='final' reports. Records without an int id are logged
+    and skipped — a malformed item must surface as a warning, never as a
+    KeyError crashing the supervision loop. A skipped record can only
+    push the poller toward the fallback final (safe side)."""
+    ids: set[int] = set()
+    for record in reports:
+        rid = record.get("id") if isinstance(record, dict) else None
+        if isinstance(rid, int) and record.get("kind") == "final":
+            ids.add(rid)
+        elif not isinstance(rid, int):
+            log.warning("%s: report record without int id skipped: %r",
+                        context, sorted(record, key=str)[:8]
+                        if isinstance(record, dict) else record)
+    return frozenset(ids)
 
 
 def _tail(path: Path, limit: int = STDERR_TAIL_CHARS) -> str:
@@ -939,7 +1055,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=str(_config_dir() / "poller.yaml"),
                         help="path to poller.yaml (default: ~/.config/mnemos-eyes/poller.yaml)")
     parser.add_argument("--once", action="store_true",
-                        help="one sweep+poll cycle, then exit (smoke mode)")
+                        help="single cycle in DRY-RUN mode: log the launch "
+                             "decision per queued assignment, then exit — "
+                             "no claims, no children, no board mutations")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -967,7 +1085,7 @@ def main(argv: list[str] | None = None) -> int:
     board = BoardClient(config.board_url, token,
                         verify=config.ca_bundle or True)
     audit = AuditLog(config.audit_path)
-    poller = AssignmentPoller(config, board, audit)
+    poller = AssignmentPoller(config, board, audit, dry_run=args.once)
 
     def _on_signal(signum: int, _frame: Any) -> None:
         log.info("signal %s received — stopping after this cycle", signum)

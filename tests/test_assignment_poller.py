@@ -71,6 +71,7 @@ class FakeBoard:
         self._next_report = 1
         self.calls: list[tuple] = []
         self.heartbeat_conflict: set[int] = set()
+        self.start_errors: set[int] = set()
 
     # -- helpers for test arrangement -------------------------------------
     def add_assignment(self, aid: int, *, task_id="t-1", specialist="gcw-tester",
@@ -123,6 +124,8 @@ class FakeBoard:
     def start(self, assignment_id: int, claim_token: str):
         self.calls.append(("start", assignment_id, claim_token))
         a = self.assignments[assignment_id]
+        if assignment_id in self.start_errors:
+            raise BoardError(500, "start", "server hiccup")
         if self.tokens.get(assignment_id) != claim_token:
             raise BoardError(403, "start", "token mismatch")
         if a["state"] != "claimed":
@@ -350,33 +353,55 @@ class TestAllowlist:
 
 # ------------------------------------------------------------ launch (A2/A3)
 class TestLaunch:
-    def test_claim_start_spawn_and_audit(self, tmp_path):
+    def test_claim_sends_own_executor_id_never_the_pin(self, tmp_path):
+        """P2-1: the claim carries the poller's OWN executor designation
+        from config. Forwarding the assignment's executor pin would
+        attribute laptop claims to a remote executor in the derived
+        executors view and, once pin-enforcement lands (ARCH-9), let this
+        poller pass the check on other executors' pins."""
         board = FakeBoard()
-        board.add_assignment(5, executor_id="exec-alpha")
-        cfg = make_config(tmp_path, EXIT_OK_CMD)
+        board.add_assignment(5, executor_id="exec-pinned-remote")
+        cfg = make_config(tmp_path, EXIT_OK_CMD,
+                          executor_id="laptop-exec-9")
         poller = make_poller(cfg, board)
         poller.poll_once()
         claim = next(c for c in board.calls if c[0] == "claim")
         assert claim[2] == "test-poller"               # claimed_by
-        assert claim[3] == "exec-alpha"                # executor_id forwarded
-        assert board.assignments[5]["state"] == "running"
+        assert claim[3] == "laptop-exec-9"             # OWN id, not the pin
+        assert "exec-pinned-remote" not in {c[3] for c in board.calls
+                                            if c[0] == "claim"}
+        wait_for_reap(poller, board)
+        # default: no executor_id in config → empty string on the wire
+        board2 = FakeBoard()
+        board2.add_assignment(6, executor_id="exec-pinned-remote")
+        poller2 = make_poller(make_config(tmp_path, EXIT_OK_CMD), board2)
+        poller2.poll_once()
+        claim2 = next(c for c in board2.calls if c[0] == "claim")
+        assert claim2[3] == ""
+        wait_for_reap(poller2, board2)
+
+    def test_start_spawn_and_audit(self, tmp_path):
+        board = FakeBoard()
+        board.add_assignment(7)
+        cfg = make_config(tmp_path, EXIT_OK_CMD)
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        assert board.assignments[7]["state"] == "running"
         launched = [a for a in read_audit(cfg.audit_path)
                     if a["outcome"] == "launched"]
         assert len(launched) == 1
-        assert launched[0]["assignment_id"] == 5
-        assert launched[0]["spec_hash"] == board.assignments[5]["spec_hash"]
+        assert launched[0]["assignment_id"] == 7
+        assert launched[0]["spec_hash"] == board.assignments[7]["spec_hash"]
         assert launched[0]["pid"] > 0
         wait_for_reap(poller, board)
 
-    def test_envelope_delivered_via_stdin(self, tmp_path, monkeypatch):
+    def test_envelope_delivered_via_stdin(self, tmp_path):
         out = tmp_path / "delivered.txt"
-        monkeypatch.setenv("POLLER_TEST_OUT", str(out))
-        cmd = [sys.executable, "-c",
-               "import os, sys; open(os.environ['POLLER_TEST_OUT'], 'w')"
-               ".write(sys.stdin.read())"]
+        script = ("import sys; open(%r, 'w').write(sys.stdin.read())"
+                  % str(out))
         board = FakeBoard()
         board.add_assignment(2, task_id="t-stdin")
-        cfg = make_config(tmp_path, cmd)
+        cfg = make_config(tmp_path, [sys.executable, "-c", script])
         poller = make_poller(cfg, board)
         poller.poll_once()
         wait_for_reap(poller, board)
@@ -399,9 +424,92 @@ class TestLaunch:
         wait_for_reap(poller, board)
         delivered = out.read_text(encoding="utf-8")
         assert "MODE: assignment-run" in delivered
-        # the envelope temp file is cleaned up after the run
+        # launch artifacts live in the STATE dir — after the run, none left
         leftovers = list(Path(cfg.audit_path).parent.glob("assign-*"))
         assert not leftovers
+
+    def test_temp_files_live_in_state_dir_while_child_runs(self, tmp_path):
+        """P3-6 companion: while a child is alive its envelope/stdout/stderr
+        files ARE present in the state dir (the cleanup assertion in the
+        test above is not vacuously green)."""
+        cmd = [sys.executable, "-c",
+               "import sys, time; time.sleep(30)", "{envelope_file}"]
+        board = FakeBoard()
+        board.add_assignment(14)
+        cfg = make_config(tmp_path, cmd)
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        state_dir = Path(cfg.audit_path).parent
+        assert list(state_dir.glob("assign-14-*")), "no live launch files"
+        # teardown via the heartbeat-409 kill path (also cleans files)
+        board.heartbeat_conflict.add(14)
+        deadline = time.monotonic() + 5
+        while poller.active_assignment_ids and time.monotonic() < deadline:
+            poller.send_heartbeats()
+            time.sleep(0.01)
+        assert not poller.active_assignment_ids
+        assert not list(state_dir.glob("assign-14-*"))
+
+    def test_child_gets_minimal_env_only(self, tmp_path, monkeypatch):
+        """P2-2: children run with the minimal env allowlist (ADR 0009 §9)
+        — no user-env inheritance; the machine token IS passed (REPORTS)."""
+        out = tmp_path / "env-dump.txt"
+        monkeypatch.setenv("POLLER_SECRET", "must-not-leak")
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/secret/agent.sock")
+        script = ("import os; open(%r, 'w').write("
+                  "chr(10).join(sorted(os.environ)))" % str(out))
+        board = FakeBoard()
+        board.add_assignment(15)
+        cfg = make_config(tmp_path, [sys.executable, "-c", script])
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        wait_for_reap(poller, board)
+        child_env = set(out.read_text(encoding="utf-8").splitlines())
+        assert "POLLER_SECRET" not in child_env
+        assert "SSH_AUTH_SOCK" not in child_env
+        assert {"PATH", "HOME", "VESMARO_BOARD_TOKEN"} <= child_env
+
+    def test_oversized_envelope_refused_before_spawn(self, tmp_path):
+        """P3-1: an envelope too big for the stdin pipe buffer is refused
+        with a fail carrying the reason — the poller must never block on
+        the stdin write."""
+        from scripts.assignment_poller import STDIN_ENVELOPE_CAP
+        board = FakeBoard()
+        board.add_assignment(16, snapshot="x" * (STDIN_ENVELOPE_CAP + 10_000))
+        cfg = make_config(tmp_path, EXIT_OK_CMD)     # stdin delivery
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        fail = next(c for c in board.calls if c[0] == "fail")
+        assert "exceeds stdin cap" in fail[2]
+        assert "{envelope_file}" in fail[2]          # the remedy is named
+        assert fail[3] == board.tokens[16]
+        assert board.assignments[16]["state"] == "failed"
+        assert not poller.active_assignment_ids      # nothing was spawned
+        audit = read_audit(cfg.audit_path)
+        assert audit[-1]["outcome"] == "launch-error"
+        assert audit[-1]["pid"] is None
+
+    def test_dry_run_never_mutates(self, tmp_path, caplog):
+        """P3-4: --once dry-run logs decisions only — no claim, no child,
+        no refusal report (a spawned child outliving the process would
+        strand the claim token)."""
+        import logging
+        board = FakeBoard()
+        board.add_assignment(17)                              # allowlist hit
+        board.add_assignment(18, specialist="gcw-stranger")   # miss
+        cfg = make_config(tmp_path, SLEEP_CMD)
+        poller = AssignmentPoller(cfg, board, AuditLog(cfg.audit_path),
+                                  dry_run=True)
+        with caplog.at_level(logging.INFO, logger="assignment-poller"):
+            poller.run(max_cycles=1)
+        methods = {c[0] for c in board.calls}
+        assert methods == {"list"}                 # reads only
+        assert not poller.active_assignment_ids
+        assert not Path(cfg.audit_path).exists()   # no local artifacts
+        messages = " | ".join(r.message for r in caplog.records)
+        assert "would claim" in messages and "allowlist miss" in messages
+        assert board.assignments[17]["state"] == "queued"
+        assert board.assignments[18]["state"] == "queued"
 
     def test_scooped_claim_left_alone(self, tmp_path):
         board = FakeBoard()
@@ -412,6 +520,54 @@ class TestLaunch:
         cfg = make_config(tmp_path, EXIT_OK_CMD)
         make_poller(cfg, board).poll_once()   # lists 'queued' → not returned
         assert not any(c[0] == "claim" for c in board.calls)
+
+    def test_start_failure_fails_assignment_and_kills_child(self, tmp_path):
+        """P1: when board.start() errors the child is terminated AND the
+        assignment is failed with the claim token — otherwise it would sit
+        in 'claimed' forever (the token lives only here; the poller scans
+        only 'queued'; no server reaper yet) and the task column would lie
+        in-progress."""
+        board = FakeBoard()
+        board.add_assignment(8)
+        board.start_errors.add(8)
+        cfg = make_config(tmp_path, SLEEP_CMD)   # alive until terminated
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        audit = read_audit(cfg.audit_path)
+        pid = next(a["pid"] for a in audit if a["outcome"] == "start-failed")
+        assert pid > 0
+        # the child is really dead
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                break
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+        # ...and the assignment left 'claimed' via fail with the token
+        fail = next(c for c in board.calls if c[0] == "fail")
+        assert fail[1] == 8
+        assert fail[3] == board.tokens[8]           # claim_token auth
+        assert fail[2].startswith("start failed:")
+        assert board.assignments[8]["state"] == "failed"
+        assert not poller.active_assignment_ids
+        # launch temp files (state dir) are cleaned up
+        assert not list(Path(cfg.audit_path).parent.glob("assign-*"))
+
+    def test_start_failure_conflict_race_swallowed(self, tmp_path):
+        """BoardConflict on the start-failure fail (cancelled meanwhile) is
+        tolerated — the server state is already terminal."""
+        board = FakeBoard()
+        board.add_assignment(9)
+        board.start_errors.add(9)
+        board.assignments[9]["state"] = "cancelled"  # fail → BoardConflict
+        cfg = make_config(tmp_path, EXIT_OK_CMD)
+        poller = make_poller(cfg, board)
+        poller.poll_once()                            # must not raise
+        assert board.assignments[9]["state"] == "cancelled"
+        assert not poller.active_assignment_ids
 
 
 # ------------------------------------------------------------- supervision
@@ -580,6 +736,32 @@ class TestRecoverySweep:
             if orphan.poll() is None:
                 orphan.kill()
                 orphan.wait()
+
+    def test_orphan_with_foreign_argv0_is_not_signalled(self, tmp_path):
+        """P3-2: the argv0 plausibility check is EXACT basename equality —
+        a reused pid running something else must never be killed (and
+        substring matching would let "zcode" match "zcode-helper")."""
+        import shutil
+        sleeper = shutil.which("sleep")
+        if sleeper is None:                       # pragma: no cover
+            pytest.skip("no /usr/bin/sleep on this host")
+        orphan = subprocess.Popen([sleeper, "30"], start_new_session=True)
+        try:
+            board = FakeBoard()
+            board.add_assignment(35, state="running",
+                                 claimed_by="test-poller")
+            cfg = make_config(tmp_path, SLEEP_CMD)  # expects python3, not sleep
+            audit = AuditLog(cfg.audit_path)
+            audit.append(assignment_id=35, specialist="gcw-tester",
+                         spec_hash="x", pid=orphan.pid, outcome="launched")
+            AssignmentPoller(cfg, board, audit).recovery_sweep()
+            assert orphan.poll() is None          # alive: NOT signalled
+            # the assignment is still failed unconditionally (no liveness
+            # check in the sweep) — only the kill is best-effort
+            assert board.assignments[35]["state"] == "failed"
+        finally:
+            orphan.terminate()
+            orphan.wait()
 
 
 # ---------------------------------------------------------------- BoardClient

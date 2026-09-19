@@ -14,6 +14,12 @@ board_url: https://vesmaro.abyss.lab
 # reports, and as the ownership match in the recovery sweep.
 executor_name: laptop-poller
 
+# This poller's OWN executor designation (ARCH-9), recorded on claim into
+# claimed_by_executor. Leave empty until the executor registry (ARCH-9)
+# exists; NEVER paste an assignment's executor pin here — the poller must
+# not claim-pin other executors' assignments (spoofing gate, CWE-290).
+executor_id: ""
+
 poll_interval: 10        # seconds between GET /api/assignments?state=queued
 poll_jitter: 2           # ± seconds on each interval
 heartbeat_interval: 60   # poller-driven liveness ticks (ADR 0009 §4)

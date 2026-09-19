@@ -56,7 +56,22 @@ board (vesmaro.abyss.lab)                 laptop
    `poller start: board=… executor=… allowlist=N entr(y/ies)`.
 
 Разовый прогон без systemd: `VESMARO_BOARD_TOKEN=… python3
-scripts/assignment_poller.py --once` (один sweep + один poll-цикл).
+scripts/assignment_poller.py --once` — **dry-run**: один цикл, по каждому
+queued-назначению логируется решение (было бы запущено / allowlist miss),
+без claim, без запуска детей и без мутаций борда (ребёнок, переживший
+процесс, оставил бы claim_token в никуда).
+
+## Окружение дочерних процессов
+
+Дети запускаются с минимальным env (ADR 0009 §9, непривилегированный
+профиль): только `PATH`, `HOME`, `TMPDIR`, `LANG` и
+`VESMARO_BOARD_TOKEN`. Токен передаётся намеренно — блок REPORTS в
+envelope требует от агента самостоятельной отправки отчётов; это
+единственный креденшл, который получает ребёнок. SSH_AGENT, cloud-creds
+и прочий user-env наследоваться НЕ должны. Расширять список
+(`CHILD_ENV_KEYS` в `scripts/assignment_poller.py`) можно только
+осознанно: каждый добавленный ключ выдаётся всем автозапускаемым
+агентам из allowlist.
 
 ## Что делает поллер
 
@@ -64,8 +79,10 @@ scripts/assignment_poller.py --once` (один sweep + один poll-цикл).
 - allowlist-матч `(harness, specialist)`: промах → **skip + log + один
   refusal-report** на карточку задачи, назначение остаётся `queued`
   (fail-closed, A3);
-- claim (machine-токен) → из ответа берёт `claim_token` и
-  `spec_snapshot` — работает ТОЛЬКО со снапшотом, живой spec не читает (A2);
+- claim (machine-токен), в claim идёт собственный `executor_id` из
+  конфига (пуст до ARCH-9) — пин назначения никогда не пробрасывается;
+  из ответа берёт `claim_token` и `spec_snapshot` — работает ТОЛЬКО со
+  снапшотом, живой spec не читает (A2);
 - рендерит assignment envelope (ADR 0009 §5) и передаёт её агенту данными
   (stdin или `{envelope_file}`) — без shell-интерполяции содержимого spec;
 - `start`, затем heartbeat каждые 60 с **от поллера**, пока процесс жив;
@@ -73,9 +90,11 @@ scripts/assignment_poller.py --once` (один sweep + один poll-цикл).
 - exit 0 → `complete`; если агент не написал свой final-report — поллер
   ставит fallback `exit 0, agent report above`; exit ≠0 → `fail` с
   `process exit N: <хвост stderr>`;
-- на старте — recovery sweep: свои `claimed|running` без живого локального
-  процесса → `fail` с `poller restart, no local process` (закрывает окно
-  at-most-once без серверного реапера).
+- на старте — recovery sweep: свои `claimed|running` FAIL-ятся
+  **безусловно** (после рестарта claim_token-ы утеряны, завершить их
+  некому — окно at-most-once закрывается здесь; проверки живости нет);
+  если аудит-лог помнит pid и он всё ещё похож на нашу команду (точное
+  совпадение argv0), сирота получает SIGTERM best-effort.
 
 ## Диагностика
 
