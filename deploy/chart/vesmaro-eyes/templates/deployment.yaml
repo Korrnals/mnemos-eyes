@@ -60,6 +60,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "vesmaro-eyes.boardTokenSecretName" . }}
                   key: {{ .Values.boardToken.existingSecretKey }}
+            {{- if .Values.uiToken.enabled }}
+            # ADR 0009 §2 A1: owner UI token (assignment create/cancel +
+            # UI mutations). Absent → server legacy mode: BOARD_TOKEN
+            # serves both channels (warning in logs). See RUNBOOK.md §6.
+            - name: VESMARO_UI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vesmaro-eyes.uiTokenSecretName" . }}
+                  key: {{ .Values.uiToken.existingSecretKey }}
+            {{- end }}
             {{- if .Values.memoryRegistry.configMap.create }}
             - name: VESMARO_MEMORY_CONFIG
               value: /config/memories.yaml
