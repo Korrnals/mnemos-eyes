@@ -1,0 +1,71 @@
+# vesmaro-eyes assignment poller — example configuration (ADR 0009 phase 2).
+#
+# Install as ~/.config/mnemos-eyes/poller.yaml and `chmod 0600` it. The file
+# carries NO secrets: the machine token is read only from the environment
+# variable VESMARO_BOARD_TOKEN (systemd EnvironmentFile, shell export, …).
+#
+# board_url is a plain base URL (ADR 0009 Amendment 2 §1): direct HTTPS
+# today, a local mesh endpoint after R4 — the poller cannot tell and does
+# not care.
+board_url: https://vesmaro.abyss.lab
+
+# Declared executor identity (ADR 0009 §8: declared, unverified on HTTP).
+# Used as claim `claimed_by`, as the `agent` string of poller-written
+# reports, and as the ownership match in the recovery sweep.
+executor_name: laptop-poller
+
+# This poller's OWN executor designation (ARCH-9), recorded on claim into
+# claimed_by_executor. Leave empty until the executor registry (ARCH-9)
+# exists; NEVER paste an assignment's executor pin here — the poller must
+# not claim-pin other executors' assignments (spoofing gate, CWE-290).
+executor_id: ""
+
+poll_interval: 10        # seconds between GET /api/assignments?state=queued
+poll_jitter: 2           # ± seconds on each interval
+heartbeat_interval: 60   # poller-driven liveness ticks (ADR 0009 §4)
+
+# The board's TLS is lab-issued (self-signed): point at the lab CA instead
+# of disabling verification. Empty/absent = system trust store; a path to a
+# MISSING file refuses to start (fail-closed, not silent TLS-off).
+# ca_bundle: ~/.config/mnemos-eyes/lab-ca.crt
+
+# A3 allowlist: THE launch gate. (harness, specialist) → command template.
+# The template is a list of argv tokens (NO shell). Allowed placeholders:
+#   {specialist}    — substituted with the assignment's specialist
+#   {envelope_file} — when present anywhere in the template, the assignment
+#                     envelope (launch prompt) is written to a temp file and
+#                     its path substituted; otherwise the envelope is piped
+#                     to the child's stdin. Spec content is NEVER
+#                     interpolated into the template — data is data (A3).
+# specialists: exact names, or "*" to trust the whole harness.
+allowlist:
+  - harness: zcode
+    # Working stub for the zcode CLI headless call. `-p` (print / headless
+    # mode) reads the prompt from stdin and runs without the TUI — verify
+    # against your installed version (`zcode --help`) and adjust; the owner
+    # pins the real invocation before first launch.
+    command:
+      - zcode
+      - -p
+    specialists:
+      - gcw-tech-lead
+      - gcw-senior-system-engineer
+      - gcw-senior-security-engineer
+      - gcw-senior-qa-engineer
+      - gcw-sre-devops
+      - gcw-tech-writer
+      - gcw-agent-architect
+  - harness: zcode
+    # Example of the {envelope_file} delivery (envelope as a file instead
+    # of stdin) — keep whichever form your harness prefers, delete the other.
+    command:
+      - zcode
+      - -p
+      - --prompt-file
+      - "{envelope_file}"
+    specialists:
+      - gcw-senior-frontend-developer
+
+# Optional local overrides (defaults shown):
+# audit_path: ~/.local/state/mnemos-eyes/poller-audit.jsonl
+# lock_path:  ~/.local/state/mnemos-eyes/poller.lock
