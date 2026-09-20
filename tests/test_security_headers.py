@@ -7,7 +7,7 @@ being superseded by no-store.
 
 from __future__ import annotations
 
-CSP = ("default-src 'self'; script-src 'self'; object-src 'none'; "
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; "
        "base-uri 'self'; frame-ancestors 'none'; connect-src 'self'; "
        "img-src 'self' data:")
 
