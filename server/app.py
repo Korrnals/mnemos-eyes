@@ -484,7 +484,7 @@ app = FastAPI(title="vesmaro-eyes", version="1.7.0", lifespan=lifespan)
 # Header-only middleware: no body buffering, so SSE (/api/events) keeps
 # streaming (its no-cache is deliberately superseded by no-store — an
 # EventSource never caches either way).
-_CSP = ("default-src 'self'; script-src 'self'; object-src 'none'; "
+_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; "
         "base-uri 'self'; frame-ancestors 'none'; connect-src 'self'; "
         "img-src 'self' data:")
 
