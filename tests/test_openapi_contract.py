@@ -48,6 +48,13 @@ class TestSchemasPresent:
         "ExecutorOut", "ExecutorListOut", "ExecutorRegister",
         "ExecutorRegisteredOut", "ExecutorPatch", "ExecutorStateChangeOut",
         "ExecutionSettingsOut", "ExecutionSettingsBody",
+        # SCHED-1 S1 (ADR 0013 §2): automation contracts — schedules/hooks/
+        # journal/run-now/status/settings, for codegen
+        "ScheduleOut", "SchedulesOut", "ScheduleCreate", "SchedulePatch",
+        "HookOut", "HooksOut", "HookCreate", "HookPatch",
+        "LaunchOut", "LaunchesOut", "ConditionItem", "ScheduleRunOut",
+        "AutomationStatusOut", "AutomationSettingsOut",
+        "AutomationSettingsBody", "RuleDeletedOut",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -267,3 +274,66 @@ class TestKeyRoutesReferenceSchemas:
             == "ExecutionSettingsBody"
         assert _ref_name(_response_schema(
             spec, "/api/settings/execution", "put")) == "ExecutionSettingsOut"
+
+    def test_automation(self, spec):
+        """SCHED-1 S1 (ADR 0013 §2): the automation routes must reference
+        the contract models — the freeze-frame portable contract for the
+        future /system/automation UI. ScheduleOut carries the server-owned
+        clock columns; the CREATE body must NOT declare them (a client
+        value is ignored by contract)."""
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/schedules", "get")) == "SchedulesOut"
+        post = spec["paths"]["/api/automation/schedules"]["post"]
+        assert _ref_name(post["requestBody"]["content"]
+                         ["application/json"]["schema"]) == "ScheduleCreate"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/schedules", "post", "201")) == "ScheduleOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/schedules/{rule_id}", "patch")) \
+            == "ScheduleOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/hooks", "get")) == "HooksOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/hooks", "post", "201")) == "HookOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/launches", "get")) == "LaunchesOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/schedules/{rule_id}/run", "post")) \
+            == "ScheduleRunOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/status", "get")) == "AutomationStatusOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/automation/settings", "get")) == "AutomationSettingsOut"
+        put = spec["paths"]["/api/automation/settings"]["put"]
+        assert _ref_name(put["requestBody"]["content"]
+                         ["application/json"]["schema"]) \
+            == "AutomationSettingsBody"
+
+        sched = _components(spec)["ScheduleOut"]
+        must_have = {"id", "name", "enabled", "target_kind", "task_id",
+                     "specialist", "harness", "executor_id", "trigger_kind",
+                     "trigger_value", "window_from", "window_to",
+                     "max_runs_per_day", "cooldown_s", "next_run_at",
+                     "last_run_at", "created_by", "created_at", "updated_at"}
+        assert must_have <= set(sched.get("properties", {}))
+        # the schedule clock is server-owned: NOT client-declared
+        create = _components(spec)["ScheduleCreate"]
+        assert not ({"next_run_at", "last_run_at", "enabled"}
+                    & set(create.get("properties", {})))
+
+        hook = _components(spec)["HookOut"]
+        must_have_hook = {"id", "name", "enabled", "on", "condition",
+                          "source_allowlist", "action", "action_payload",
+                          "cooldown_s", "budget", "created_by", "created_at",
+                          "updated_at"}
+        assert must_have_hook <= set(hook.get("properties", {}))
+
+        launch = _components(spec)["LaunchOut"]
+        must_have_launch = {"id", "rule_id", "rule_kind", "rule_name",
+                            "run_at", "event_id", "trigger", "origin",
+                            "decision", "reason", "assignment_id",
+                            "attempted_at"}
+        assert must_have_launch <= set(launch.get("properties", {}))
+        listing = _components(spec)["LaunchesOut"]
+        assert {"items", "next_cursor", "truncated"} <= set(
+            listing.get("properties", {}))

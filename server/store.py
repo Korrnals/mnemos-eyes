@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -171,6 +172,257 @@ def presence_from_last_seen(last_seen: str) -> str:
         return "stale"
     return "offline"
 
+
+# --------------------------------------------------- automation (SCHED-1 S1)
+# ADR 0013 §2: scheduler & hooks — S1 is CONTRACTS ONLY (no engine, no
+# loops, no ECA — those are S2 behind the T2 gate). Automation is a
+# separate domain answering "when / in response to what", composed with
+# (never merged into) the executor routing chain.
+SCHEDULE_TRIGGER_KINDS = frozenset({"interval", "time-of-day"})
+HOOK_ACTIONS = frozenset({"create_assignment", "notify"})
+# Server constant (ADR 0013 §2/C-3): the closed set of hook source events.
+# Structurally excludes `automation.*` (anti-loop layer 2) and heartbeat
+# events (per-tick noise ban, Amd 2 §7).
+HOOK_EVENT_WHITELIST = frozenset({
+    "task.moved",
+    "assignment.failed",
+    "assignment.expired",
+    "task.validation-timeout",   # WF-1 (future emitter)
+    "executor.offline",          # notify-only per SCHED-1 §5 (enforced below)
+})
+RULE_CONDITION_OPS = frozenset({"eq", "ne", "in"})
+# Condition sources (ADR 0013 §3): origin classes a rule may listen to.
+# ``automation`` is NOT a member and can never be allowlisted — structural
+# anti-loop layer 1. ``machine`` for create_assignment is an explicit
+# per-rule owner opt-in, audited old→new.
+HOOK_SOURCE_ORIGINS = frozenset({"ui", "server", "machine"})
+# Action-dependent defaults (SE А-1, АРХКОМ-5): notify hears every origin
+# except automation; create_assignment only ui/server.
+HOOK_SOURCE_DEFAULTS: dict[str, tuple[str, ...]] = {
+    "notify": ("machine", "server", "ui"),
+    "create_assignment": ("server", "ui"),
+}
+# ADR 0013 §2: interval triggers must be >= 60 s (422 below that).
+SCHEDULE_MIN_INTERVAL_S = 60.0
+SCHEDULE_MAX_INTERVAL_S = 366 * 24 * 3600   # 1 year cap: bigger values overflow datetime arithmetic
+SCHEDULE_DEFAULT_MAX_RUNS_PER_DAY = 4
+SCHEDULE_DEFAULT_COOLDOWN_S = 300
+# ADR 0013 §6 starting values: per-rule default 4/day lives in-row; the
+# global daily cap lives in board_meta (the S2 engine executes it).
+AUTOMATION_ENABLED_META_KEY = "automation.enabled"
+AUTOMATION_CAP_META_KEY = "automation.cap.global_per_day"
+AUTOMATION_DEFAULT_GLOBAL_CAP = 10  # ADR 0013 §6 starting value
+
+# Condition field allowlist (SCHED-1 H3 / ADR 0013 §3): STRUCTURED fields
+# only — never free text (spec, report bodies, notes). A None enum means
+# "closed set impossible" (free string value, length-capped); every other
+# field carries its dictionary so the UI form is a triple of selects over
+# server data (Frontend blocker, АРХКОМ-5).
+RULE_CONDITION_FIELD_ENUMS: dict[str, tuple[str, ...] | None] = {
+    "col": tuple(COLUMNS),
+    "status": tuple(sorted(TASK_STATUSES)),
+    "state": tuple(sorted(ASSIGNMENT_STATES)),
+    "env": tuple(sorted(VALID_ENVS)),
+    "priority": tuple(sorted(TASK_PRIORITIES)),
+    "transport": tuple(sorted(EXECUTOR_TRANSPORTS)),
+    "project": None,
+    "specialist": None,
+    "executor_id": None,
+    # "harness" joins via _condition_field_enums() — its enum is
+    # Store.KNOWN_HARNESSES (late binding: the class lives below).
+}
+
+
+def _condition_field_enums() -> dict[str, tuple[str, ...] | None]:
+    """The FULL condition-field dictionary — the static table plus the
+    harness enum (Store.KNOWN_HARNESSES). Single source for BOTH the CRUD
+    validation and the /status meta-dictionary, so the UI form can never
+    offer a field the validator would reject."""
+    enums = dict(RULE_CONDITION_FIELD_ENUMS)
+    enums["harness"] = tuple(sorted(Store.KNOWN_HARNESSES))
+    return enums
+_RULE_MAX_NAME = 120
+_RULE_MAX_CONDITION_CLAUSES = 8
+_RULE_MAX_IN_VALUES = 16
+_RULE_MAX_PAYLOAD_JSON = 4096
+
+
+class AutomationError(Exception):
+    """Base class for automation-domain violations (ADR 0013)."""
+
+
+class RuleNotFoundError(AutomationError):
+    """Unknown rule id (HTTP 404 upstream)."""
+
+
+class AutomationValidationError(AutomationError):
+    """Rule payload violates a contract (HTTP 422 upstream) — includes
+    duplicate names (S1 AC: name-duplicate answers 422, not 409)."""
+
+
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+# ISO-8601 duration subset: P[nW][nD][T[nH][nM][n[.]S]] — weeks/days/hours/
+# minutes/seconds only (no Y/M: calendar-ambiguous). At least one component
+# required; T requires at least one time component after it.
+_ISO_DURATION_RE = re.compile(
+    r"^P(?!$)(?:(\d+)W)?(?:(\d+)D)?"
+    r"(?:T(?!$)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$")
+
+
+def parse_iso8601_duration(value: str) -> float:
+    """ISO-8601 duration (P…T… subset, see _ISO_DURATION_RE) → seconds.
+
+    Raises AutomationValidationError on anything else — garbage must 422 at
+    the CRUD boundary (ADR 0013 §2), never reach the S2 tick loop."""
+    m = _ISO_DURATION_RE.fullmatch((value or "").strip())
+    if not m or not any(m.groups()):
+        raise AutomationValidationError(
+            f"invalid ISO-8601 duration: {value!r} "
+            "(expected e.g. 'PT15M', 'PT1H30M', 'P1D', 'P2W')")
+    w, d, h, mi, s = (float(g) if g else 0.0 for g in m.groups())
+    seconds = w * 7 * 86400 + d * 86400 + h * 3600 + mi * 60 + s
+    if seconds <= 0:
+        raise AutomationValidationError(
+            f"duration must be positive: {value!r}")
+    return seconds
+
+
+def _validate_hhmm(value: str, what: str) -> str:
+    v = (value or "").strip()
+    if not _HHMM_RE.fullmatch(v):
+        raise AutomationValidationError(
+            f"invalid {what}: {value!r} (expected 'HH:MM' UTC, 00:00–23:59)")
+    return v
+
+
+def _validate_window(window_from: Any, window_to: Any) -> tuple[str | None, str | None]:
+    """NULL/'' = always (the S1 default); otherwise both ends must be valid
+    'HH:MM' UTC — a half-open pair is ambiguous and therefore 422."""
+    def norm(v: Any) -> str | None:
+        if v is None or v == "":
+            return None
+        if not isinstance(v, str):
+            raise AutomationValidationError(
+                f"window value must be a 'HH:MM' string, got {type(v).__name__}")
+        return _validate_hhmm(v, "window value")
+    wf, wt = norm(window_from), norm(window_to)
+    if (wf is None) != (wt is None):
+        raise AutomationValidationError(
+            "window_from/window_to must be set together "
+            "(both empty = run window always)")
+    return wf, wt
+
+
+def validate_condition(raw: Any) -> list[dict[str, Any]]:
+    """Normalize + validate a hook condition [{field, op, value}] against
+    the closed allowlist (422 at CRUD time, not at fire time — ADR 0013
+    §2). Structured fields only; values checked against the field's enum
+    when one exists (the UI form has no free-text condition input)."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise AutomationValidationError("condition must be a list of clauses")
+    if len(raw) > _RULE_MAX_CONDITION_CLAUSES:
+        raise AutomationValidationError(
+            f"condition: max {_RULE_MAX_CONDITION_CLAUSES} clauses")
+    enums = _condition_field_enums()
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if (not isinstance(item, dict)
+                or set(item) != {"field", "op", "value"}):
+            raise AutomationValidationError(
+                f"condition clause must be exactly {{field, op, value}}: "
+                f"{item!r}")
+        field, op, value = item["field"], item["op"], item["value"]
+        if field not in enums:
+            raise AutomationValidationError(
+                f"unknown condition field: {field!r}; allowed: "
+                f"{sorted(enums)}")
+        if op not in RULE_CONDITION_OPS:
+            raise AutomationValidationError(
+                f"unknown condition op: {op!r}; allowed: "
+                f"{sorted(RULE_CONDITION_OPS)}")
+        enum = enums[field]
+        values: list[str]
+        if op == "in":
+            if (not isinstance(value, list) or not value
+                    or len(value) > _RULE_MAX_IN_VALUES):
+                raise AutomationValidationError(
+                    f"op 'in' needs a non-empty list (max "
+                    f"{_RULE_MAX_IN_VALUES}) as value")
+            values = value
+        else:
+            values = [value]
+        checked: list[str] = []
+        for v in values:
+            if not isinstance(v, str) or not v.strip():
+                raise AutomationValidationError(
+                    f"condition values must be non-empty strings: {v!r}")
+            v = v.strip()[:_RULE_MAX_NAME]
+            if enum is not None and v not in enum:
+                raise AutomationValidationError(
+                    f"condition value {v!r} is not in the '{field}' "
+                    f"dictionary: {list(enum)}")
+            if v not in checked:
+                checked.append(v)
+        out.append({"field": field, "op": op,
+                    "value": sorted(checked) if op == "in" else checked[0]})
+    return out
+
+
+def validate_source_allowlist(raw: Any, action: str) -> list[str]:
+    """Origin allowlist for a hook. ``None`` → the action-dependent default
+    (SE А-1). ``automation`` can never be allowlisted (anti-loop); machine
+    for create_assignment is the owner's explicit, audited opt-in."""
+    if action not in HOOK_ACTIONS:
+        raise AutomationValidationError(
+            f"unknown action: {action!r}; allowed: {sorted(HOOK_ACTIONS)}")
+    if raw is None:
+        return list(HOOK_SOURCE_DEFAULTS[action])
+    if not isinstance(raw, list) or not raw:
+        raise AutomationValidationError(
+            "source_allowlist must be a non-empty list of origins "
+            f"{sorted(HOOK_SOURCE_ORIGINS)}")
+    out: list[str] = []
+    for o in raw:
+        if not isinstance(o, str) or o not in HOOK_SOURCE_ORIGINS:
+            raise AutomationValidationError(
+                f"unknown source origin: {o!r}; allowed: "
+                f"{sorted(HOOK_SOURCE_ORIGINS)} ('automation' can never be "
+                "allowlisted)")
+        if o not in out:
+            out.append(o)
+    return sorted(out)
+
+
+def _compute_next_run(trigger_kind: str, trigger_value: str,
+                      now: datetime | None = None) -> str:
+    """Server-side schedule-clock write (ADR 0013 §2): the next due moment
+    from ``now``. interval → now + duration; time-of-day → the next UTC
+    occurrence (strictly after now). Inputs are pre-validated upstream —
+    this function is the single recompute point for POST/PATCH/enable."""
+    now = now or datetime.now(timezone.utc)
+    if trigger_kind == "interval":
+        seconds = parse_iso8601_duration(trigger_value)
+        if seconds < SCHEDULE_MIN_INTERVAL_S:
+            raise AutomationValidationError(
+                f"interval must be >= {int(SCHEDULE_MIN_INTERVAL_S)}s, "
+                f"got {trigger_value!r}")
+        return (now + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    hh, mm = _validate_hhmm(trigger_value, "trigger_value").split(":")
+    candidate = now.replace(hour=int(hh), minute=int(mm),
+                            second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate.isoformat(timespec="seconds")
+
+
+def _bump_iso_second(ts: str) -> str:
+    """+1 s on an ISO timestamp — the manual-run collision walk (see
+    run_schedule_now)."""
+    return (datetime.fromisoformat(ts)
+            + timedelta(seconds=1)).isoformat(timespec="seconds")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS board_meta (
     key   TEXT PRIMARY KEY,
@@ -324,6 +576,82 @@ CREATE TABLE IF NOT EXISTS executors (
     registered_at TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
+-- SCHED-1 S1 (ADR 0013 §2): automation contracts — additive only, no
+-- SEED_VERSION bump (task_assignments precedent). Three tables:
+-- schedules/hooks (the rules) + launches (the append-only journal).
+-- ``enabled DEFAULT 0``: creation is disabled; enablement is a separate
+-- audited action (rule.toggled) — there is NO second pause column.
+-- ``next_run_at`` is written by the server only (POST/PATCH/enable
+-- recompute from now); the S1 manual run-now deliberately does NOT touch
+-- it (schedule-clock family belongs to the tick, ADR 0013 §7).
+CREATE TABLE IF NOT EXISTS schedules (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT NOT NULL UNIQUE,
+    enabled          INTEGER NOT NULL DEFAULT 0,
+    target_kind      TEXT NOT NULL DEFAULT 'task'
+                     CHECK (target_kind IN ('task')),
+    task_id          TEXT NOT NULL,
+    specialist       TEXT NOT NULL,
+    harness          TEXT NOT NULL DEFAULT 'zcode',
+    executor_id      TEXT NOT NULL DEFAULT '',
+    trigger_kind     TEXT NOT NULL
+                     CHECK (trigger_kind IN ('interval','time-of-day')),
+    trigger_value    TEXT NOT NULL,
+    window_from      TEXT,
+    window_to        TEXT,
+    max_runs_per_day INTEGER NOT NULL DEFAULT 4,
+    cooldown_s       INTEGER NOT NULL DEFAULT 300,
+    next_run_at      TEXT,
+    last_run_at      TEXT,
+    created_by       TEXT NOT NULL DEFAULT 'owner',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+-- "on" and "trigger" are SQLite keywords — quoted everywhere they appear.
+-- condition/source_allowlist/action_payload are JSON TEXT validated at the
+-- CRUD boundary (422, never at fire time). budget = per-rule launches/day.
+CREATE TABLE IF NOT EXISTS hooks (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT NOT NULL UNIQUE,
+    enabled          INTEGER NOT NULL DEFAULT 0,
+    "on"             TEXT NOT NULL,
+    condition        TEXT NOT NULL DEFAULT '[]',
+    source_allowlist TEXT NOT NULL DEFAULT '[]',
+    action           TEXT NOT NULL
+                     CHECK (action IN ('create_assignment','notify')),
+    action_payload   TEXT NOT NULL DEFAULT '{}',
+    cooldown_s       INTEGER NOT NULL DEFAULT 300,
+    budget           INTEGER NOT NULL DEFAULT 4,
+    created_by       TEXT NOT NULL DEFAULT 'owner',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+-- Append-only launch journal. rule_name is a SNAPSHOT: the journal stays
+-- readable after rule surgery. Idempotency via TWO partial unique indexes
+-- (SE deltas, АРХКОМ-5): a schedule occurrence is (rule_id, run_at); a
+-- hook firing is (rule_id, event_id) — the monotonic audit-row id, not a
+-- second timestamp. Manual run-now shares the schedule key: run_at is the
+-- click time, bumped +1 s on a same-second collision (bounded walk).
+CREATE TABLE IF NOT EXISTS launches (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id       INTEGER NOT NULL,
+    rule_kind     TEXT NOT NULL CHECK (rule_kind IN ('schedule','hook')),
+    rule_name     TEXT NOT NULL,
+    run_at        TEXT NOT NULL,
+    event_id      INTEGER,
+    "trigger"     TEXT NOT NULL CHECK ("trigger" IN ('tick','manual','event')),
+    origin        TEXT NOT NULL DEFAULT '',
+    decision      TEXT NOT NULL
+                  CHECK (decision IN ('launched','skipped','missed')),
+    reason        TEXT NOT NULL DEFAULT '',
+    assignment_id INTEGER,
+    attempted_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_launches_rule ON launches (rule_kind, rule_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_launches_schedule_run
+ON launches (rule_id, run_at) WHERE rule_kind='schedule';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_launches_hook_event
+ON launches (rule_id, event_id) WHERE rule_kind='hook';
 """
 
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
@@ -1128,6 +1456,71 @@ class Store:
             t[k] = _loads(t[k])
         return t
 
+    def _create_assignment(self, db: sqlite3.Connection, task_id: str,
+                           specialist: str, harness: str = "zcode",
+                           created_by: str = "owner",
+                           executor_id: str = "") -> dict[str, Any]:
+        """In-transaction core of create_assignment (ADR 0013 §4: the S2
+        engine and the S1 manual run-now insert the assignment "by the same
+        private code path as create_assignment"). Caller owns the lock and
+        the transaction; same gates, same errors as the public wrapper."""
+        task = db.execute(
+            """SELECT spec, archived, status, mnemos_tags, project
+               FROM tasks WHERE id=?""", (task_id,)
+        ).fetchone()
+        if task is None:
+            raise AssignmentNotFoundError(f"task {task_id} not found")
+        if task["archived"]:
+            raise TaskNotAssignableError(
+                f"task {task_id} is archived — assignment refused")
+        if task["status"] in TERMINAL_TASK_STATUSES:
+            raise TaskNotAssignableError(
+                f"task {task_id} is terminal ({task['status']}) — "
+                "assignment refused")
+        active = db.execute(
+            "SELECT COUNT(*) AS n FROM task_assignments "
+            "WHERE task_id=? AND state IN ('queued','claimed','running')",
+            (task_id,),
+        ).fetchone()["n"]
+        if active:
+            raise AssignmentConflictError(
+                f"task {task_id} already has an active assignment")
+        spec = task["spec"] or ""
+        spec_hash = hashlib.sha256(spec.encode("utf-8")).hexdigest()
+        # ARCH-9 (Amd 2 §9): denormalized topics — the project/domain
+        # tags mesh subscription filters need without joining through
+        # mnemos. project:<slug> from the task's project column is
+        # included when mnemos_tags does not already carry it (the
+        # column is the canonical project; metadata tier only).
+        topics = [t for t in _loads(task["mnemos_tags"])
+                  if isinstance(t, str)
+                  and t.startswith(("project:", "domain:"))]
+        if task["project"] and f"project:{task['project']}" not in topics:
+            topics.insert(0, f"project:{task['project']}")
+        try:
+            cur = db.execute(
+                """INSERT INTO task_assignments
+                       (task_id, specialist, harness, state, created_by, note,
+                        spec_snapshot, spec_hash, executor_id, topics, created_at)
+                       VALUES (?,?,?,'queued',?,?,?,?,?,?,?)""",
+                (task_id, specialist.strip()[:120], harness,
+                 created_by[:120], "", spec[:SPEC_SNAPSHOT_CAP], spec_hash,
+                 executor_id.strip()[:120], json.dumps(topics), _now()),
+            )
+        except sqlite3.IntegrityError as exc:
+            # P3a: the partial unique index is the structural backstop
+            # for the ≤1-active invariant (create-side check raced).
+            raise AssignmentConflictError(
+                f"task {task_id} already has an active assignment") from exc
+        aid = int(cur.lastrowid)
+        self._log(db, "assignment.created", task_id, {
+            "assignment_id": aid, "specialist": specialist.strip()[:120],
+            "harness": harness, "created_by": created_by[:120],
+            "executor_id": executor_id.strip()[:120], "spec_hash": spec_hash,
+            "topics": topics,
+        })
+        return self._assignment(db, aid)  # type: ignore[return-value]
+
     def create_assignment(self, task_id: str, specialist: str,
                           harness: str = "zcode", created_by: str = "owner",
                           executor_id: str = "") -> dict[str, Any]:
@@ -1146,72 +1539,22 @@ class Store:
             AssignmentConflictError — the task already has an active
                                       assignment: the ≤1 invariant (409).
         """
-        now = _now()
         with self._lock, self._conn() as db:
-            task = db.execute(
-                """SELECT spec, archived, status, mnemos_tags, project
-                   FROM tasks WHERE id=?""", (task_id,)
-            ).fetchone()
-            if task is None:
-                raise AssignmentNotFoundError(f"task {task_id} not found")
-            if task["archived"]:
-                raise TaskNotAssignableError(
-                    f"task {task_id} is archived — assignment refused")
-            if task["status"] in TERMINAL_TASK_STATUSES:
-                raise TaskNotAssignableError(
-                    f"task {task_id} is terminal ({task['status']}) — "
-                    "assignment refused")
-            active = db.execute(
-                "SELECT COUNT(*) AS n FROM task_assignments "
-                "WHERE task_id=? AND state IN ('queued','claimed','running')",
-                (task_id,),
-            ).fetchone()["n"]
-            if active:
-                raise AssignmentConflictError(
-                    f"task {task_id} already has an active assignment")
-            spec = task["spec"] or ""
-            spec_hash = hashlib.sha256(spec.encode("utf-8")).hexdigest()
-            # ARCH-9 (Amd 2 §9): denormalized topics — the project/domain
-            # tags mesh subscription filters need without joining through
-            # mnemos. project:<slug> from the task's project column is
-            # included when mnemos_tags does not already carry it (the
-            # column is the canonical project; metadata tier only).
-            topics = [t for t in _loads(task["mnemos_tags"])
-                      if isinstance(t, str)
-                      and t.startswith(("project:", "domain:"))]
-            if task["project"] and f"project:{task['project']}" not in topics:
-                topics.insert(0, f"project:{task['project']}")
-            try:
-                cur = db.execute(
-                    """INSERT INTO task_assignments
-                           (task_id, specialist, harness, state, created_by, note,
-                            spec_snapshot, spec_hash, executor_id, topics, created_at)
-                           VALUES (?,?,?,'queued',?,?,?,?,?,?,?)""",
-                    (task_id, specialist.strip()[:120], harness,
-                     created_by[:120], "", spec[:SPEC_SNAPSHOT_CAP], spec_hash,
-                     executor_id.strip()[:120], json.dumps(topics), now),
-                )
-            except sqlite3.IntegrityError as exc:
-                # P3a: the partial unique index is the structural backstop
-                # for the ≤1-active invariant (create-side check raced).
-                raise AssignmentConflictError(
-                    f"task {task_id} already has an active assignment") from exc
-            aid = int(cur.lastrowid)
-            self._log(db, "assignment.created", task_id, {
-                "assignment_id": aid, "specialist": specialist.strip()[:120],
-                "harness": harness, "created_by": created_by[:120],
-                "executor_id": executor_id.strip()[:120], "spec_hash": spec_hash,
-                "topics": topics,
-            })
-            return self._assignment(db, aid)  # type: ignore[return-value]
+            return self._create_assignment(
+                db, task_id, specialist, harness, created_by, executor_id)
 
     def assignments(self, state: str | None = None,
-                    task_id: str | None = None) -> list[dict[str, Any]]:
+                    task_id: str | None = None,
+                    by: str | None = None) -> list[dict[str, Any]]:
         """Assignment listing (poller inbox + UI badge source). ``state`` /
-        ``task_id`` are optional exact filters; oldest first (queue order)."""
+        ``task_id`` are optional exact filters; ``by='automation'`` keeps
+        only engine-minted rows (``created_by LIKE 'automation:%'`` —
+        ADR 0013 §2); oldest first (queue order)."""
         q = "SELECT * FROM task_assignments"
         where: list[str] = []
         params: list[Any] = []
+        if by == "automation":
+            where.append("created_by LIKE 'automation:%'")
         if state is not None:
             where.append("state=?")
             params.append(state)
@@ -1864,6 +2207,699 @@ class Store:
         settings lifecycle — executor.*, default.changed)."""
         with self._lock, self._conn() as db:
             self._log(db, kind, None, payload)
+
+    # ------------------------------------------------ automation (SCHED-1 S1)
+    # ADR 0013 §2: rule CRUD + journal + manual run-now. NO engine, NO
+    # loops, NO ECA in S1 — everything here is contracts the S2 engine
+    # will execute behind the T2 gate. DELETE is soft-disable retention:
+    # the row is never destroyed (journal cross-reference + audit), the
+    # rule stays listed with enabled=false.
+
+    @staticmethod
+    def _rule_name(raw: Any) -> str:
+        name = (raw or "").strip()[:_RULE_MAX_NAME] if isinstance(raw, str) else ""
+        if not name:
+            raise AutomationValidationError("rule name is empty")
+        return name
+
+    def _rule_exists(self, db: sqlite3.Connection, table: str,
+                     name: str, exclude_id: int | None = None) -> bool:
+        q = f"SELECT 1 FROM {table} WHERE name=?"  # noqa: S608 — fixed table name
+        params: list[Any] = [name]
+        if exclude_id is not None:
+            q += " AND id<>?"
+            params.append(exclude_id)
+        return db.execute(q, params).fetchone() is not None
+
+    @staticmethod
+    def _schedule_public(row: Any) -> dict[str, Any]:
+        out = dict(row)
+        out["enabled"] = bool(out["enabled"])
+        return out
+
+    @staticmethod
+    def _hook_public(row: Any) -> dict[str, Any]:
+        out = dict(row)
+        out["enabled"] = bool(out["enabled"])
+        out["condition"] = _loads(out.get("condition") or "[]")
+        out["source_allowlist"] = _loads(out.get("source_allowlist") or "[]")
+        try:
+            out["action_payload"] = json.loads(out.get("action_payload") or "{}")
+        except (TypeError, ValueError):
+            out["action_payload"] = {}
+        return out
+
+    @staticmethod
+    def _launch_public(row: Any) -> dict[str, Any]:
+        return dict(row)
+
+    def _validate_schedule_fields(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Shared create/patch field validation → column dict. Values are
+        validated independently; the trigger pair is checked together when
+        both sides are known (see _validate_schedule_trigger)."""
+        fields: dict[str, Any] = {}
+        if "name" in payload:
+            fields["name"] = self._rule_name(payload["name"])
+        if "target_kind" in payload:
+            if payload["target_kind"] != "task":
+                raise AutomationValidationError(
+                    f"target_kind {payload['target_kind']!r} is not supported "
+                    "in v1 (only 'task' — recurring run on one task; ADR "
+                    "0013 §6.1)")
+        if "task_id" in payload:
+            task_id = payload["task_id"]
+            if (not isinstance(task_id, str)
+                    or not task_id.strip() or len(task_id) > 100):
+                raise AutomationValidationError(
+                    "task_id must be a non-empty string (<=100 chars)")
+            # Existence is deliberately NOT checked: assignability belongs
+            # to fire time (TOCTOU, SCHED-1 Н2), not to rule save time.
+            fields["task_id"] = task_id.strip()
+        if "specialist" in payload:
+            specialist = payload["specialist"]
+            if (not isinstance(specialist, str) or not specialist.strip()
+                    or len(specialist) > 120):
+                raise AutomationValidationError(
+                    "specialist must be a non-empty string (<=120 chars)")
+            fields["specialist"] = specialist.strip()
+        if "harness" in payload:
+            if payload["harness"] not in self.KNOWN_HARNESSES:
+                raise AutomationValidationError(
+                    f"unknown harness: {payload['harness']!r}; known: "
+                    f"{sorted(self.KNOWN_HARNESSES)}")
+            fields["harness"] = payload["harness"]
+        if "executor_id" in payload:
+            executor_id = payload["executor_id"]
+            if not isinstance(executor_id, str) or len(executor_id) > 120:
+                raise AutomationValidationError(
+                    "executor_id must be a string (<=120 chars)")
+            # designation without validation (Ф1 contract — ARCH-9 pins are
+            # enforced at claim, never here)
+            fields["executor_id"] = executor_id.strip()
+        if "trigger_kind" in payload:
+            if payload["trigger_kind"] not in SCHEDULE_TRIGGER_KINDS:
+                raise AutomationValidationError(
+                    f"unknown trigger_kind: {payload['trigger_kind']!r}; "
+                    f"allowed: {sorted(SCHEDULE_TRIGGER_KINDS)}")
+            fields["trigger_kind"] = payload["trigger_kind"]
+        if "trigger_value" in payload:
+            fields["trigger_value"] = payload["trigger_value"]
+        if "window_from" in payload or "window_to" in payload:
+            wf, wt = _validate_window(payload.get("window_from"),
+                                      payload.get("window_to"))
+            fields["window_from"], fields["window_to"] = wf, wt
+        if "max_runs_per_day" in payload:
+            v = payload["max_runs_per_day"]
+            if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 1000:
+                raise AutomationValidationError(
+                    "max_runs_per_day must be an int in 1..1000")
+            fields["max_runs_per_day"] = v
+        if "cooldown_s" in payload:
+            v = payload["cooldown_s"]
+            if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 86400:
+                raise AutomationValidationError(
+                    "cooldown_s must be an int in 0..86400")
+            fields["cooldown_s"] = v
+        if "enabled" in payload:
+            if not isinstance(payload["enabled"], bool):
+                raise AutomationValidationError("enabled must be a boolean")
+            fields["enabled"] = 1 if payload["enabled"] else 0
+        return fields
+
+    @staticmethod
+    def _validate_schedule_trigger(trigger_kind: str, trigger_value: Any) -> None:
+        """The trigger pair, checked together (kind tells how to read the
+        value). Interval >= 60 s per ADR 0013 §2."""
+        if not isinstance(trigger_value, str) or not trigger_value.strip():
+            raise AutomationValidationError("trigger_value must be a string")
+        trigger_value = trigger_value.strip()
+        if trigger_kind == "interval":
+            seconds = parse_iso8601_duration(trigger_value)
+            if seconds < SCHEDULE_MIN_INTERVAL_S:
+                raise AutomationValidationError(
+                    f"interval must be >= {int(SCHEDULE_MIN_INTERVAL_S)}s, "
+                    f"got {trigger_value!r}")
+            if seconds > SCHEDULE_MAX_INTERVAL_S:
+                raise AutomationValidationError(
+                    f"interval must be <= {int(SCHEDULE_MAX_INTERVAL_S)}s, "
+                    f"got {trigger_value!r}")
+        else:  # time-of-day (kind validated upstream)
+            _validate_hhmm(trigger_value, "trigger_value")
+
+    def create_schedule(self, payload: dict[str, Any],
+                        actor: str = "owner") -> dict[str, Any]:
+        """Create a schedule rule (S1, ADR 0013 §2). Creation is DISABLED
+        (``enabled DEFAULT 0``) — a client ``enabled`` flag is ignored:
+        enablement is a separate audited PATCH (rule.toggled).
+        ``next_run_at`` is computed here from now and on every later PATCH
+        — never accepted from a client (schedule-clock family is
+        server-owned)."""
+        name = self._rule_name(payload.get("name"))
+        fields = self._validate_schedule_fields({
+            k: v for k, v in payload.items() if k != "name"})
+        # target_kind was validated against the v1 dictionary ('task' only)
+        # inside _validate_schedule_fields; harness/executor pin defaults:
+        fields.setdefault("harness", "zcode")
+        fields.setdefault("executor_id", "")
+        fields.setdefault("max_runs_per_day", SCHEDULE_DEFAULT_MAX_RUNS_PER_DAY)
+        fields.setdefault("cooldown_s", SCHEDULE_DEFAULT_COOLDOWN_S)
+        for req in ("task_id", "specialist", "trigger_kind", "trigger_value"):
+            if req not in fields:
+                raise AutomationValidationError(f"{req} is required")
+        self._validate_schedule_trigger(fields["trigger_kind"],
+                                        fields["trigger_value"])
+        now = _now()
+        next_run_at = _compute_next_run(fields["trigger_kind"],
+                                        fields["trigger_value"])
+        with self._lock, self._conn() as db:
+            if self._rule_exists(db, "schedules", name):
+                raise AutomationValidationError(
+                    f"schedule name '{name}' already exists")
+            cur = db.execute(
+                """INSERT INTO schedules
+                       (name, enabled, target_kind, task_id, specialist,
+                        harness, executor_id, trigger_kind, trigger_value,
+                        window_from, window_to, max_runs_per_day, cooldown_s,
+                        next_run_at, last_run_at, created_by, created_at,
+                        updated_at)
+                       VALUES (?,0,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)""",
+                (name, "task", fields["task_id"],
+                 fields["specialist"], fields["harness"],
+                 fields["executor_id"], fields["trigger_kind"],
+                 fields["trigger_value"], fields["window_from"],
+                 fields["window_to"], fields["max_runs_per_day"],
+                 fields["cooldown_s"], next_run_at,
+                 actor[:120], now, now),
+            )
+            rule_id = int(cur.lastrowid)
+            self._log(db, "rule.created", None, {
+                "rule_id": rule_id, "rule_kind": "schedule", "name": name,
+                "actor": actor[:120]})
+            row = db.execute("SELECT * FROM schedules WHERE id=?",
+                             (rule_id,)).fetchone()
+        return self._schedule_public(row)
+
+    def update_schedule(self, rule_id: int, patch: dict[str, Any],
+                        actor: str = "owner") -> tuple[dict[str, Any], dict[str, list[Any]]]:
+        """PATCH a schedule (ui-token route). Allow-listed fields only;
+        ``next_run_at``/``last_run_at``/audit columns are never patchable.
+        Every effective PATCH recomputes ``next_run_at`` from now (ADR
+        0013 §2). Returns (row, changes) with changes field → [old, new];
+        empty changes = idempotent no-op (no audit, no recompute)."""
+        allowed = {"name", "target_kind", "task_id", "specialist", "harness",
+                   "executor_id", "trigger_kind", "trigger_value",
+                   "window_from", "window_to", "max_runs_per_day",
+                   "cooldown_s", "enabled"}
+        fields = self._validate_schedule_fields(
+            {k: v for k, v in patch.items() if k in allowed})
+        with self._lock, self._conn() as db:
+            row = db.execute("SELECT * FROM schedules WHERE id=?",
+                             (rule_id,)).fetchone()
+            if row is None:
+                raise RuleNotFoundError(f"schedule {rule_id} not found")
+            old = self._schedule_public(row)
+            if "name" in fields and fields["name"] != old["name"]:
+                if self._rule_exists(db, "schedules", fields["name"],
+                                     exclude_id=rule_id):
+                    raise AutomationValidationError(
+                        f"schedule name '{fields['name']}' already exists")
+            updates = {k: v for k, v in fields.items() if v != old.get(k)}
+            if not updates:
+                return old, {}
+            # effective trigger pair (patched or existing) for validation
+            # and the next_run_at recompute
+            eff_kind = updates.get("trigger_kind", old["trigger_kind"])
+            eff_value = updates.get("trigger_value", old["trigger_value"])
+            self._validate_schedule_trigger(eff_kind, eff_value)
+            eff_window = _validate_window(
+                updates.get("window_from", old["window_from"]),
+                updates.get("window_to", old["window_to"]))
+            updates["window_from"], updates["window_to"] = eff_window
+            updates["next_run_at"] = _compute_next_run(eff_kind, eff_value)
+            updates["updated_at"] = _now()
+            sets = ", ".join(f"{k}=?" for k in updates)
+            db.execute(
+                f"UPDATE schedules SET {sets} WHERE id=?",  # noqa: S608 — keys from a fixed allow-list
+                (*updates.values(), rule_id),
+            )
+            changes: dict[str, list[Any]] = {}
+            for k, v in updates.items():
+                if k in ("next_run_at", "updated_at", "window_from",
+                         "window_to"):
+                    changes[k] = [old.get(k), v]
+                elif k == "enabled":
+                    changes[k] = [bool(old[k]), bool(v)]
+                else:
+                    changes[k] = [old.get(k), v]
+            # audit kind: a pure enable/disable flip is rule.toggled;
+            # anything else (incl. mixed patches) is rule.updated
+            kind = ("rule.toggled" if set(patch) == {"enabled"}
+                    else "rule.updated")
+            self._log(db, kind, None, {
+                "rule_id": rule_id, "rule_kind": "schedule",
+                "name": updates.get("name", old["name"]),
+                "actor": actor[:120], "changes": changes})
+            fresh = db.execute("SELECT * FROM schedules WHERE id=?",
+                               (rule_id,)).fetchone()
+        return self._schedule_public(fresh), changes
+
+    def delete_schedule(self, rule_id: int,
+                        actor: str = "owner") -> dict[str, Any]:
+        """DELETE = soft-disable retention (ADR 0013 §2): the row is NEVER
+        destroyed — the launch journal and the audit trail keep their
+        cross-reference. The rule stays listed with enabled=false; the
+        UNIQUE(name) constraint keeps holding (rename or re-enable via
+        PATCH). Audited as rule.deleted."""
+        with self._lock, self._conn() as db:
+            row = db.execute("SELECT * FROM schedules WHERE id=?",
+                             (rule_id,)).fetchone()
+            if row is None:
+                raise RuleNotFoundError(f"schedule {rule_id} not found")
+            old = self._schedule_public(row)
+            db.execute(
+                "UPDATE schedules SET enabled=0, updated_at=? WHERE id=?",
+                (_now(), rule_id),
+            )
+            self._log(db, "rule.deleted", None, {
+                "rule_id": rule_id, "rule_kind": "schedule",
+                "name": old["name"], "actor": actor[:120],
+                "changes": {"enabled": [old["enabled"], False]}})
+            fresh = db.execute("SELECT * FROM schedules WHERE id=?",
+                               (rule_id,)).fetchone()
+        return self._schedule_public(fresh)
+
+    def get_schedule(self, rule_id: int) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute("SELECT * FROM schedules WHERE id=?",
+                             (rule_id,)).fetchone()
+        return self._schedule_public(row) if row else None
+
+    def list_schedules(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM schedules ORDER BY name").fetchall()
+        return [self._schedule_public(r) for r in rows]
+
+    # ------------------------------------------------------- hooks CRUD
+
+    def _validate_hook_fields(self, payload: dict[str, Any]) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        if "name" in payload:
+            fields["name"] = self._rule_name(payload["name"])
+        if "on" in payload:
+            if payload["on"] not in HOOK_EVENT_WHITELIST:
+                raise AutomationValidationError(
+                    f"unknown hook event: {payload['on']!r}; allowed: "
+                    f"{sorted(HOOK_EVENT_WHITELIST)}")
+            fields["on"] = payload["on"]
+        if "condition" in payload:
+            fields["condition"] = validate_condition(payload["condition"])
+        if "action" in payload:
+            if payload["action"] not in HOOK_ACTIONS:
+                raise AutomationValidationError(
+                    f"unknown action: {payload['action']!r}; allowed: "
+                    f"{sorted(HOOK_ACTIONS)}")
+            fields["action"] = payload["action"]
+        # SCHED-1 §5: executor.offline is notify-only — a create_assignment
+        # hook on it is rejected at CRUD time so S2 never inherits an
+        # unenforced intention.
+        if payload.get("on") == "executor.offline" and \
+                payload.get("action") == "create_assignment":
+            raise AutomationValidationError(
+                "executor.offline is notify-only (SCHED-1 §5): "
+                "create_assignment hooks on it are not allowed")
+        if "source_allowlist" in payload:
+            action = payload.get("action")
+            if action is None:
+                # validated against the STORED action when the patch does
+                # not carry one — the route resolves this before the call
+                raise AutomationValidationError(
+                    "source_allowlist requires the action context")
+            fields["source_allowlist"] = validate_source_allowlist(
+                payload["source_allowlist"], action)
+        if "action_payload" in payload:
+            ap = payload["action_payload"]
+            if ap is None:
+                ap = {}
+            if not isinstance(ap, dict):
+                raise AutomationValidationError(
+                    "action_payload must be a JSON object")
+            packed = json.dumps(ap, ensure_ascii=False)
+            if len(packed) > _RULE_MAX_PAYLOAD_JSON:
+                raise AutomationValidationError(
+                    f"action_payload too large (>{_RULE_MAX_PAYLOAD_JSON} chars)")
+            fields["action_payload"] = packed
+        if "cooldown_s" in payload:
+            v = payload["cooldown_s"]
+            if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 86400:
+                raise AutomationValidationError(
+                    "cooldown_s must be an int in 0..86400")
+            fields["cooldown_s"] = v
+        if "budget" in payload:
+            v = payload["budget"]
+            if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 1000:
+                raise AutomationValidationError(
+                    "budget must be an int in 1..1000")
+            fields["budget"] = v
+        if "enabled" in payload:
+            if not isinstance(payload["enabled"], bool):
+                raise AutomationValidationError("enabled must be a boolean")
+            fields["enabled"] = 1 if payload["enabled"] else 0
+        return fields
+
+    def create_hook(self, payload: dict[str, Any],
+                    actor: str = "owner") -> dict[str, Any]:
+        """Create a hook rule (S1). ``on`` is validated against the server
+        constant HOOK_EVENT_WHITELIST; condition against the closed field/
+        op allowlist; source_allowlist defaults by action (notify → every
+        origin except automation; create_assignment → ui/server only —
+        machine is an explicit owner opt-in, audited old→new on PATCH)."""
+        name = self._rule_name(payload.get("name"))
+        payload = dict(payload)
+        # resolve the action default BEFORE field validation so an explicit
+        # source_allowlist validates against the effective action (notify
+        # unless stated otherwise)
+        payload.setdefault("action", "notify")
+        fields = self._validate_hook_fields(
+            {k: v for k, v in payload.items() if k != "name"})
+        for req in ("on",):
+            if req not in fields:
+                raise AutomationValidationError(f"{req} is required")
+        action = fields["action"]
+        # source default resolves against the FINAL action
+        if "source_allowlist" not in fields:
+            fields["source_allowlist"] = validate_source_allowlist(None, action)
+        fields.setdefault("condition", [])
+        fields.setdefault("action_payload", json.dumps({}))
+        fields.setdefault("cooldown_s", SCHEDULE_DEFAULT_COOLDOWN_S)
+        fields.setdefault("budget", SCHEDULE_DEFAULT_MAX_RUNS_PER_DAY)
+        now = _now()
+        with self._lock, self._conn() as db:
+            if self._rule_exists(db, "hooks", name):
+                raise AutomationValidationError(
+                    f"hook name '{name}' already exists")
+            cur = db.execute(
+                """INSERT INTO hooks
+                       (name, enabled, "on", condition, source_allowlist,
+                        action, action_payload, cooldown_s, budget,
+                        created_by, created_at, updated_at)
+                       VALUES (?,0,?,?,?,?,?,?,?,?,?,?)""",
+                (name, fields["on"], json.dumps(fields["condition"]),
+                 json.dumps(fields["source_allowlist"]), action,
+                 fields["action_payload"], fields["cooldown_s"],
+                 fields["budget"], actor[:120], now, now),
+            )
+            rule_id = int(cur.lastrowid)
+            self._log(db, "rule.created", None, {
+                "rule_id": rule_id, "rule_kind": "hook", "name": name,
+                "actor": actor[:120]})
+            row = db.execute("SELECT * FROM hooks WHERE id=?",
+                             (rule_id,)).fetchone()
+        return self._hook_public(row)
+
+    def update_hook(self, rule_id: int, patch: dict[str, Any],
+                    actor: str = "owner") -> tuple[dict[str, Any], dict[str, list[Any]]]:
+        """PATCH a hook. Action-dependent default re-resolution: when
+        ``action`` changes and the SAME patch does not carry an explicit
+        ``source_allowlist``, the stored list resets to the new action's
+        default — silently keeping a machine-origin list under
+        create_assignment would be a security regression (А-1)."""
+        allowed = {"name", "on", "condition", "source_allowlist", "action",
+                   "action_payload", "cooldown_s", "budget", "enabled"}
+        provided = {k: v for k, v in patch.items() if k in allowed}
+        with self._lock, self._conn() as db:
+            row = db.execute("SELECT * FROM hooks WHERE id=?",
+                             (rule_id,)).fetchone()
+            if row is None:
+                raise RuleNotFoundError(f"hook {rule_id} not found")
+            old = self._hook_public(row)
+            # resolve the action context for source_allowlist validation
+            eff_action = provided.get("action", old["action"])
+            if "source_allowlist" in provided and "action" not in provided:
+                provided_with_action = dict(provided)
+                provided_with_action["action"] = eff_action
+            else:
+                provided_with_action = provided
+            fields = self._validate_hook_fields(provided_with_action)
+            if ("action" in fields and fields["action"] != old["action"]
+                    and "source_allowlist" not in fields):
+                fields["source_allowlist"] = validate_source_allowlist(
+                    None, fields["action"])
+            # compare against the RAW row (JSON columns are packed strings
+            # there; old is the parsed public shape) — an idempotent PATCH
+            # must not produce a spurious audit event
+            updates: dict[str, Any] = {}
+            for k, v in fields.items():
+                if k in ("condition", "source_allowlist"):
+                    continue
+                if v != row[k]:
+                    updates[k] = v
+            if "condition" in fields and fields["condition"] != old["condition"]:
+                updates["condition"] = json.dumps(fields["condition"])
+            if ("source_allowlist" in fields
+                    and fields["source_allowlist"] != old["source_allowlist"]):
+                updates["source_allowlist"] = json.dumps(
+                    fields["source_allowlist"])
+            if not updates:
+                return old, {}
+            updates["updated_at"] = _now()
+            sets = ", ".join(f"{k}=?" for k in updates)
+            db.execute(
+                f'UPDATE hooks SET {sets} WHERE id=?',  # noqa: S608 — keys from a fixed allow-list
+                (*updates.values(), rule_id),
+            )
+            changes: dict[str, list[Any]] = {}
+            for k, v in updates.items():
+                if k in ("condition", "source_allowlist"):
+                    old_v = old[k]
+                    new_v = _loads(v)
+                elif k == "enabled":
+                    old_v, new_v = bool(old[k]), bool(v)
+                elif k == "action_payload":
+                    old_v, new_v = old[k], json.loads(v)
+                else:
+                    old_v, new_v = old.get(k), v
+                if k != "updated_at":
+                    changes[k] = [old_v, new_v]
+            kind = ("rule.toggled" if set(patch) == {"enabled"}
+                    else "rule.updated")
+            self._log(db, kind, None, {
+                "rule_id": rule_id, "rule_kind": "hook",
+                "name": updates.get("name", old["name"]),
+                "actor": actor[:120], "changes": changes})
+            fresh = db.execute("SELECT * FROM hooks WHERE id=?",
+                               (rule_id,)).fetchone()
+        return self._hook_public(fresh), changes
+
+    def delete_hook(self, rule_id: int, actor: str = "owner") -> dict[str, Any]:
+        """DELETE = soft-disable retention (same semantics as schedules)."""
+        with self._lock, self._conn() as db:
+            row = db.execute("SELECT * FROM hooks WHERE id=?",
+                             (rule_id,)).fetchone()
+            if row is None:
+                raise RuleNotFoundError(f"hook {rule_id} not found")
+            old = self._hook_public(row)
+            db.execute("UPDATE hooks SET enabled=0, updated_at=? WHERE id=?",
+                       (_now(), rule_id))
+            self._log(db, "rule.deleted", None, {
+                "rule_id": rule_id, "rule_kind": "hook", "name": old["name"],
+                "actor": actor[:120],
+                "changes": {"enabled": [old["enabled"], False]}})
+            fresh = db.execute("SELECT * FROM hooks WHERE id=?",
+                               (rule_id,)).fetchone()
+        return self._hook_public(fresh)
+
+    def get_hook(self, rule_id: int) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute("SELECT * FROM hooks WHERE id=?",
+                             (rule_id,)).fetchone()
+        return self._hook_public(row) if row else None
+
+    def list_hooks(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as db:
+            rows = db.execute("SELECT * FROM hooks ORDER BY name").fetchall()
+        return [self._hook_public(r) for r in rows]
+
+    # -------------------------------------------------- manual run-now (S1)
+    def run_schedule_now(self, schedule_id: int) -> dict[str, Any]:
+        """«Запустить сейчас» — the manual, NON-automated trigger (ADR 0013
+        §2: not T2; the owner's hand, not the engine).
+
+        Journal-first, ONE transaction (the S2 fire_schedule pattern,
+        prefigured): insert the launches row (run_at = click time, bumped
+        +1 s on a same-second UNIQUE collision — bounded walk), then create
+        the assignment through the SAME private code path as
+        create_assignment with created_by='owner' (a manual run is a
+        ui-token action, NOT automation — ADR 0013 §2). On a create gate
+        failure the row flips to skipped(reason) IN THE SAME TRANSACTION
+        and the original error re-raises after commit (honest 404/422/409
+        upstream). Budgets/kill-switch do NOT apply (manual); the
+        schedule-clock columns (next_run_at/last_run_at) are deliberately
+        untouched — they belong to the S2 tick family (§7).
+
+        Returns {launch_id, run_at, rule_name, assignment}.
+        """
+        failed: AssignmentError | None = None
+        result: dict[str, Any] = {}
+        with self._lock, self._conn() as db:
+            row = db.execute("SELECT * FROM schedules WHERE id=?",
+                             (schedule_id,)).fetchone()
+            if row is None:
+                raise RuleNotFoundError(f"schedule {schedule_id} not found")
+            now = _now()
+            # run_at = click time; same-second clicks on the same rule walk
+            # forward 1 s at a time (max 10) — sharing the S2 occurrence
+            # key instead of a divergent manual key keeps ONE idempotency
+            # family for schedules.
+            run_at = now
+            launch_id: int | None = None
+            for _ in range(10):
+                try:
+                    cur = db.execute(
+                        """INSERT INTO launches
+                               (rule_id, rule_kind, rule_name, run_at, event_id,
+                                "trigger", origin, decision, reason,
+                                assignment_id, attempted_at)
+                               VALUES (?, 'schedule', ?, ?, NULL, 'manual',
+                                       'ui', 'launched', '', NULL, ?)""",
+                        (schedule_id, row["name"], run_at, now),
+                    )
+                    launch_id = int(cur.lastrowid)
+                    break
+                except sqlite3.IntegrityError:
+                    run_at = _bump_iso_second(run_at)
+            if launch_id is None:  # pragma: no cover — 10 same-second clicks
+                raise AutomationValidationError(
+                    "manual run journal collision unresolvable "
+                    "(10 clicks within one second on the same rule)")
+            try:
+                assignment = self._create_assignment(
+                    db, row["task_id"], row["specialist"], row["harness"],
+                    created_by="owner", executor_id=row["executor_id"])
+            except AssignmentError as exc:
+                db.execute(
+                    "UPDATE launches SET decision='skipped', reason=? "
+                    "WHERE id=?", (str(exc)[:200], launch_id))
+                failed = exc
+            else:
+                db.execute("UPDATE launches SET assignment_id=? WHERE id=?",
+                           (assignment["id"], launch_id))
+                result = {"launch_id": launch_id, "run_at": run_at,
+                          "rule_name": row["name"], "assignment": assignment}
+        if failed is not None:
+            raise failed
+        return result
+
+    # --------------------------------------------------- launches journal
+    def automation_launches(self, rule_id: int | None = None,
+                            kind: str | None = None,
+                            decision: str | None = None,
+                            limit: int = 50, offset: int = 0,
+                            ) -> tuple[list[dict[str, Any]], int]:
+        """Journal page: attempted_at DESC with the id tiebreak (uniform
+        pagination canon, ADR 0011 §11). Returns (rows, total_matching)."""
+        where: list[str] = []
+        params: list[Any] = []
+        if rule_id is not None:
+            where.append("rule_id=?")
+            params.append(rule_id)
+        if kind is not None:
+            where.append("rule_kind=?")
+            params.append(kind)
+        if decision is not None:
+            where.append("decision=?")
+            params.append(decision)
+        cond = f" WHERE {' AND '.join(where)}" if where else ""
+        with self._lock, self._conn() as db:
+            total = db.execute(
+                f"SELECT COUNT(*) AS n FROM launches{cond}",  # noqa: S608 — fragments from fixed filters
+                params,
+            ).fetchone()["n"]
+            rows = db.execute(
+                f"SELECT * FROM launches{cond} "  # noqa: S608 — fragments from fixed filters
+                "ORDER BY attempted_at DESC, id DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
+            ).fetchall()
+        return [self._launch_public(r) for r in rows], int(total)
+
+    def automation_daily_used(self) -> int:
+        """Automation-origin launches today (UTC) — the global daily cap's
+        used counter. Manual runs are excluded by construction (they are
+        the owner's hand); in S1 this is provably 0 (no engine exists),
+        computed honestly from the journal so S2 keeps the same reader."""
+        day = datetime.now(timezone.utc).date().isoformat()
+        with self._lock, self._conn() as db:
+            n = db.execute(
+                """SELECT COUNT(*) AS n FROM launches
+                   WHERE "trigger"<>'manual' AND attempted_at >= ?""",
+                (day,),
+            ).fetchone()["n"]
+        return int(n)
+
+    # ------------------------------------------- settings + condition meta
+    def automation_settings(self) -> dict[str, Any]:
+        """Global kill-switch + daily cap (board_meta, ADR 0013 §6).
+        Defaults: enabled=false (disable-by-default, C-1), cap=20/day."""
+        raw_enabled = self.get_meta(AUTOMATION_ENABLED_META_KEY)
+        raw_cap = self.get_meta(AUTOMATION_CAP_META_KEY)
+        try:
+            cap = int(raw_cap) if raw_cap is not None else AUTOMATION_DEFAULT_GLOBAL_CAP
+        except (TypeError, ValueError):
+            cap = AUTOMATION_DEFAULT_GLOBAL_CAP
+        return {"enabled": raw_enabled == "1",
+                "cap_global_per_day": max(1, min(cap, 1000))}
+
+    def set_automation_settings(self, enabled: bool | None = None,
+                                cap_global_per_day: int | None = None,
+                                actor: str = "owner",
+                                ) -> tuple[dict[str, Any], dict[str, list[Any]]]:
+        """PUT /api/automation/settings. Audit automation.settings.changed
+        old→new on any effective change (in-transaction). In S1 flipping
+        the kill-switch is INERT data — no engine exists to kill; the flag
+        is the persistent owner opt-in the S2 loop will read at boot."""
+        if cap_global_per_day is not None and (not isinstance(cap_global_per_day, int) or isinstance(cap_global_per_day, bool) or not 1 <= cap_global_per_day <= 1000):
+            raise AutomationValidationError(
+                "cap_global_per_day must be an int in 1..1000")
+        old = self.automation_settings()
+        changes: dict[str, list[Any]] = {}
+        with self._lock, self._conn() as db:
+            if enabled is not None and bool(enabled) != old["enabled"]:
+                changes["enabled"] = [old["enabled"], bool(enabled)]
+                db.execute(
+                    "INSERT OR REPLACE INTO board_meta (key, value) "
+                    "VALUES (?, ?)",
+                    (AUTOMATION_ENABLED_META_KEY,
+                     "1" if enabled else "0"),
+                )
+            if (cap_global_per_day is not None
+                    and cap_global_per_day != old["cap_global_per_day"]):
+                changes["cap_global_per_day"] = [
+                    old["cap_global_per_day"], cap_global_per_day]
+                db.execute(
+                    "INSERT OR REPLACE INTO board_meta (key, value) "
+                    "VALUES (?, ?)",
+                    (AUTOMATION_CAP_META_KEY, str(cap_global_per_day)),
+                )
+            if changes:
+                self._log(db, "automation.settings.changed", None, {
+                    "actor": actor[:120], "changes": changes})
+        return self.automation_settings(), changes
+
+    def automation_condition_meta(self) -> dict[str, Any]:
+        """The condition META-DICTIONARY for the UI form (Frontend blocker,
+        АРХКОМ-5): fields/ops/values enums over the closed allowlists — a
+        free-text condition control never needs to exist. ``values_hint``
+        maps field → enum list, or null where no closed set exists."""
+        enums = _condition_field_enums()
+        return {
+            "fields": sorted(enums),
+            "ops": sorted(RULE_CONDITION_OPS),
+            "values_hint": {f: (list(v) if v is not None else None)
+                            for f, v in sorted(enums.items())},
+            "events": sorted(HOOK_EVENT_WHITELIST),
+            "actions": sorted(HOOK_ACTIONS),
+            "source_origins": sorted(HOOK_SOURCE_ORIGINS),
+        }
 
     # ------------------------------------------------- reports backfill
     BACKFILL_META_KEY = "reports_backfill"
