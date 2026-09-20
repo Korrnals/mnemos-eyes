@@ -7,7 +7,7 @@ import { ApiError, toApiError } from "@/lib/errors";
  * composition, and non-2xx → `ApiError` normalisation.
  */
 
-export type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** Values allowed in a query-string map; null/undefined entries are dropped. */
 export type QueryValue = string | number | boolean | null | undefined;

@@ -16,6 +16,12 @@ import type { BoardTask } from "./boardTypes";
  * Dictionary evolution rules (ui-contract §11) that shaped this API:
  * additive-only — unknown `kind`s MUST be silently ignored by clients, so
  * `parseBoardEvent` classifies them as `ignored` instead of throwing.
+ *
+ * AGW-1 addition (ARCH-9, ADR 0009 Amendment 2): the executor-registry
+ * family `executor.online/offline/registered/updated/deleted`. Presence
+ * events fire on TRANSITION only (per-heartbeat events are forbidden §11);
+ * `stale` deliberately has no kind — clients render ages from GET + a local
+ * ticker, SSE is only the change notification.
  */
 export type EventSourceFactory = (url: string) => EventSource;
 
@@ -67,6 +73,23 @@ export interface BoardAssignment {
   readonly id: string;
   readonly task_id: string;
   readonly state: AssignmentState;
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Executor object embedded in the `executor.*` payloads — the public
+ * registry shape (server `_executor_public`): id/name/harness/transport/
+ * capabilities/presence/… Anonymous on the wire, extra fields ride along.
+ * Secret material (`secret_hash`, the plaintext `executor_secret`) is
+ * contractually absent — it exists exactly once, in the register response.
+ * The declared identity (name/host) is executor-claimed, server-unverified.
+ */
+export interface BoardExecutor {
+  readonly id: string;
+  readonly name: string;
+  readonly harness: string;
+  /** Computed presence: online | stale | offline (TTLs live in list meta). */
+  readonly presence: string;
   readonly [key: string]: unknown;
 }
 
@@ -128,6 +151,15 @@ export interface BoardEventMap {
   "assignment.failed": AssignmentEvent;
   "assignment.cancelled": AssignmentEvent;
   "assignment.expired": AssignmentEvent & { readonly notification?: BoardNotification };
+  // Executor-registry kinds (ARCH-9, ADR 0009 Amendment 2 — AGW-1): the
+  // presence pair fires on TRANSITION only (a 60 s sweeper diffs last_seen
+  // TTLs; `stale` is a silent hysteresis corridor with NO kind of its own);
+  // the registry trio mirrors the register / PATCH / DELETE routes.
+  "executor.online": ExecutorEvent & { readonly last_seen_at: string };
+  "executor.offline": ExecutorEvent & { readonly last_seen_at: string };
+  "executor.registered": ExecutorEvent;
+  "executor.updated": ExecutorEvent;
+  "executor.deleted": ExecutorEvent;
 }
 
 export interface AssignmentEvent {
@@ -141,6 +173,29 @@ export interface AssignmentEvent {
     | "assignment.expired";
   readonly assignment: BoardAssignment;
   readonly task_id: string;
+}
+
+/**
+ * Executor-registry event payload (ARCH-9), fixed by the server emitters:
+ * `_presence_sweep_once` (online/offline carry the transition timestamp),
+ * the register route (prev_state is null — no prior registry state), the
+ * owner PATCH (updated) and DELETE (deleted; prev_state === state — the
+ * removed row's terminal snapshot).
+ */
+export interface ExecutorEvent {
+  readonly kind:
+    | "executor.online"
+    | "executor.offline"
+    | "executor.registered"
+    | "executor.updated"
+    | "executor.deleted";
+  /** Public executor row (`_executor_public`; no secret material). */
+  readonly executor: BoardExecutor;
+  /** Registry/presence state before the transition; null on registration. */
+  readonly prev_state: string | null;
+  readonly state: string;
+  /** Presence-transition timestamp — present on online/offline only. */
+  readonly last_seen_at?: string;
 }
 
 /** Every kind the dictionary names (known kinds). */
@@ -255,6 +310,12 @@ export function parseBoardEvent(raw: string): ParsedBoardEvent {
           parsed,
         ),
       };
+    case "executor.online":
+    case "executor.offline":
+    case "executor.registered":
+    case "executor.updated":
+    case "executor.deleted":
+      return parseExecutorEvent(parsed, kind);
     default:
       return ignored("unknown-kind", kind);
   }
@@ -266,6 +327,36 @@ function withOptionalNotification<T extends object>(
 ): T {
   const notification = source.notification;
   return notification === undefined ? event : { ...event, notification };
+}
+
+/**
+ * Executor-registry frames: the embedded executor row and the target state
+ * are mandatory; the presence pair additionally refuses to parse without
+ * its transition timestamp (§5.2 fixes that payload), so a truncated
+ * online/offline frame is malformed rather than silently mistimed.
+ */
+function parseExecutorEvent(
+  parsed: Record<string, unknown>,
+  kind: "executor.online" | "executor.offline" | "executor.registered" |
+    "executor.updated" | "executor.deleted",
+): ParsedBoardEvent {
+  if (!isRecord(parsed.executor) || typeof parsed.state !== "string") {
+    return ignored("malformed-payload", kind);
+  }
+  const base = {
+    kind,
+    executor: parsed.executor as BoardExecutor,
+    // Registered carries an explicit null; anything non-string reads as null.
+    prev_state: typeof parsed.prev_state === "string" ? parsed.prev_state : null,
+    state: parsed.state,
+  };
+  if (kind === "executor.online" || kind === "executor.offline") {
+    if (typeof parsed.last_seen_at !== "string") {
+      return ignored("malformed-payload", kind);
+    }
+    return { status: "event", event: { ...base, last_seen_at: parsed.last_seen_at } };
+  }
+  return { status: "event", event: base };
 }
 
 function ignored(reason: IgnoredEventReason, kind: string): ParsedBoardEvent {

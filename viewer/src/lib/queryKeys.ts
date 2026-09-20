@@ -1,4 +1,4 @@
-import type { ArchiveParams, PulseParams } from "@/gateway/boardTypes";
+import type { ArchiveParams, AssignmentListParams, PulseParams } from "@/gateway/boardTypes";
 import type { InboxParams } from "@/gateway/BoardAdapter";
 import type { ListMemoriesParams, SearchParams } from "@/gateway/types";
 
@@ -68,6 +68,27 @@ export const keys = {
   clusters: {
     all: ["clusters"] as const,
   },
+  // AGW-1 agents domain (spec 2026-09-19): assignment queue + executor
+  // registry + the default-executor settings pair. There is NO
+  // per-assignment detail key: the queue IS the projection (the Ф3 drawer
+  // reads a filtered list query) — the same single-projection decision as
+  // tasks.board. Executor presence lives in the registry key; TTL constants
+  // arrive in its meta and are cached WITH the page.
+  agents: {
+    all: ["agents"] as const,
+    assignments: {
+      all: ["agents", "assignments"] as const,
+      list: (params: AssignmentListParams = {}) =>
+        ["agents", "assignments", "list", params] as const,
+    },
+    executors: {
+      all: ["agents", "executors"] as const,
+      list: () => ["agents", "executors", "list"] as const,
+    },
+    settings: {
+      execution: () => ["agents", "settings", "execution"] as const,
+    },
+  },
 } as const;
 
 /** Convenience key types for hook signatures. */
@@ -88,3 +109,6 @@ export type TaskInboxKey = ReturnType<typeof keys.tasks.inbox>;
 export type TracesListKey = ReturnType<typeof keys.traces.list>;
 export type SessionsListKey = ReturnType<typeof keys.sessions.list>;
 export type SessionDetailKey = ReturnType<typeof keys.sessions.detail>;
+export type AgentsAssignmentsKey = ReturnType<typeof keys.agents.assignments.list>;
+export type ExecutorsListKey = ReturnType<typeof keys.agents.executors.list>;
+export type ExecutionSettingsKey = ReturnType<typeof keys.agents.settings.execution>;

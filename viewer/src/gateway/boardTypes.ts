@@ -122,6 +122,246 @@ export type TaskUnarchiveResult = Schemas["UnarchiveOut"];
 export type InboxRefreshResult = Schemas["TaskInboxRefreshOut"];
 
 
+// --- AGW-1 agents-domain wire types (ARCH-9, ADR 0009 Amd 2; SCHED-1) ----------
+// Hand-written refinements over the generated schemas where the server
+// answers anonymous dicts (routing, executor-list meta) or enum-ish strings;
+// entities the OpenAPI already names precisely are re-exported verbatim.
+// The full REST projection NEVER carries `claim_token` (secret — it exists
+// only inside the claim/finish machine calls) or `spec_snapshot` (immutable
+// execution view — only its `spec_hash` fingerprint travels).
+
+/** Assignment lifecycle — the frozen 7-state dictionary (ADR 0009 §4). */
+export type AssignmentLifecycleState =
+  | "queued"
+  | "claimed"
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
+/**
+ * Routing annotation `{resolved, reason}` — computed per GET over the
+ * executor registry (Amd 2 §5: explicit pin → assignment specialist → task
+ * specialists → project default → global default → auto best-match →
+ * unmatched), stored nowhere. `resolved: null` + reason "unmatched" means
+ * the assignment is visible to every poller.
+ */
+export interface RoutingAnnotation {
+  /** Executor id the chain resolves to; null = no route (unmatched). */
+  readonly resolved: string | null;
+  /** Resolution tier: explicit | specialist | task-specialists | project-default | global-default | auto | unmatched. */
+  readonly reason: string;
+}
+
+/**
+ * One assignment row — board `AssignmentOut` with the anonymous `routing`
+ * dict re-typed. `claimed_by` is the DECLARED identity of the claimer —
+ * server-unverified, the UI renders it with the unverified affordance.
+ */
+export interface AssignmentItem {
+  readonly id: number;
+  readonly task_id: string;
+  readonly specialist: string;
+  readonly harness: string;
+  readonly state: AssignmentLifecycleState;
+  /** Who queued the attempt: owner | automation | … (audit actor). */
+  readonly created_by: string;
+  /** Declared identity of the claimer (unverified, may stay null). */
+  readonly claimed_by?: string | null;
+  readonly note: string;
+  /** Fingerprint of the frozen spec snapshot (the snapshot itself stays server-side). */
+  readonly spec_hash: string;
+  /** Explicit executor pin — empty string means chain resolution. */
+  readonly executor_id: string;
+  /** Registry id of the executor that actually claimed (fact, not hint). */
+  readonly claimed_by_executor: string;
+  readonly created_at: string;
+  readonly claimed_at?: string | null;
+  readonly started_at?: string | null;
+  readonly heartbeat_at?: string | null;
+  readonly finished_at?: string | null;
+  /** Denormalized project/domain tags (metadata tier). */
+  readonly topics: readonly string[];
+  readonly routing?: RoutingAnnotation | null;
+}
+
+/** Assignment queue page — board `AssignmentsOut` (items re-typed). */
+export interface AssignmentsPage {
+  readonly ok: boolean;
+  readonly count: number;
+  readonly items: readonly AssignmentItem[];
+}
+
+/** Assignment queue filters (`GET /api/assignments`). */
+export interface AssignmentListParams {
+  /** Exact lifecycle state (dictionary value; empty = all). */
+  readonly state?: AssignmentLifecycleState;
+  /** Exact task filter. */
+  readonly task_id?: string;
+  /**
+   * Presence piggyback + routing hint, NOT a server-side list filter: an
+   * authenticated executor polling with its own id ticks its last_seen
+   * clock (ARCH-9). The UI filters by executor client-side.
+   */
+  readonly executor_id?: string;
+}
+
+/** Create payload — board `AssignmentCreate` (`POST /api/assignments`). */
+export interface AssignmentCreateInput {
+  readonly task_id: string;
+  readonly specialist: string;
+  /** Harness id (KNOWN_HARNESSES server-side; default "zcode"). */
+  readonly harness: string;
+  /** Explicit executor pin — omitted/empty means chain resolution. */
+  readonly executor_id?: string;
+}
+
+/** Create result — board `AssignmentCreatedOut` (assignment re-typed). */
+export interface AssignmentCreatedResult {
+  readonly ok: boolean;
+  readonly assignment: AssignmentItem;
+}
+
+/**
+ * Cancel result — board `AssignmentFinishedOut` (assignment re-typed).
+ * `moved` is `[from, to]` when the task column returned to open, empty
+ * otherwise; `report` stays null on cancel (it belongs to done/fail).
+ */
+export interface AssignmentCancelledResult {
+  readonly ok: boolean;
+  readonly assignment: AssignmentItem;
+  readonly task?: BoardTask | null;
+  readonly moved: readonly string[];
+  readonly report?: TaskReport | null;
+}
+
+/** Executor presence — computed from the last_seen TTL on read, never stored. */
+export type ExecutorPresence = "online" | "stale" | "offline";
+
+/** Registry ladder state (Amd 2 §4: machine bootstrap → owner decision). */
+export type ExecutorRegistryState = "pending" | "approved" | "revoked";
+
+/** Executor transport (mesh is dispatch-ineligible until R4 lands). */
+export type ExecutorTransport = "local-poll" | "mesh-r4";
+
+/**
+ * One executor row — board `ExecutorOut` with the enum-ish strings narrowed
+ * (presence/state/transport are closed server-side sets). The declared
+ * identity (name/host/harness/version) is executor-claimed and
+ * server-UNVERIFIED — the UI renders it as such (spec §2.2).
+ */
+export interface ExecutorItem {
+  readonly id: string;
+  readonly name: string;
+  readonly harness: string;
+  readonly host: string;
+  readonly transport: ExecutorTransport;
+  /** Owner-declared allowlist mappings (specialist roles this executor takes). */
+  readonly capabilities: readonly string[];
+  readonly version: string;
+  /** Routing kill-switch (owner PATCH; disabled executors never resolve). */
+  readonly enabled: boolean;
+  readonly state: ExecutorRegistryState;
+  readonly last_seen: string;
+  readonly presence: ExecutorPresence;
+  readonly registered_at: string;
+  readonly updated_at: string;
+}
+
+/**
+ * Registry page meta — the server-owned presence contract (spec §5.1): the
+ * TTL constants (online ≤ 2 min, stale ≤ 10 min) and the sweeper cadence
+ * travel WITH the data; clients read them, never hardcode.
+ */
+export interface ExecutorListMeta {
+  readonly presence: {
+    readonly online_max_age_s: number;
+    readonly stale_max_age_s: number;
+  };
+  readonly sweeper_interval_s: number;
+}
+
+/** Executor registry page — board `ExecutorListOut` (meta re-typed). */
+export interface ExecutorsPage {
+  readonly ok: boolean;
+  readonly count: number;
+  readonly items: readonly ExecutorItem[];
+  readonly meta: ExecutorListMeta;
+}
+
+/** Execution settings read — board `ExecutionSettingsOut`. */
+export type ExecutionSettings = Schemas["ExecutionSettingsOut"];
+
+/**
+ * Execution settings write — board `ExecutionSettingsBody` with `scope`
+ * optional ('' global by default; 'project:<slug>' reserves per-project
+ * defaults, Amd 2 §5). The fallback is the UI's no-silent-substitution
+ * preview value; it never joins the GET routing chain.
+ */
+export interface ExecutionSettingsInput {
+  /** Executor id or '' to clear the slot (Amd 2 §5 gates apply server-side). */
+  readonly default_executor: string;
+  /** Executor id or '' to clear the slot (global scope only). */
+  readonly fallback_executor: string;
+  readonly scope?: string;
+}
+
+// --- SCHED-1 automation wire types (ADR 0013; consumed by a later wave) -------
+
+/** One schedule rule — board `ScheduleOut` schema. */
+export type ScheduleRule = Schemas["ScheduleOut"];
+
+/** Schedule create payload — board `ScheduleCreate` schema. */
+export type ScheduleCreateInput = Schemas["ScheduleCreate"];
+
+/** Schedule patch payload — board `SchedulePatch` schema (null = absent). */
+export type SchedulePatchInput = Schemas["SchedulePatch"];
+
+/** Schedule listing — board `SchedulesOut` schema. */
+export type SchedulesPage = Schemas["SchedulesOut"];
+
+/** «Запустить сейчас» result — board `ScheduleRunOut` schema. */
+export type ScheduleRunResult = Schemas["ScheduleRunOut"];
+
+/** One hook rule — board `HookOut` schema. */
+export type HookRule = Schemas["HookOut"];
+
+/** Hook create payload — board `HookCreate` schema. */
+export type HookCreateInput = Schemas["HookCreate"];
+
+/** Hook patch payload — board `HookPatch` schema (null = absent). */
+export type HookPatchInput = Schemas["HookPatch"];
+
+/** Hook listing — board `HooksOut` schema. */
+export type HooksPage = Schemas["HooksOut"];
+
+/** Rule DELETE ack — board `RuleDeletedOut` (soft-disable retention note). */
+export type RuleDeletedAck = Schemas["RuleDeletedOut"];
+
+/** One launch journal row — board `LaunchOut` schema. */
+export type LaunchRow = Schemas["LaunchOut"];
+
+/** Launch journal page — board `LaunchesOut` schema (cursor contract, ADR 0011 §11). */
+export type LaunchesPage = Schemas["LaunchesOut"];
+
+/** Engine/caps/condition-meta projection — board `AutomationStatusOut` schema. */
+export type AutomationStatus = Schemas["AutomationStatusOut"];
+
+/** Launch journal filters (`GET /api/automation/launches`). */
+export interface LaunchesParams {
+  readonly rule_id?: number;
+  /** schedule | hook (422 on garbage server-side). */
+  readonly kind?: string;
+  /** launched | skipped | missed. */
+  readonly decision?: string;
+  /** Page size (server caps at 200; default 50). */
+  readonly limit?: number;
+  /** Opaque cursor from a previous page's next_cursor. */
+  readonly cursor?: string;
+}
+
+
 // --- Anonymous wire shapes (board answers `dict[str, Any]`) ------------------
 
 /**

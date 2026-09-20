@@ -48,6 +48,23 @@ const NOTIFICATION = {
   read: false,
 };
 
+/** Public executor shape as the registry emits it (_executor_public). */
+const EXECUTOR = {
+  id: "exec-1",
+  name: "zcode@laptop",
+  harness: "zcode",
+  host: "laptop",
+  transport: "local-poll",
+  capabilities: ["@GCW: Senior Frontend Developer"],
+  version: "1.11.3",
+  enabled: true,
+  state: "approved",
+  last_seen: "2026-09-19T08:59:30+00:00",
+  presence: "online",
+  registered_at: "2026-09-18T09:00:00+00:00",
+  updated_at: "2026-09-19T08:00:00+00:00",
+};
+
 describe("parseBoardEvent — ui-contract §11 dictionary", () => {
   it("parses the connect-time hello service frame", () => {
     const event = parseEvent('{"kind":"hello","last_event_id":42}');
@@ -139,6 +156,120 @@ describe("parseBoardEvent — ui-contract §11 dictionary", () => {
     if (event.kind !== "assignment.claimed") return;
     expect(event.assignment.state).toBe("queued");
     expect(event.task_id).toBe("task-1");
+  });
+
+  it("parses the executor.* registry kinds (ARCH-9)", () => {
+    const event = parseEvent(
+      JSON.stringify({
+        kind: "executor.updated",
+        executor: EXECUTOR,
+        prev_state: "pending",
+        state: "approved",
+      }),
+    );
+    if (event.kind !== "executor.updated") return;
+    expect(event.executor.id).toBe("exec-1");
+    expect(event.prev_state).toBe("pending");
+    expect(event.state).toBe("approved");
+    expect("last_seen_at" in event).toBe(false); // registry kinds carry no timestamp
+  });
+});
+
+describe("parseBoardEvent — executor.* presence family (AGW-1)", () => {
+  it("parses online/offline transitions with their last_seen_at", () => {
+    const online = parseEvent(
+      JSON.stringify({
+        kind: "executor.online",
+        executor: EXECUTOR,
+        prev_state: "offline",
+        state: "online",
+        last_seen_at: "2026-09-19T08:59:30+00:00",
+      }),
+    );
+    if (online.kind !== "executor.online") return;
+    expect(online.prev_state).toBe("offline");
+    expect(online.state).toBe("online");
+    expect(online.last_seen_at).toBe("2026-09-19T08:59:30+00:00");
+
+    const offline = parseEvent(
+      JSON.stringify({
+        kind: "executor.offline",
+        executor: EXECUTOR,
+        prev_state: "online",
+        state: "offline",
+        last_seen_at: "2026-09-19T08:59:30+00:00",
+      }),
+    );
+    if (offline.kind !== "executor.offline") return;
+    expect(offline.state).toBe("offline");
+  });
+
+  it("parses executor.registered with prev_state null (no prior state)", () => {
+    const event = parseEvent(
+      JSON.stringify({
+        kind: "executor.registered",
+        executor: { ...EXECUTOR, state: "pending", presence: "offline" },
+        prev_state: null,
+        state: "pending",
+      }),
+    );
+    if (event.kind !== "executor.registered") return;
+    expect(event.prev_state).toBeNull();
+    expect(event.state).toBe("pending");
+  });
+
+  it("parses executor.deleted with prev_state === state (terminal snapshot)", () => {
+    const event = parseEvent(
+      JSON.stringify({
+        kind: "executor.deleted",
+        executor: EXECUTOR,
+        prev_state: "approved",
+        state: "approved",
+      }),
+    );
+    if (event.kind !== "executor.deleted") return;
+    expect(event.prev_state).toBe(event.state);
+  });
+
+  it("classifies truncated/broken executor frames as malformed", () => {
+    // No executor row.
+    expect(
+      parseIgnored('{"kind":"executor.online","state":"online","last_seen_at":"x"}').reason,
+    ).toBe("malformed-payload");
+    // No transition state.
+    expect(
+      parseIgnored(
+        JSON.stringify({ kind: "executor.updated", executor: EXECUTOR }),
+      ).reason,
+    ).toBe("malformed-payload");
+    // Presence kinds refuse to parse without their timestamp (§5.2).
+    expect(
+      parseIgnored(
+        JSON.stringify({ kind: "executor.online", executor: EXECUTOR, state: "online" }),
+      ).reason,
+    ).toBe("malformed-payload");
+    expect(
+      parseIgnored(
+        JSON.stringify({ kind: "executor.offline", executor: EXECUTOR, state: "offline" }),
+      ).reason,
+    ).toBe("malformed-payload");
+  });
+
+  it("keeps executor.stale unknown — stale is a silent corridor, no kind", () => {
+    const result = parseIgnored(
+      JSON.stringify({ kind: "executor.stale", executor: EXECUTOR, state: "stale" }),
+    );
+    expect(result.reason).toBe("unknown-kind");
+    expect(result.kind).toBe("executor.stale");
+  });
+
+  it("classifies garbage frames: primitives invalid-json, arrays missing-kind", () => {
+    // An array IS valid JSON and passes isRecord (typeof "object") — the
+    // discriminator gate then rejects it, exactly like the frozen task kinds.
+    expect(parseIgnored('[{"kind":"executor.online"}]').reason).toBe("missing-kind");
+    expect(parseIgnored("42").reason).toBe("invalid-json");
+    expect(parseIgnored("null").reason).toBe("invalid-json");
+    expect(parseIgnored("not json{").reason).toBe("invalid-json");
   });
 });
 

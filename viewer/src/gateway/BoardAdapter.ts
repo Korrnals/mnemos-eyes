@@ -8,6 +8,12 @@ import { getUiToken } from "./uiToken";
 import type {
   ArchivePage,
   ArchiveParams,
+  AssignmentCancelledResult,
+  AssignmentCreateInput,
+  AssignmentCreatedResult,
+  AssignmentListParams,
+  AssignmentsPage,
+  AutomationStatus,
   BoardHealth,
   BoardHealthDetail,
   BoardHealthServer,
@@ -15,7 +21,16 @@ import type {
   BoardSearchResponse,
   BoardSummary,
   BoardTask,
+  ExecutionSettings,
+  ExecutionSettingsInput,
+  ExecutorsPage,
+  HookCreateInput,
+  HookPatchInput,
+  HookRule,
+  HooksPage,
   InboxRefreshResult,
+  LaunchesPage,
+  LaunchesParams,
   MemoryPulse,
   MemoryPulseItem,
   MemoryPulseServerNote,
@@ -23,6 +38,12 @@ import type {
   MergedMemoryListItem,
   MergedTags,
   PulseParams,
+  RuleDeletedAck,
+  ScheduleCreateInput,
+  SchedulePatchInput,
+  ScheduleRule,
+  ScheduleRunResult,
+  SchedulesPage,
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
@@ -80,6 +101,23 @@ import type {
  * - unarchiveTask  POST   /api/tasks/{id}/unarchive         → 200 UnarchiveOut
  * - adoptInboxItem POST   /api/tasks/inbox/{memory_id}/adopt → 201 TaskOut | 409
  * - refreshInbox   POST   /api/tasks/inbox/refresh          → 200 counters
+ *
+ * AGW-1 agents domain (ARCH-9, ADR 0009 Amd 2 — reads open, writes ui-token):
+ * - listAssignments      GET  /api/assignments                    ?state&task_id&executor_id
+ * - createAssignment     POST /api/assignments                    → 201 | 404/422/409
+ * - cancelAssignment     POST /api/assignments/{id}/cancel        → 200 | 409
+ * - listExecutors        GET  /api/executors                      (meta: presence TTLs)
+ * - getExecutionSettings GET  /api/settings/execution
+ * - putExecutionSettings PUT  /api/settings/execution             → 200 | 422
+ * SCHED-1 automation (ADR 0013 — hooks consume in a later wave):
+ * - automationStatus     GET  /api/automation/status
+ * - listSchedules        GET  /api/automation/schedules
+ * - createSchedule       POST /api/automation/schedules           → 201 | 422
+ * - patchSchedule        PATCH /api/automation/schedules/{id}     → 200 | 404/422
+ * - deleteSchedule       DELETE /api/automation/schedules/{id}    → 200 (soft-disable)
+ * - runScheduleNow       POST /api/automation/schedules/{id}/run  → 200 | 404/422/409
+ * - listHooks / createHook / patchHook / deleteHook               (mirrors schedules)
+ * - listLaunches         GET  /api/automation/launches            ?rule_id&kind&decision&limit&cursor
  *
  * v0 honestly declares metrics / traces / sessions / agentRecall
  * unsupported (501) — they are mnemos-side views the merge API does not
@@ -178,6 +216,72 @@ export interface BoardGateway extends MemoryGateway {
   adoptInboxItem(memoryId: string): Promise<BoardTask>;
   /** Force one synchronous inbox scan (`POST /api/tasks/inbox/refresh`). */
   refreshInbox(): Promise<InboxRefreshResult>;
+
+  // --- AGW-1 agents domain (ARCH-9, ADR 0009 Amd 2; wire in the docblock) ------
+
+  /**
+   * Assignment queue (`GET /api/assignments`, open read). Every item carries
+   * the computed `routing` annotation; `state` must be a dictionary value
+   * (422 otherwise). `executor_id` is the presence piggyback, not a filter.
+   */
+  listAssignments(
+    params?: AssignmentListParams,
+    signal?: AbortSignal,
+  ): Promise<AssignmentsPage>;
+  /**
+   * Queue an execution attempt (`POST /api/assignments`, ui-token, 201).
+   * 404 unknown task; 422 archived/terminal task or unknown harness; 409
+   * while another active assignment holds the task (≤1 invariant).
+   */
+  createAssignment(payload: AssignmentCreateInput): Promise<AssignmentCreatedResult>;
+  /**
+   * Cancel an assignment (`POST /api/assignments/{id}/cancel`, ui-token).
+   * Legal from queued/claimed/running; `moved` reports the task column
+   * return when the attempt had moved it to in-progress.
+   */
+  cancelAssignment(
+    assignmentId: number,
+    reason?: string,
+  ): Promise<AssignmentCancelledResult>;
+  /**
+   * Executor registry (`GET /api/executors`, open read). Presence is
+   * computed server-side per GET; the TTL constants and sweeper cadence
+   * travel in `meta` — clients read them, never hardcode (spec §5.1).
+   */
+  listExecutors(signal?: AbortSignal): Promise<ExecutorsPage>;
+  /** Default/fallback executor pair (`GET /api/settings/execution`, open read). */
+  getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
+  /**
+   * Set the default/fallback pair (`PUT /api/settings/execution`,
+   * ui-token). Amd 2 §5 gates answer 422: a default must exist, be
+   * approved, enabled, currently online and travel local-poll.
+   */
+  putExecutionSettings(payload: ExecutionSettingsInput): Promise<ExecutionSettings>;
+
+  // --- SCHED-1 automation (ADR 0013; no hooks this wave — adapter surface only) -
+
+  /** Engine/caps/condition-meta projection (`GET /api/automation/status`). */
+  automationStatus(signal?: AbortSignal): Promise<AutomationStatus>;
+  /** Schedule rules incl. soft-deleted (`GET /api/automation/schedules`). */
+  listSchedules(signal?: AbortSignal): Promise<SchedulesPage>;
+  /** Create a schedule (`POST`, ui-token; created disabled — enable via PATCH). */
+  createSchedule(payload: ScheduleCreateInput): Promise<ScheduleRule>;
+  /** Patch a schedule (`PATCH`; server recomputes next_run_at from now). */
+  patchSchedule(ruleId: number, patch: SchedulePatchInput): Promise<ScheduleRule>;
+  /** Soft-disable retention DELETE (ADR 0013 §2 — the row is never destroyed). */
+  deleteSchedule(ruleId: number): Promise<RuleDeletedAck>;
+  /** «Запустить сейчас» — manual trigger (`POST …/run`, ui-token, sync). */
+  runScheduleNow(ruleId: number): Promise<ScheduleRunResult>;
+  /** Hook rules incl. soft-deleted (`GET /api/automation/hooks`). */
+  listHooks(signal?: AbortSignal): Promise<HooksPage>;
+  /** Create a hook (`POST`, ui-token; whitelist-validated server-side, 422). */
+  createHook(payload: HookCreateInput): Promise<HookRule>;
+  /** Patch a hook (`PATCH`; action change resets source_allowlist defaults). */
+  patchHook(ruleId: number, patch: HookPatchInput): Promise<HookRule>;
+  /** Soft-disable retention DELETE (same semantics as schedules). */
+  deleteHook(ruleId: number): Promise<RuleDeletedAck>;
+  /** Launch journal page (`GET /api/automation/launches`, cursor contract). */
+  listLaunches(params?: LaunchesParams, signal?: AbortSignal): Promise<LaunchesPage>;
 }
 
 export interface BoardAdapterOptions {
@@ -452,6 +556,161 @@ export class BoardAdapter implements BoardGateway {
       // The server scans every store synchronously — seconds are accepted
       // for an explicit refresh (board-openapi-snapshot description).
       timeoutMs: SEARCH_TIMEOUT_MS,
+    });
+  }
+
+  // --- AGW-1 agents domain (ARCH-9, ADR 0009 Amd 2; ui-token writes) -----------
+
+  async listAssignments(
+    params: AssignmentListParams = {},
+    signal?: AbortSignal,
+  ): Promise<AssignmentsPage> {
+    // Wire parity: executor_id rides along (presence piggyback), but the
+    // server does NOT filter the list by it — executor filtering is the
+    // client's job over the full projection.
+    return this.request<AssignmentsPage>("/assignments", {
+      query: {
+        state: params.state,
+        task_id: params.task_id,
+        executor_id: params.executor_id,
+      },
+      signal,
+    });
+  }
+
+  async createAssignment(
+    payload: AssignmentCreateInput,
+  ): Promise<AssignmentCreatedResult> {
+    return this.request<AssignmentCreatedResult>("/assignments", {
+      method: "POST",
+      // Wire shape: executor_id is a plain string with a server default —
+      // the pin travels as "" when the owner chose chain resolution.
+      body: {
+        task_id: payload.task_id,
+        specialist: payload.specialist,
+        harness: payload.harness,
+        executor_id: payload.executor_id ?? "",
+      },
+      auth: true,
+    });
+  }
+
+  async cancelAssignment(
+    assignmentId: number,
+    reason = "",
+  ): Promise<AssignmentCancelledResult> {
+    return this.request<AssignmentCancelledResult>(
+      `/assignments/${assignmentId}/cancel`,
+      { method: "POST", body: { reason }, auth: true },
+    );
+  }
+
+  async listExecutors(signal?: AbortSignal): Promise<ExecutorsPage> {
+    return this.request<ExecutorsPage>("/executors", { signal });
+  }
+
+  async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {
+    return this.request<ExecutionSettings>("/settings/execution", { signal });
+  }
+
+  async putExecutionSettings(
+    payload: ExecutionSettingsInput,
+  ): Promise<ExecutionSettings> {
+    return this.request<ExecutionSettings>("/settings/execution", {
+      method: "PUT",
+      // Wire shape: scope is a required string ('' = global default).
+      body: {
+        default_executor: payload.default_executor,
+        fallback_executor: payload.fallback_executor,
+        scope: payload.scope ?? "",
+      },
+      auth: true,
+    });
+  }
+
+  // --- SCHED-1 automation (ADR 0013; ui-token mutations) ------------------------
+
+  async automationStatus(signal?: AbortSignal): Promise<AutomationStatus> {
+    return this.request<AutomationStatus>("/automation/status", { signal });
+  }
+
+  async listSchedules(signal?: AbortSignal): Promise<SchedulesPage> {
+    return this.request<SchedulesPage>("/automation/schedules", { signal });
+  }
+
+  async createSchedule(payload: ScheduleCreateInput): Promise<ScheduleRule> {
+    return this.request<ScheduleRule>("/automation/schedules", {
+      method: "POST",
+      body: payload,
+      auth: true,
+    });
+  }
+
+  async patchSchedule(
+    ruleId: number,
+    patch: SchedulePatchInput,
+  ): Promise<ScheduleRule> {
+    return this.request<ScheduleRule>(`/automation/schedules/${ruleId}`, {
+      method: "PATCH",
+      body: patch,
+      auth: true,
+    });
+  }
+
+  async deleteSchedule(ruleId: number): Promise<RuleDeletedAck> {
+    return this.request<RuleDeletedAck>(`/automation/schedules/${ruleId}`, {
+      method: "DELETE",
+      auth: true,
+    });
+  }
+
+  async runScheduleNow(ruleId: number): Promise<ScheduleRunResult> {
+    return this.request<ScheduleRunResult>(`/automation/schedules/${ruleId}/run`, {
+      method: "POST",
+      auth: true,
+    });
+  }
+
+  async listHooks(signal?: AbortSignal): Promise<HooksPage> {
+    return this.request<HooksPage>("/automation/hooks", { signal });
+  }
+
+  async createHook(payload: HookCreateInput): Promise<HookRule> {
+    return this.request<HookRule>("/automation/hooks", {
+      method: "POST",
+      body: payload,
+      auth: true,
+    });
+  }
+
+  async patchHook(ruleId: number, patch: HookPatchInput): Promise<HookRule> {
+    return this.request<HookRule>(`/automation/hooks/${ruleId}`, {
+      method: "PATCH",
+      body: patch,
+      auth: true,
+    });
+  }
+
+  async deleteHook(ruleId: number): Promise<RuleDeletedAck> {
+    return this.request<RuleDeletedAck>(`/automation/hooks/${ruleId}`, {
+      method: "DELETE",
+      auth: true,
+    });
+  }
+
+  async listLaunches(
+    params: LaunchesParams = {},
+    signal?: AbortSignal,
+  ): Promise<LaunchesPage> {
+    return this.request<LaunchesPage>("/automation/launches", {
+      query: {
+        rule_id: params.rule_id,
+        kind: params.kind,
+        decision: params.decision,
+        limit: params.limit,
+        cursor: params.cursor,
+      },
+      signal,
     });
   }
 

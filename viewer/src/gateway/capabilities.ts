@@ -18,6 +18,16 @@ import type {
   TaskReports,
   TaskUnarchiveResult,
 } from "./boardTypes";
+import type {
+  AssignmentCancelledResult,
+  AssignmentCreateInput,
+  AssignmentCreatedResult,
+  AssignmentListParams,
+  AssignmentsPage,
+  ExecutionSettings,
+  ExecutionSettingsInput,
+  ExecutorsPage,
+} from "./boardTypes";
 import type { InboxParams } from "./BoardAdapter";
 
 /**
@@ -126,5 +136,68 @@ export function isTaskMutationSource(
     typeof (gateway as Partial<TaskMutationSource>).archiveTask === "function" &&
     typeof (gateway as Partial<TaskMutationSource>).adoptInboxItem === "function" &&
     typeof (gateway as Partial<TaskMutationSource>).hasUiToken === "function"
+  );
+}
+
+/**
+ * AGW-1 agents-domain read surface (spec 2026-09-19 §5): the assignment
+ * queue, the executor registry and the default-executor settings. Structural,
+ * like every guard above — the mnemos HttpAdapter legitimately lacks the
+ * methods and agents pages render their honest unsupported states. The
+ * SCHED-1 automation surface deliberately has NO guard: it is consumed by a
+ * later wave, adapter methods suffice for now.
+ */
+export interface AgentsSource {
+  /** Assignment queue (`GET /api/assignments`) — items carry routing. */
+  listAssignments(
+    params?: AssignmentListParams,
+    signal?: AbortSignal,
+  ): Promise<AssignmentsPage>;
+  /** Executor registry (`GET /api/executors`) — meta carries presence TTLs. */
+  listExecutors(signal?: AbortSignal): Promise<ExecutorsPage>;
+  /** Default/fallback executor pair (`GET /api/settings/execution`). */
+  getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
+}
+
+/** Gateway type that also serves the agents-domain reads. */
+export type AgentsGateway = MemoryGateway & AgentsSource;
+
+export function isAgentsSource(gateway: MemoryGateway): gateway is AgentsGateway {
+  return (
+    typeof (gateway as Partial<AgentsSource>).listAssignments === "function" &&
+    typeof (gateway as Partial<AgentsSource>).listExecutors === "function" &&
+    typeof (gateway as Partial<AgentsSource>).getExecutionSettings === "function"
+  );
+}
+
+/**
+ * AGW-1 agents-domain mutations — all ui-token class on the wire: queue an
+ * attempt, cancel one, set the default-executor pair. `hasUiToken` is NOT
+ * repeated here: the Ф3 mutation surface reuses the task guard's answer
+ * (one token class, one panel).
+ */
+export interface AgentsMutationSource {
+  /** Queue an execution attempt (`POST /api/assignments`, 201). */
+  createAssignment(payload: AssignmentCreateInput): Promise<AssignmentCreatedResult>;
+  /** Cancel (`POST /api/assignments/{id}/cancel`; queued/claimed/running). */
+  cancelAssignment(
+    assignmentId: number,
+    reason?: string,
+  ): Promise<AssignmentCancelledResult>;
+  /** Set default/fallback (`PUT /api/settings/execution`; Amd 2 §5 gates). */
+  putExecutionSettings(payload: ExecutionSettingsInput): Promise<ExecutionSettings>;
+}
+
+/** Gateway type that also speaks the agents-domain mutation wire. */
+export type AgentsMutationGateway = MemoryGateway & AgentsSource & AgentsMutationSource;
+
+export function isAgentsMutationSource(
+  gateway: MemoryGateway,
+): gateway is AgentsMutationGateway {
+  return (
+    typeof (gateway as Partial<AgentsMutationSource>).createAssignment === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).cancelAssignment === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).putExecutionSettings ===
+      "function"
   );
 }
