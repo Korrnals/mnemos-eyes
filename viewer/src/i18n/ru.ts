@@ -278,7 +278,27 @@ export const ru = {
     "mnemos 4.1 возвращает только счётчики и метаданные сессии — отдельных ходов и связанных воспоминаний у него нет read-эндпоинта. Счётчик выше — честный итог.",
   "sessions.all": "Все сессии",
 
-  // --- tasks (Ф2 — read-only domain, mutations are Ф3) ---------------------------
+  // --- toasts (Ф3 mutation feedback) ---------------------------------------------
+  "toasts.regionLabel": "Уведомления",
+  "toasts.dismissAria": "Закрыть уведомление",
+
+  // --- ui-token gate (Ф3, class ui) ------------------------------------------------
+  "uiToken.title": "Мутации защищены ui-токеном",
+  "uiToken.description":
+    "Для изменения задач нужен токен класса ui. Вставьте значение — оно останется только в этой вкладке (sessionStorage) и уйдёт только на ваш board-сервер.",
+  "uiToken.rejectedDescription":
+    "Сервер отклонил токен (401). Вставьте актуальное значение — операция повторится автоматически.",
+  "uiToken.fieldLabel": "Ui-токен",
+  "uiToken.showValue": "Показать значение токена",
+  "uiToken.hideValue": "Скрыть значение токена",
+  "uiToken.hint":
+    "Где взять: значение секрета vesmaro-eyes-ui-token (например, kubectl get secret vesmaro-eyes-ui-token -o yaml у администратора кластера).",
+  "uiToken.continueReadOnly": "Продолжить только чтение",
+  "uiToken.submit": "Сохранить и продолжить",
+  "uiToken.signOut": "Выйти",
+  "uiToken.signOutAria": "Убрать ui-токен из этой вкладки",
+
+  // --- tasks (Ф2 reads + Ф3 mutations) --------------------------------------------
   "tasks.title": "Задачи",
   "tasks.loading": "Загружаем задачи",
   "tasks.loadFailed": "Не удалось загрузить задачи",
@@ -312,9 +332,9 @@ export const ru = {
   "tasks.colProject": "Проект",
   "tasks.colAgent": "Агент",
   "tasks.colDate": "Обновлено",
+  "tasks.colActions": "Действия",
   "tasks.noProject": "без проекта",
   "tasks.reportsCountTitle": "отчётов — {{count}}",
-  "tasks.readOnlyNote": "Список только для чтения — управление задачами появится в Фазе 3.",
   "tasks.loadingOne": "Загружаем задачу",
   "tasks.loadOneFailed": "Не удалось загрузить задачу",
   "tasks.noId": "В маршруте нет id задачи",
@@ -322,6 +342,7 @@ export const ru = {
   "tasks.notFoundMessage":
     "Задачи «{{id}}» нет на доске — возможно, она в архиве или id опечатан.",
   "tasks.goArchive": "Открыть архив",
+  "tasks.editLabel": "Изменить",
   "tasks.createdLabel": "создана",
   "tasks.updatedLabel": "обновлена",
   "tasks.agentChip": "агент: {{agent}}",
@@ -330,7 +351,9 @@ export const ru = {
   "tasks.tabHistory": "История",
   "tasks.tabMemory": "Память",
   "tasks.tabDetails": "Детали",
-  "tasks.readOnlyFooter": "read-only — управление в Фазе 3",
+  "tasks.resumeLabel": "Вернуть в работу",
+  "tasks.resumeTitle":
+    "UI-8: статус → in-progress, колонка не меняется (живой финальный отчёт)",
   "tasks.reportsLoading": "Загружаем отчёты",
   "tasks.reportsFailed": "Не удалось загрузить отчёты",
   "tasks.reportsEmpty": "Отчётов пока нет",
@@ -378,16 +401,16 @@ export const ru = {
   "tasks.inboxShowAdopted": "показывать принятые",
   "tasks.inboxEmpty": "Хранилища просканированы — новых записей task:queue нет",
   "tasks.inboxEmptyHint":
-    "Новые записи появятся после сканирования (кнопка появится в Фазе 3).",
+    "Новые записи появятся после сканирования хранилищ (кнопка «Сканировать»).",
   "tasks.inboxLabel": "Записи task:queue",
   "tasks.inboxStaleNote": "Исчезли из источника (примятие невозможно):",
   "tasks.inboxStaleLabel": "Исчезнувшие записи",
   "tasks.inboxSource": "сервер: {{server}}",
   "tasks.inboxAdoptedLink": "принята → {{id}}",
   "tasks.inboxNoSpecialist": "специалист не указан",
-  "tasks.scanLabel": "Сканировать",
-  "tasks.scanDisabledTitle": "Сканирование — мутация; появится в Фазе 3",
-  "tasks.scanPhaseNote": "сканирование хранилищ — Фаза 3",
+  "tasks.scanLabel": "Сканировать хранилища",
+  "tasks.scanBusy": "Сканируем…",
+  "tasks.adoptLabel": "Принять в борд",
   "tasks.archiveTitle": "Архив",
   "tasks.archiveLoading": "Загружаем архив",
   "tasks.archiveFailed": "Не удалось загрузить архив",
@@ -399,7 +422,6 @@ export const ru = {
   "tasks.archiveLabel": "Архивные задачи",
   "tasks.archiveFrom": "архивирована из «{{col}}»",
   "tasks.unarchiveLabel": "Вернуть на доску",
-  "tasks.unarchiveDisabledTitle": "Возврат — мутация; появится в Фазе 3",
   "tasks.archivePagesAria": "Страницы архива",
   "tasks.archiveRange": "Показано {{from}}–{{to}} из {{total}}",
   "tasks.archivePageEmpty": "На этой странице записей нет — вернитесь назад.",
@@ -414,6 +436,78 @@ export const ru = {
   "tasks.priority.high": "высокий",
   "tasks.priority.normal": "обычный",
   "tasks.priority.low": "низкий",
+
+  // --- tasks: edit dialog (Ф3, BE-12 force path) -----------------------------------
+  "tasks.edit.title": "Изменить задачу",
+  "tasks.edit.description":
+    "Контентные поля задачи {{id}}. Рабочие статусы меняются отдельно (перемещение, UI-8).",
+  "tasks.edit.titleLabel": "Название",
+  "tasks.edit.titleError": "Название обязательно (1–200 символов) — пустую задачу сохранить нельзя.",
+  "tasks.edit.summaryLabel": "Сводка",
+  "tasks.edit.specLabel": "Спецификация",
+  "tasks.edit.projectLabel": "Проект",
+  "tasks.edit.envLabel": "Среда",
+  "tasks.edit.priorityLabel": "Приоритет",
+  "tasks.edit.specialistsLabel": "Специалисты (через запятую)",
+  "tasks.edit.tagsLabel": "Теги mnemos (через запятую)",
+  "tasks.edit.listPlaceholder": "значение, значение…",
+  "tasks.edit.cancel": "Отмена",
+  "tasks.edit.submit": "Сохранить",
+  "tasks.edit.lockedTitle": "Задача старше 24 часов — правка заблокирована (423)",
+  "tasks.edit.lockedDetail":
+    "Сервер блокирует правку контента задач старше 24 часов (BE-12). Можно изменить принудительно — правка будет помечена force=true в истории.",
+  "tasks.edit.forceLabel": "Изменить принудительно",
+  "tasks.edit.forceConfirm":
+    "Задача старше 24 часов. Изменить принудительно (force=true)? Правка попадёт в аудит как принудительная.",
+
+  // --- tasks: create dialog (Ф3 — direct POST /api/tasks) ---------------------------
+  "tasks.create.label": "Задача",
+  "tasks.create.title": "Новая задача",
+  "tasks.create.description":
+    "Первая строка — название, остальное — сводка. Задача создаётся сразу на борде в колонке «открыта».",
+  "tasks.create.textLabel": "Сырой текст",
+  "tasks.create.textPlaceholder": "Название задачи с первой строки…\nДальше — сводка и контекст.",
+  "tasks.create.textHint": "первая строка → название (1–200), остальное → сводка",
+  "tasks.create.textError":
+    "Первая строка обязательна и должна быть короче 200 символов — из неё получается название.",
+  "tasks.create.projectLabel": "Проект",
+  "tasks.create.tagsLabel": "Теги mnemos (через запятую)",
+  "tasks.create.submit": "Создать задачу",
+
+  // --- tasks: row action menu (Ф3) ---------------------------------------------------
+  "tasks.menu.triggerAria": "Действия с задачей {{id}}",
+  "tasks.menu.label": "Меню задачи {{id}}",
+  "tasks.menu.edit": "Изменить",
+  "tasks.menu.move": "Переместить…",
+  "tasks.menu.archive": "Архивировать",
+  "tasks.menu.archiveConfirm": "Архивировать {{id}}? Задачу можно будет вернуть из архива.",
+  "tasks.menu.back": "Назад",
+
+  // --- tasks: mutation toasts (Ф3) ---------------------------------------------------
+  "tasks.mutation.editFailed": "Не удалось сохранить задачу",
+  "tasks.mutation.saved": "{{id}}: сохранено",
+  "tasks.mutation.savedDetail": "содержание задачи обновлено",
+  "tasks.mutation.savedForced": "изменено принудительно (force=true)",
+  "tasks.mutation.resumeFailed": "Не удалось вернуть задачу в работу",
+  "tasks.mutation.resumed": "{{id}}: возвращена в работу",
+  "tasks.mutation.resumedDetail": "статус in-progress · колонка не менялась",
+  "tasks.mutation.moveFailed": "Не удалось переместить задачу",
+  "tasks.mutation.moved": "{{id}}: перемещена",
+  "tasks.mutation.movedDetail": "колонка: {{col}}",
+  "tasks.mutation.archiveFailed": "Не удалось архивировать задачу",
+  "tasks.mutation.archived": "{{id}}: в архиве",
+  "tasks.mutation.unarchiveFailed": "Не удалось вернуть задачу из архива",
+  "tasks.mutation.unarchived": "{{id}}: возвращена на доску",
+  "tasks.mutation.createFailed": "Не удалось создать задачу",
+  "tasks.mutation.created": "Создана задача {{id}}",
+  "tasks.mutation.openTask": "Открыть задачу",
+  "tasks.mutation.adoptFailed": "Не удалось принять запись в борд",
+  "tasks.mutation.adoptConflictTitle": "Запись уже принята",
+  "tasks.mutation.adoptConflictDetail": "уже существует задача {{id}}",
+  "tasks.mutation.adopted": "Принята в борд: {{id}}",
+  "tasks.mutation.scanFailed": "Не удалось просканировать хранилища",
+  "tasks.mutation.scanDone": "Сканирование завершено",
+  "tasks.mutation.scanDetail": "просмотрено записей: {{found}}, новых: {{new}}",
 
   // --- traces -----------------------------------------------------------------
   "traces.title": "Трассировки",

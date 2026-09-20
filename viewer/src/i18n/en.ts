@@ -275,6 +275,26 @@ export const en: Record<TranslationKey, string> = {
     "mnemos 4.1 returns session counters and metadata only — individual turns and linked memories have no read endpoint. The turn count above is the honest total.",
   "sessions.all": "All sessions",
 
+  // --- toasts (Ф3 mutation feedback) ---------------------------------------------
+  "toasts.regionLabel": "Notifications",
+  "toasts.dismissAria": "Dismiss notification",
+
+  // --- ui-token gate (Ф3, class ui) ------------------------------------------------
+  "uiToken.title": "Mutations are protected by a ui token",
+  "uiToken.description":
+    "Task mutations need a class-ui token. Paste the value — it stays in this tab only (sessionStorage) and travels only to your board server.",
+  "uiToken.rejectedDescription":
+    "The server rejected the token (401). Paste a current value — the operation will retry automatically.",
+  "uiToken.fieldLabel": "Ui token",
+  "uiToken.showValue": "Reveal the token value",
+  "uiToken.hideValue": "Hide the token value",
+  "uiToken.hint":
+    "Where to get one: the value of the vesmaro-eyes-ui-token secret (e.g. kubectl get secret vesmaro-eyes-ui-token -o yaml via your cluster admin).",
+  "uiToken.continueReadOnly": "Continue read-only",
+  "uiToken.submit": "Save and continue",
+  "uiToken.signOut": "Sign out",
+  "uiToken.signOutAria": "Remove the ui token from this tab",
+
   // --- tasks (Ф2 — read-only domain, mutations are Ф3) ---------------------------
   "tasks.title": "Tasks",
   "tasks.loading": "Loading tasks",
@@ -309,9 +329,9 @@ export const en: Record<TranslationKey, string> = {
   "tasks.colProject": "Project",
   "tasks.colAgent": "Agent",
   "tasks.colDate": "Updated",
+  "tasks.colActions": "Actions",
   "tasks.noProject": "no project",
   "tasks.reportsCountTitle": "reports — {{count}}",
-  "tasks.readOnlyNote": "Read-only list — task management arrives in Phase 3.",
   "tasks.loadingOne": "Loading task",
   "tasks.loadOneFailed": "Could not load the task",
   "tasks.noId": "The route carries no task id",
@@ -319,6 +339,7 @@ export const en: Record<TranslationKey, string> = {
   "tasks.notFoundMessage":
     "Task “{{id}}” is not on the board — it may be archived or the id is mistyped.",
   "tasks.goArchive": "Open the archive",
+  "tasks.editLabel": "Edit",
   "tasks.createdLabel": "created",
   "tasks.updatedLabel": "updated",
   "tasks.agentChip": "agent: {{agent}}",
@@ -327,7 +348,9 @@ export const en: Record<TranslationKey, string> = {
   "tasks.tabHistory": "History",
   "tasks.tabMemory": "Memory",
   "tasks.tabDetails": "Details",
-  "tasks.readOnlyFooter": "read-only — management lands in Phase 3",
+  "tasks.resumeLabel": "Resume",
+  "tasks.resumeTitle":
+    "UI-8: status → in-progress, the column stays (live final report)",
   "tasks.reportsLoading": "Loading reports",
   "tasks.reportsFailed": "Could not load reports",
   "tasks.reportsEmpty": "No reports yet",
@@ -375,16 +398,16 @@ export const en: Record<TranslationKey, string> = {
   "tasks.inboxShowAdopted": "show adopted",
   "tasks.inboxEmpty": "Stores scanned — no new task:queue records",
   "tasks.inboxEmptyHint":
-    "New records appear after a scan (the button arrives in Phase 3).",
+    "New records appear after a store scan (the “Scan” button).",
   "tasks.inboxLabel": "task:queue records",
   "tasks.inboxStaleNote": "Disappeared from the source (cannot be adopted):",
   "tasks.inboxStaleLabel": "Disappeared records",
   "tasks.inboxSource": "server: {{server}}",
   "tasks.inboxAdoptedLink": "adopted → {{id}}",
   "tasks.inboxNoSpecialist": "no specialist",
-  "tasks.scanLabel": "Scan",
-  "tasks.scanDisabledTitle": "Scanning is a mutation; arrives in Phase 3",
-  "tasks.scanPhaseNote": "store scanning — Phase 3",
+  "tasks.scanLabel": "Scan stores",
+  "tasks.scanBusy": "Scanning…",
+  "tasks.adoptLabel": "Adopt to board",
   "tasks.archiveTitle": "Archive",
   "tasks.archiveLoading": "Loading archive",
   "tasks.archiveFailed": "Could not load the archive",
@@ -396,7 +419,6 @@ export const en: Record<TranslationKey, string> = {
   "tasks.archiveLabel": "Archived tasks",
   "tasks.archiveFrom": "archived from “{{col}}”",
   "tasks.unarchiveLabel": "Restore to board",
-  "tasks.unarchiveDisabledTitle": "Restore is a mutation; arrives in Phase 3",
   "tasks.archivePagesAria": "Archive pages",
   "tasks.archiveRange": "Showing {{from}}–{{to}} of {{total}}",
   "tasks.archivePageEmpty": "Nothing on this page — go back a page.",
@@ -411,6 +433,79 @@ export const en: Record<TranslationKey, string> = {
   "tasks.priority.high": "high",
   "tasks.priority.normal": "normal",
   "tasks.priority.low": "low",
+
+  // --- tasks: edit dialog (Ф3, BE-12 force path) -----------------------------------
+  "tasks.edit.title": "Edit task",
+  "tasks.edit.description":
+    "Content fields of task {{id}}. Workflow status moves separately (row move, UI-8).",
+  "tasks.edit.titleLabel": "Title",
+  "tasks.edit.titleError":
+    "Title is required (1–200 characters) — an empty task cannot be saved.",
+  "tasks.edit.summaryLabel": "Summary",
+  "tasks.edit.specLabel": "Specification",
+  "tasks.edit.projectLabel": "Project",
+  "tasks.edit.envLabel": "Environment",
+  "tasks.edit.priorityLabel": "Priority",
+  "tasks.edit.specialistsLabel": "Specialists (comma-separated)",
+  "tasks.edit.tagsLabel": "mnemos tags (comma-separated)",
+  "tasks.edit.listPlaceholder": "value, value…",
+  "tasks.edit.cancel": "Cancel",
+  "tasks.edit.submit": "Save",
+  "tasks.edit.lockedTitle": "Task is older than 24 hours — edit locked (423)",
+  "tasks.edit.lockedDetail":
+    "The server locks content edits on tasks older than 24 hours (BE-12). You can force the edit — it will be audited with force=true.",
+  "tasks.edit.forceLabel": "Edit anyway (force)",
+  "tasks.edit.forceConfirm":
+    "The task is older than 24 hours. Edit anyway (force=true)? The edit will be audited as forced.",
+
+  // --- tasks: create dialog (Ф3 — direct POST /api/tasks) ---------------------------
+  "tasks.create.label": "Task",
+  "tasks.create.title": "New task",
+  "tasks.create.description":
+    "The first line becomes the title, the rest the summary. The task is created on the board in the “open” column right away.",
+  "tasks.create.textLabel": "Raw text",
+  "tasks.create.textPlaceholder": "Task title on the first line…\nThen the summary and context.",
+  "tasks.create.textHint": "first line → title (1–200), the rest → summary",
+  "tasks.create.textError":
+    "The first line is required and must stay under 200 characters — it becomes the title.",
+  "tasks.create.projectLabel": "Project",
+  "tasks.create.tagsLabel": "mnemos tags (comma-separated)",
+  "tasks.create.submit": "Create task",
+
+  // --- tasks: row action menu (Ф3) ---------------------------------------------------
+  "tasks.menu.triggerAria": "Actions for task {{id}}",
+  "tasks.menu.label": "Task {{id}} menu",
+  "tasks.menu.edit": "Edit",
+  "tasks.menu.move": "Move to…",
+  "tasks.menu.archive": "Archive",
+  "tasks.menu.archiveConfirm": "Archive {{id}}? It can be restored from the archive later.",
+  "tasks.menu.back": "Back",
+
+  // --- tasks: mutation toasts (Ф3) ---------------------------------------------------
+  "tasks.mutation.editFailed": "Could not save the task",
+  "tasks.mutation.saved": "{{id}}: saved",
+  "tasks.mutation.savedDetail": "task content updated",
+  "tasks.mutation.savedForced": "edited with force=true",
+  "tasks.mutation.resumeFailed": "Could not resume the task",
+  "tasks.mutation.resumed": "{{id}}: resumed",
+  "tasks.mutation.resumedDetail": "status in-progress · column unchanged",
+  "tasks.mutation.moveFailed": "Could not move the task",
+  "tasks.mutation.moved": "{{id}}: moved",
+  "tasks.mutation.movedDetail": "column: {{col}}",
+  "tasks.mutation.archiveFailed": "Could not archive the task",
+  "tasks.mutation.archived": "{{id}}: archived",
+  "tasks.mutation.unarchiveFailed": "Could not restore the task",
+  "tasks.mutation.unarchived": "{{id}}: back on the board",
+  "tasks.mutation.createFailed": "Could not create the task",
+  "tasks.mutation.created": "Task {{id}} created",
+  "tasks.mutation.openTask": "Open task",
+  "tasks.mutation.adoptFailed": "Could not adopt the record",
+  "tasks.mutation.adoptConflictTitle": "Record already adopted",
+  "tasks.mutation.adoptConflictDetail": "task {{id}} already exists",
+  "tasks.mutation.adopted": "Adopted to board: {{id}}",
+  "tasks.mutation.scanFailed": "Could not scan the stores",
+  "tasks.mutation.scanDone": "Scan complete",
+  "tasks.mutation.scanDetail": "records seen: {{found}}, new: {{new}}",
 
   // --- traces -----------------------------------------------------------------
   "traces.title": "Traces",

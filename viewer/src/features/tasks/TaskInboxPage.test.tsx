@@ -10,12 +10,13 @@ import { GatewayContext } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { I18nProvider } from "@/i18n";
 import { ApiError } from "@/lib/errors";
+import { ToastProvider } from "@/components/Toast/ToastProvider";
+import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 
 /**
- * Ф2 inbox page (ADR 0010 reading surface): provenance cards, stale rows
- * dimmed into their own section, adopted rows behind the URL toggle, the
- * scan MUTATION honestly disabled with a phase-3 tooltip, and the state
- * matrix (loading / error / empty-filtered / unsupported).
+ * Ф2+Ф3 inbox page: provenance cards, stale rows dimmed into their own
+ * section, adopted rows behind the URL toggle; the scan mutation is now
+ * LIVE (button enabled) and adoptable rows carry «Adopt to board».
  */
 
 type Gateway = MockAdapter | HttpAdapter;
@@ -37,11 +38,15 @@ async function renderInbox(
   return renderToString(
     <GatewayContext.Provider value={gateway}>
       <QueryClientProvider client={queryClient}>
-        <I18nProvider initialLang="en">
-          <MemoryRouter initialEntries={[path]}>
-            <TaskInboxPage />
-          </MemoryRouter>
-        </I18nProvider>
+        <ToastProvider>
+          <UiTokenProvider>
+            <I18nProvider initialLang="en">
+              <MemoryRouter initialEntries={[path]}>
+                <TaskInboxPage />
+              </MemoryRouter>
+            </I18nProvider>
+          </UiTokenProvider>
+        </ToastProvider>
       </QueryClientProvider>
     </GatewayContext.Provider>,
   );
@@ -87,12 +92,17 @@ describe("TaskInboxPage (mock adapter)", () => {
     expect(staleAt).toBeGreaterThan(activeAt);
   });
 
-  it("renders the scan mutation honestly disabled with the phase-3 tooltip", async () => {
+  it("renders the scan mutation live and adopt buttons on adoptable rows", async () => {
     const html = await renderInbox(new MockAdapter({ latency: false }));
-    expect(html).toContain("Scan");
-    expect(html).toContain('title="Scanning is a mutation; arrives in Phase 3"');
-    expect(html).toContain("disabled");
-    expect(html).toContain("store scanning — Phase 3");
+    // Ф3: the scan button is enabled (spinner state drives disabled only).
+    expect(html).toContain("Scan stores");
+    expect(html).not.toContain('title="Scanning is a mutation; arrives in Phase 3"');
+    expect(html).not.toContain("store scanning — Phase 3");
+    // Adoptable rows (active, not adopted) carry the mutation button.
+    expect(html).toContain("Adopt to board");
+    // The stale record cannot be adopted — only one adopt button per card
+    // and none in the stale section (count: 2 active non-adopted records).
+    expect(html.match(/Adopt to board/g)?.length).toBe(2);
   });
 
   it("renders the loading skeleton while pending", () => {
@@ -100,11 +110,15 @@ describe("TaskInboxPage (mock adapter)", () => {
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
         <QueryClientProvider client={client}>
-          <I18nProvider initialLang="en">
-            <MemoryRouter initialEntries={["/tasks/inbox"]}>
-              <TaskInboxPage />
-            </MemoryRouter>
-          </I18nProvider>
+          <ToastProvider>
+            <UiTokenProvider>
+              <I18nProvider initialLang="en">
+                <MemoryRouter initialEntries={["/tasks/inbox"]}>
+                  <TaskInboxPage />
+                </MemoryRouter>
+              </I18nProvider>
+            </UiTokenProvider>
+          </ToastProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
     );
@@ -129,11 +143,15 @@ describe("TaskInboxPage (mock adapter)", () => {
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
         <QueryClientProvider client={client}>
-          <I18nProvider initialLang="en">
-            <MemoryRouter initialEntries={["/tasks/inbox"]}>
-              <TaskInboxPage />
-            </MemoryRouter>
-          </I18nProvider>
+          <ToastProvider>
+            <UiTokenProvider>
+              <I18nProvider initialLang="en">
+                <MemoryRouter initialEntries={["/tasks/inbox"]}>
+                  <TaskInboxPage />
+                </MemoryRouter>
+              </I18nProvider>
+            </UiTokenProvider>
+          </ToastProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
     );

@@ -50,6 +50,8 @@ export const keys = {
     archive: (params: ArchiveParams = {}) => ["tasks", "archive", params] as const,
     archiveAll: ["tasks", "archive"] as const,
     inbox: (params: InboxParams = {}) => ["tasks", "inbox", params] as const,
+    /** Prefix over every inbox query (adopt/refresh invalidation, Ф3). */
+    inboxAll: ["tasks", "inbox"] as const,
   },
   traces: {
     all: ["traces"] as const,

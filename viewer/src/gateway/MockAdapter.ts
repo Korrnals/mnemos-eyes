@@ -3,7 +3,7 @@ import type { InboxParams } from "./BoardAdapter";
 import { ApiError } from "@/lib/errors";
 import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
-  MOCK_ARCHIVE,
+  MOCK_ARCHIVED_TASK,
   MOCK_BOARD,
   MOCK_HISTORY,
   MOCK_INBOX,
@@ -16,13 +16,19 @@ import type {
   ArchiveParams,
   BoardHealthDetail,
   BoardSummary,
+  InboxRefreshResult,
   MemoryPulse,
   MemoryPulseItem,
   PulseParams,
+  TaskCreateInput,
   TaskHistory,
   TaskInbox,
+  TaskInboxEntry,
   TaskMemories,
+  TaskMutationAck,
+  TaskPatchInput,
   TaskReports,
+  TaskUnarchiveResult,
 } from "./boardTypes";
 import type { BoardTask } from "./boardTypes";
 import type {
@@ -44,6 +50,9 @@ const DEFAULT_TRACE_LIMIT = 50;
 /** Default wire limit for agent recall. */
 const DEFAULT_RECALL_LIMIT = 5;
 
+/** BE-12 content window: tasks older than this are 423-locked without force. */
+const LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export interface MockAdapterOptions {
   /**
    * Simulated network latency. Default 80–200 ms (drawn from a seeded PRNG,
@@ -51,6 +60,12 @@ export interface MockAdapterOptions {
    * use in tests.
    */
   latency?: false | { minMs: number; maxMs: number };
+  /**
+   * Clock seam for the Ф3 mutation paths (BE-12 24h lock, updated_at bumps).
+   * Defaults to real `Date.now`; tests inject a fixed epoch. Reads never
+   * consult the clock, so untouched instances stay byte-identical.
+   */
+  now?: () => number;
 }
 
 /**
@@ -63,11 +78,22 @@ export interface MockAdapterOptions {
 export class MockAdapter implements MemoryGateway {
   private readonly latency: false | { minMs: number; maxMs: number };
   private readonly rand: () => number;
+  private readonly now: () => number;
+
+  // --- Ф3 mutable task state (cloned per instance; fixtures stay pristine) ----
+  private tasks: BoardTask[];
+  private archivedTasks: BoardTask[];
+  private inboxItems: TaskInboxEntry[];
+  private nextTaskNo = 1;
 
   constructor(options: MockAdapterOptions = {}) {
     this.latency = options.latency ?? { minMs: 80, maxMs: 200 };
     // Fixed seed → identical latency sequences across runs.
     this.rand = mulberry32(20260916);
+    this.now = options.now ?? (() => Date.now());
+    this.tasks = MOCK_TASKS.map((task) => ({ ...task }));
+    this.archivedTasks = [{ ...MOCK_ARCHIVED_TASK }];
+    this.inboxItems = MOCK_INBOX.items.map((item) => ({ ...item }));
   }
 
   async search(params: SearchParams, signal?: AbortSignal): Promise<SearchResult[]> {
@@ -268,21 +294,25 @@ export class MockAdapter implements MemoryGateway {
     };
   }
 
-  // --- Ф2 task domain (boardFixtures.ts — corpus-shaped deterministic data) ----
+  // --- Ф2 task domain reads (mutable state; corpus-shaped deterministic seed) ---
 
   /** Board projection with the server's optional ?status= filter semantics. */
   async board(status?: string, signal?: AbortSignal): Promise<BoardSummary> {
     await this.delay(signal);
     const tasks = status
-      ? MOCK_BOARD.tasks.filter((task) => task.status === status)
-      : MOCK_BOARD.tasks;
-    return { ...MOCK_BOARD, tasks: tasks.map((task) => ({ ...task })) };
+      ? this.tasks.filter((task) => task.status === status)
+      : this.tasks;
+    return {
+      columns: [...MOCK_BOARD.columns],
+      tasks: tasks.map((task) => ({ ...task })),
+      counts: countByColumn(this.tasks),
+    };
   }
 
   /** Inbox read; the mock honours the wire's `include_adopted` switch. */
   async inbox(params: InboxParams = {}, signal?: AbortSignal): Promise<TaskInbox> {
     await this.delay(signal);
-    const items = MOCK_INBOX.items
+    const items = this.inboxItems
       .filter((item) => params.include_adopted || !item.adopted)
       .filter((item) => !params.project || item.project === params.project)
       .map((item) => ({ ...item }));
@@ -291,7 +321,7 @@ export class MockAdapter implements MemoryGateway {
 
   async reports(taskId: string, signal?: AbortSignal): Promise<TaskReports> {
     await this.delay(signal);
-    requireMockTask(taskId);
+    requireMockTask(taskId, this.tasks, this.archivedTasks);
     if (taskId !== MOCK_REPORTS.task_id) {
       return { ok: true, task_id: taskId, count: 0, items: [] };
     }
@@ -300,7 +330,7 @@ export class MockAdapter implements MemoryGateway {
 
   async history(taskId: string, signal?: AbortSignal): Promise<TaskHistory> {
     await this.delay(signal);
-    requireMockTask(taskId);
+    requireMockTask(taskId, this.tasks, this.archivedTasks);
     if (taskId !== MOCK_REPORTS.task_id) {
       return { events: [], memories: [] };
     }
@@ -312,7 +342,7 @@ export class MockAdapter implements MemoryGateway {
 
   async taskMemories(taskId: string, signal?: AbortSignal): Promise<TaskMemories> {
     await this.delay(signal);
-    requireMockTask(taskId);
+    requireMockTask(taskId, this.tasks, this.archivedTasks);
     if (taskId !== MOCK_REPORTS.task_id) {
       return { items: {}, unresolved: [], sources: {} };
     }
@@ -326,7 +356,7 @@ export class MockAdapter implements MemoryGateway {
   async archive(params: ArchiveParams = {}, signal?: AbortSignal): Promise<ArchivePage> {
     await this.delay(signal);
     const q = (params.q ?? "").trim().toLowerCase();
-    const rows = MOCK_ARCHIVE.items.filter((task) => {
+    const rows = this.archivedTasks.filter((task) => {
       if (q && !(`${task.title} ${task.summary}`.toLowerCase().includes(q))) return false;
       if (params.status && task.status !== params.status) return false;
       if (params.col && task.col !== params.col) return false;
@@ -343,19 +373,218 @@ export class MockAdapter implements MemoryGateway {
       limit,
       offset,
       items: rows.slice(offset, offset + limit).map((task) => ({ ...task })),
-      projects: { ...MOCK_ARCHIVE.projects },
+      projects: groupArchiveProjects(rows),
     };
   }
 
   async taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask> {
     await this.delay(signal);
-    const task = MOCK_TASKS.find((candidate) => candidate.id === taskId);
+    const task = this.tasks.find((candidate) => candidate.id === taskId);
     if (!task) {
       throw new ApiError(404, `task '${taskId}' not found on the board`, {
         url: "mock:/api/board",
       });
     }
     return { ...task };
+  }
+
+  // --- Ф3 mutations (mirror the board wire contract, ui-token gate excluded) ---
+  // The mock is the dev playground: hasUiToken() answers true and no auth
+  // wall exists, so mutation flows are exercisable without a token panel.
+
+  hasUiToken(): boolean {
+    return true;
+  }
+
+  async createTask(payload: TaskCreateInput, signal?: AbortSignal): Promise<BoardTask> {
+    await this.delay(signal);
+    const title = (payload.title ?? "").trim();
+    if (title.length === 0 || title.length > 200) {
+      throw new ApiError(422, "title must be 1..200 characters", {
+        url: "mock:/api/tasks",
+      });
+    }
+    const task: BoardTask = {
+      id: `MB-${this.nextTaskNo++}`,
+      col: payload.col || "open",
+      position: 0,
+      title,
+      summary: payload.summary ?? "",
+      spec: payload.spec ?? "",
+      agents: [...(payload.agents ?? [])],
+      specialists: [...(payload.specialists ?? [])],
+      env: payload.env || "unknown",
+      project: payload.project ?? "",
+      memory_ids: [...(payload.memory_ids ?? [])],
+      mnemos_tags: [...(payload.mnemos_tags ?? [])],
+      created_at: this.stamp(),
+      updated_at: this.stamp(),
+      archived: 0,
+      status: payload.status ?? payload.col ?? "open",
+      priority: payload.priority || "normal",
+      archived_from: "",
+    };
+    this.tasks.push(task);
+    return { ...task };
+  }
+
+  async patchTask(
+    taskId: string,
+    patch: TaskPatchInput,
+    signal?: AbortSignal,
+  ): Promise<BoardTask> {
+    await this.delay(signal);
+    const task = findMutableTask(taskId, this.tasks, this.archivedTasks);
+    // BE-12 mirror: content edits on tasks older than 24h answer 423 unless
+    // force; status transitions are never locked. Wire null = field absent.
+    const present = (value: unknown): boolean => value !== undefined && value !== null;
+    const touchesContent = CONTENT_FIELDS.some((field) =>
+      present((patch as Record<string, unknown>)[field]),
+    );
+    const ageMs = this.now() - Date.parse(task.updated_at);
+    if (touchesContent && patch.force !== true && ageMs > LOCK_WINDOW_MS) {
+      throw new ApiError(423, `task '${taskId}' is older than 24h — edit with force=true`, {
+        url: `mock:/api/tasks/${taskId}`,
+      });
+    }
+    const next: BoardTask = {
+      ...task,
+      ...(patch.title != null ? { title: patch.title } : {}),
+      ...(patch.summary != null ? { summary: patch.summary } : {}),
+      ...(patch.spec != null ? { spec: patch.spec } : {}),
+      ...(patch.project != null ? { project: patch.project } : {}),
+      ...(patch.env != null ? { env: patch.env } : {}),
+      ...(patch.priority != null ? { priority: patch.priority } : {}),
+      ...(patch.status != null ? { status: patch.status } : {}),
+      ...(patch.agents != null ? { agents: [...patch.agents] } : {}),
+      ...(patch.specialists != null ? { specialists: [...patch.specialists] } : {}),
+      ...(patch.memory_ids != null ? { memory_ids: [...patch.memory_ids] } : {}),
+      ...(patch.mnemos_tags != null ? { mnemos_tags: [...patch.mnemos_tags] } : {}),
+      updated_at: this.stamp(),
+    };
+    replaceInPlace(this.tasks, next);
+    if (this.archivedTasks.some((row) => row.id === taskId)) {
+      replaceInPlace(this.archivedTasks, next);
+    }
+    return { ...next };
+  }
+
+  async moveTask(
+    taskId: string,
+    col: string,
+    position?: number,
+    signal?: AbortSignal,
+  ): Promise<BoardTask> {
+    await this.delay(signal);
+    const task = findMutableTask(taskId, this.tasks, this.archivedTasks);
+    const next: BoardTask = {
+      ...task,
+      col,
+      ...(position !== undefined ? { position } : {}),
+      status: col, // server syncs status with the column on move (BE-10)
+      updated_at: this.stamp(),
+    };
+    replaceInPlace(this.tasks, next);
+    return { ...next };
+  }
+
+  async archiveTask(taskId: string, signal?: AbortSignal): Promise<TaskMutationAck> {
+    await this.delay(signal);
+    const task = findMutableTask(taskId, this.tasks, this.archivedTasks);
+    if (task.archived === 1) {
+      throw new ApiError(409, `task '${taskId}' is already archived`, {
+        url: `mock:/api/tasks/${taskId}/archive`,
+      });
+    }
+    const archived: BoardTask = {
+      ...task,
+      archived: 1,
+      archived_from: task.col,
+      updated_at: this.stamp(),
+    };
+    this.tasks = this.tasks.filter((row) => row.id !== taskId);
+    replaceInPlace(this.archivedTasks, archived, /* append */ true);
+    return { ok: true };
+  }
+
+  async unarchiveTask(
+    taskId: string,
+    signal?: AbortSignal,
+  ): Promise<TaskUnarchiveResult> {
+    await this.delay(signal);
+    const task = findMutableTask(taskId, this.tasks, this.archivedTasks);
+    if (task.archived !== 1) {
+      throw new ApiError(409, `task '${taskId}' is not archived`, {
+        url: `mock:/api/tasks/${taskId}/unarchive`,
+      });
+    }
+    const restored: BoardTask = {
+      ...task,
+      col: task.archived_from || "open", // BE-11b fallback: open
+      archived: 0,
+      archived_from: "",
+      updated_at: this.stamp(),
+    };
+    this.archivedTasks = this.archivedTasks.filter((row) => row.id !== taskId);
+    replaceInPlace(this.tasks, restored, /* append */ true);
+    return { ok: true, task: { ...restored } };
+  }
+
+  async adoptInboxItem(memoryId: string, signal?: AbortSignal): Promise<BoardTask> {
+    await this.delay(signal);
+    const item = this.inboxItems.find((row) => row.memory_id === memoryId);
+    if (!item) {
+      throw new ApiError(404, `inbox row '${memoryId}' not found`, {
+        url: `mock:/api/tasks/inbox/${memoryId}/adopt`,
+      });
+    }
+    if (item.adopted && item.adopted_task_id) {
+      // Wire mirrors a double adoption with 409 + {task_id} in the body.
+      throw new ApiError(409, `already adopted as ${item.adopted_task_id}`, {
+        url: `mock:/api/tasks/inbox/${memoryId}/adopt`,
+        body: JSON.stringify({ task_id: item.adopted_task_id }),
+      });
+    }
+    const created = await this.createTask(
+      {
+        title: item.title,
+        summary: item.excerpt,
+        spec: "",
+        col: "open",
+        priority: item.priority || "normal",
+        env: "unknown",
+        agents: [],
+        specialists: item.specialist ? [item.specialist] : [],
+        project: item.project,
+        memory_ids: [item.memory_id], // SEC-4: link, never copy content
+        mnemos_tags: [...item.tags],
+      },
+      signal,
+    );
+    const index = this.inboxItems.findIndex((row) => row.memory_id === memoryId);
+    this.inboxItems[index] = {
+      ...item,
+      adopted: true,
+      adopted_task_id: created.id,
+    };
+    return created;
+  }
+
+  async refreshInbox(signal?: AbortSignal): Promise<InboxRefreshResult> {
+    await this.delay(signal);
+    // The mock re-sees its whole mirror set; nothing new appears because the
+    // scan is over the same deterministic fixtures.
+    return {
+      scanned_servers: 2,
+      found: this.inboxItems.length,
+      new: 0,
+      errors: [],
+    };
+  }
+
+  /** Deterministic wire-format timestamp for mutation-created rows. */
+  private stamp(): string {
+    return new Date(this.now()).toISOString().replace("Z", "+00:00");
   }
 
   async metrics(signal?: AbortSignal): Promise<Metrics> {
@@ -434,12 +663,86 @@ export class MockAdapter implements MemoryGateway {
 }
 
 /** Honest 404 mirror of the board routes for unknown task ids. */
-function requireMockTask(taskId: string): void {
-  if (!MOCK_TASKS.some((task) => task.id === taskId)) {
+function requireMockTask(
+  taskId: string,
+  tasks: readonly BoardTask[],
+  archivedTasks: readonly BoardTask[],
+): void {
+  const known =
+    tasks.some((task) => task.id === taskId) ||
+    archivedTasks.some((task) => task.id === taskId);
+  if (!known) {
     throw new ApiError(404, `task '${taskId}' not found on the board`, {
       url: "mock:/api/tasks/" + encodeURIComponent(taskId),
     });
   }
+}
+
+/** BoardTask lookup across live + archived state (mutation paths). */
+function findMutableTask(
+  taskId: string,
+  tasks: readonly BoardTask[],
+  archivedTasks: readonly BoardTask[],
+): BoardTask {
+  const task =
+    tasks.find((row) => row.id === taskId) ??
+    archivedTasks.find((row) => row.id === taskId);
+  if (!task) {
+    throw new ApiError(404, `task '${taskId}' not found on the board`, {
+      url: "mock:/api/tasks/" + encodeURIComponent(taskId),
+    });
+  }
+  return { ...task };
+}
+
+/** Replace (or append) one row inside a mutable task list. */
+function replaceInPlace(list: BoardTask[], task: BoardTask, append = false): void {
+  const index = list.findIndex((row) => row.id === task.id);
+  if (index >= 0) list[index] = task;
+  else if (append) list.push(task);
+}
+
+/** BE-12 EDITABLE_FIELDS mirror — the fields behind the 24h lock. */
+const CONTENT_FIELDS = [
+  "title",
+  "summary",
+  "spec",
+  "project",
+  "env",
+  "priority",
+  "agents",
+  "specialists",
+  "memory_ids",
+  "mnemos_tags",
+] as const;
+
+/** Recompute the per-column counts (board-projection `counts`). */
+function countByColumn(tasks: readonly BoardTask[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const column of MOCK_BOARD.columns) counts[column] = 0;
+  for (const task of tasks) counts[task.col] = (counts[task.col] ?? 0) + 1;
+  return counts;
+}
+
+/** Archive teaser grouping over the FULL matching set (BE-11b wire shape). */
+function groupArchiveProjects(rows: readonly BoardTask[]): ArchivePage["projects"] {
+  const projects: Record<
+    string,
+    { id: string; title: string; col: string; agents: string[]; env: string; updated_at: string }[]
+  > = {};
+  for (const task of rows) {
+    const key = task.project || "";
+    const teaser = {
+      id: task.id,
+      title: task.title,
+      col: task.col,
+      agents: [...task.agents],
+      env: task.env,
+      updated_at: task.updated_at,
+    };
+    projects[key] = [...(projects[key] ?? []), teaser];
+  }
+  return projects;
 }
 
 // --- Search heuristics (FTS/semantic imitation) ------------------------------

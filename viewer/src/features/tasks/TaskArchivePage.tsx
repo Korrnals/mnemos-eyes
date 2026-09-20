@@ -5,9 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { TableRowSkeleton } from "@/components/skeletons/Skeletons";
-import { isTaskSource } from "@/gateway/capabilities";
+import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
-import type { ArchivePage } from "@/gateway/boardTypes";
+import type { ArchivePage, BoardTask } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
 import {
   TASK_COLUMNS,
@@ -18,6 +18,7 @@ import {
   statusBadgeVariant,
   statusLabelKey,
 } from "./taskStatus";
+import { useTaskMutations } from "./useTaskMutations";
 import { useTaskArchive } from "./useTasks";
 
 /**
@@ -26,8 +27,9 @@ import { useTaskArchive } from "./useTasks";
  * §3), so a filtered page deep-links and survives F5. `q` debounces 300 ms
  * before it lands in the URL (no request per keystroke). Rows expand inline
  * (native details/summary): archived tasks are NOT on the board projection,
- * so /tasks/:id cannot serve them — the expansion IS the detail view, and
- * «Вернуть на доску» is an honest disabled mutation (Ф3).
+ * so /tasks/:id cannot serve them — the expansion IS the detail view. Ф3
+ * wires «Вернуть из архива» (POST unarchive → the board row returns via the
+ * SSE mapping, the archive list refreshes, toast confirms).
  */
 
 const ARCHIVE_PAGE_SIZES = [25, 50, 100] as const;
@@ -65,6 +67,7 @@ export function TaskArchivePage() {
   const { lang } = useI18n();
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
+  const canMutate = isTaskMutationSource(gateway);
   const [searchParams, setSearchParams] = useSearchParams();
   const state = parseArchiveParams(searchParams);
   // Local input state: the URL (and thus the query) follows 300 ms later.
@@ -219,55 +222,7 @@ export function TaskArchivePage() {
             <ul className="space-y-1" aria-label={t("tasks.archiveLabel")}>
               {items.map((task) => (
                 <li key={task.id}>
-                  <details className="rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well">
-                    <summary className="flex cursor-pointer flex-wrap items-center gap-2 rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright">
-                      <span className="font-mono text-xs text-foreground-muted">{task.id}</span>
-                      <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
-                      <Badge variant={statusBadgeVariant(task.status)}>
-                        {t(statusLabelKey(task.status))}
-                      </Badge>
-                      <Badge variant={priorityBadgeVariant(task.priority)}>
-                        {t(priorityLabelKey(task.priority))}
-                      </Badge>
-                      <span className="whitespace-nowrap text-xs text-foreground-muted">
-                        {formatTaskDate(task.updated_at, lang)}
-                      </span>
-                    </summary>
-                    <div className="mt-2 space-y-2 border-t border-border-subtle pt-2">
-                      <p className="whitespace-pre-wrap text-xs text-foreground-secondary">
-                        {task.summary || "—"}
-                      </p>
-                      <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-elevated p-2 font-mono text-xs text-foreground-secondary">
-                        {task.spec || "—"}
-                      </pre>
-                      <p className="flex flex-wrap gap-x-4 text-xs text-foreground-muted">
-                        <span>
-                          {t("tasks.detailsProject")}: {task.project || "—"}
-                        </span>
-                        <span>
-                          {t("tasks.detailsEnv")}: {task.env || "—"}
-                        </span>
-                        <span>
-                          {t("tasks.agentLabel")}: {(task.agents ?? []).join(", ") || "—"}
-                        </span>
-                        {task.archived_from ? (
-                          <span>{t("tasks.archiveFrom", { col: task.archived_from })}</span>
-                        ) : null}
-                      </p>
-                      {/* Mutation (POST /api/tasks/{id}/unarchive) — Ф3, honest disabled. */}
-                      <div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled
-                          title={t("tasks.unarchiveDisabledTitle")}
-                        >
-                          <RotateCcw className="size-4" aria-hidden="true" />
-                          {t("tasks.unarchiveLabel")}
-                        </Button>
-                      </div>
-                    </div>
-                  </details>
+                  <ArchiveRow task={task} lang={lang} canUnarchive={canMutate} />
                 </li>
               ))}
             </ul>
@@ -305,10 +260,75 @@ export function TaskArchivePage() {
               </Button>
             </div>
           </nav>
-          <p className="text-xs text-foreground-muted">{t("tasks.readOnlyNote")}</p>
         </>
       )}
     </ArchiveShell>
+  );
+}
+
+/** One archive row: expandable inline detail + the Ф3 unarchive action. */
+function ArchiveRow({
+  task,
+  lang,
+  canUnarchive,
+}: {
+  task: BoardTask;
+  lang: "ru" | "en";
+  canUnarchive: boolean;
+}) {
+  const t = useT();
+  const { unarchiveTask } = useTaskMutations();
+  return (
+    <details className="rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well">
+      <summary className="flex cursor-pointer flex-wrap items-center gap-2 rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright">
+        <span className="font-mono text-xs text-foreground-muted">{task.id}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
+        <Badge variant={statusBadgeVariant(task.status)}>
+          {t(statusLabelKey(task.status))}
+        </Badge>
+        <Badge variant={priorityBadgeVariant(task.priority)}>
+          {t(priorityLabelKey(task.priority))}
+        </Badge>
+        <span className="whitespace-nowrap text-xs text-foreground-muted">
+          {formatTaskDate(task.updated_at, lang)}
+        </span>
+      </summary>
+      <div className="mt-2 space-y-2 border-t border-border-subtle pt-2">
+        <p className="whitespace-pre-wrap text-xs text-foreground-secondary">
+          {task.summary || "—"}
+        </p>
+        <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-elevated p-2 font-mono text-xs text-foreground-secondary">
+          {task.spec || "—"}
+        </pre>
+        <p className="flex flex-wrap gap-x-4 text-xs text-foreground-muted">
+          <span>
+            {t("tasks.detailsProject")}: {task.project || "—"}
+          </span>
+          <span>
+            {t("tasks.detailsEnv")}: {task.env || "—"}
+          </span>
+          <span>
+            {t("tasks.agentLabel")}: {(task.agents ?? []).join(", ") || "—"}
+          </span>
+          {task.archived_from ? (
+            <span>{t("tasks.archiveFrom", { col: task.archived_from })}</span>
+          ) : null}
+        </p>
+        {/* POST /api/tasks/{id}/unarchive (Ф3): toast + board row return. */}
+        {canUnarchive ? (
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => unarchiveTask(task)}
+            >
+              <RotateCcw className="size-4" aria-hidden="true" />
+              {t("tasks.unarchiveLabel")}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }
 

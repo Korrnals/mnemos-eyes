@@ -2,6 +2,8 @@ import { createBrowserRouter, RouterProvider } from "react-router";
 import { AuthScreen } from "@/features/auth/AuthScreen";
 import { AuthProvider } from "@/features/auth/AuthProvider";
 import { useAuth } from "@/features/auth/AuthContext";
+import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
+import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { ADAPTER, adapterEndpointLabel, routerBasename } from "@/gateway/adapterConfig";
 import { buildRoutes } from "@/app/routes";
 
@@ -26,8 +28,14 @@ const router = createBrowserRouter(buildRoutes(), {
 export default function App() {
   return (
     <AuthProvider adapterMode={ADAPTER} endpoint={adapterEndpointLabel()}>
-      <RouterProvider router={router} />
-      <AuthOverlay />
+      {/* Ф3 mutation feedback: one toast region above every route. */}
+      <ToastProvider>
+        {/* Ф3 ui-token gate: one panel for all mutations, queued retries. */}
+        <UiTokenProvider>
+          <RouterProvider router={router} />
+          <AuthOverlay />
+        </UiTokenProvider>
+      </ToastProvider>
     </AuthProvider>
   );
 }

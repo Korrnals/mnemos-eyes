@@ -10,13 +10,15 @@ import { GatewayContext } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { I18nProvider } from "@/i18n";
 import { ApiError } from "@/lib/errors";
+import { ToastProvider } from "@/components/Toast/ToastProvider";
+import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 
 /**
  * Ф2 task page (concept §4.1 — a ROUTE, not a modal): tabs are URL state
  * (?tab=…), the row comes from the shared tasks.board projection, reports
  * render chronologically with superseded dimming, history merges events +
- * memory checkpoints, memory links carry provenance, and the Ф2 read-only
- * mandate shows the honest footer instead of mutation controls.
+ * memory checkpoints, memory links carry provenance. Ф3 adds the mutation
+ * header: «Edit» always, «Resume» on a live final report (UI-8).
  */
 
 type Gateway = MockAdapter | HttpAdapter;
@@ -33,13 +35,17 @@ async function renderTask(
   return renderToString(
     <GatewayContext.Provider value={gateway}>
       <QueryClientProvider client={queryClient}>
-        <I18nProvider initialLang="en">
-          <MemoryRouter initialEntries={[path]}>
-            <Routes>
-              <Route path="/tasks/:id" element={<TaskDetailPage />} />
-            </Routes>
-          </MemoryRouter>
-        </I18nProvider>
+        <ToastProvider>
+          <UiTokenProvider>
+            <I18nProvider initialLang="en">
+              <MemoryRouter initialEntries={[path]}>
+                <Routes>
+                  <Route path="/tasks/:id" element={<TaskDetailPage />} />
+                </Routes>
+              </MemoryRouter>
+            </I18nProvider>
+          </UiTokenProvider>
+        </ToastProvider>
       </QueryClientProvider>
     </GatewayContext.Provider>,
   );
@@ -80,9 +86,11 @@ describe("TaskDetailPage (mock adapter)", () => {
     expect(html).toContain("cluster");
     expect(html).toContain("agent: zcode");
     expect(html).toContain("@GCW: Tech Lead");
-    // Read-only mandate: no edit/move controls, honest footer instead.
-    expect(html).not.toContain(">Edit<");
-    expect(html).toContain("read-only — management lands in Phase 3");
+    // Ф3 mutation header: «Edit» always; TB-1 has a live final report,
+    // so UI-8 «Resume» renders too. No read-only footer anymore.
+    expect(html).toContain(">Edit<");
+    expect(html).toContain(">Resume<");
+    expect(html).not.toContain("read-only");
   });
 
   it("default tab = reports: chronological cards, kind badges, superseded dimming", async () => {
@@ -208,13 +216,17 @@ describe("TaskDetailPage (mock adapter)", () => {
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
         <QueryClientProvider client={client}>
-          <I18nProvider initialLang="en">
-            <MemoryRouter initialEntries={["/tasks/TB-1"]}>
-              <Routes>
-                <Route path="/tasks/:id" element={<TaskDetailPage />} />
-              </Routes>
-            </MemoryRouter>
-          </I18nProvider>
+          <ToastProvider>
+            <UiTokenProvider>
+              <I18nProvider initialLang="en">
+                <MemoryRouter initialEntries={["/tasks/TB-1"]}>
+                  <Routes>
+                    <Route path="/tasks/:id" element={<TaskDetailPage />} />
+                  </Routes>
+                </MemoryRouter>
+              </I18nProvider>
+            </UiTokenProvider>
+          </ToastProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
     );

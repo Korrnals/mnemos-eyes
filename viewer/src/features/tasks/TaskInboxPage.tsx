@@ -1,41 +1,54 @@
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Inbox, ScanSearch } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
-import { isTaskSource } from "@/gateway/capabilities";
+import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
+import type { TaskInboxEntry } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
 import { formatTaskDate, priorityBadgeVariant, priorityLabelKey } from "./taskStatus";
+import { useTaskMutations } from "./useTaskMutations";
 import { useTaskInbox } from "./useTasks";
 
 /**
  * `/tasks/inbox` — the AGG-1 mirror of `task:queue` records (ADR 0010):
  * read-only projections with provenance (server / project), NOT native
- * tasks. Ф2 shows the reading surface only: «Сканировать» and adopt are
- * MUTATIONS and render as honest disabled controls with a phase-3 note
- * (state-matrix В of the concept: disabled = visible and explained, never
- * hidden). Stale rows (source stopped returning the record) are dimmed;
- * adopted rows return behind the URL toggle `?adopted=1`.
+ * tasks. Ф3 wires the two mutations in: «Принять в борд» (POST adopt →
+ * toast with an «открыть задачу» link; a 409 toast links the existing
+ * task) and «Сканировать хранилища» (POST refresh, spinner, found/new
+ * toast). Stale rows (the source stopped returning the record) are dimmed
+ * and cannot be adopted; adopted rows return behind `?adopted=1`.
  */
 export function TaskInboxPage() {
   const t = useT();
   const { lang } = useI18n();
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
+  const canMutate = isTaskMutationSource(gateway);
   const [searchParams, setSearchParams] = useSearchParams();
   const includeAdopted = searchParams.get("adopted") === "1";
   const inbox = useTaskInbox({ include_adopted: includeAdopted });
+  const [scanning, setScanning] = useState(false);
 
   if (!capable) {
-    return <InboxShell><EmptyState variant="empty" title={t("tasks.unavailableTitle")} message={t("tasks.unavailableMessage")} /></InboxShell>;
+    return (
+      <InboxShell>
+        <EmptyState
+          variant="empty"
+          title={t("tasks.unavailableTitle")}
+          message={t("tasks.unavailableMessage")}
+        />
+      </InboxShell>
+    );
   }
 
   if (inbox.isPending) {
     return (
       <InboxShell>
-        <ScanDisabled />
+        {canMutate ? <ScanButton scanning={scanning} onSetScanning={setScanning} /> : null}
         <div role="status" aria-label={t("tasks.inboxLoading")}>
           <MemoryCardSkeleton count={3} />
         </div>
@@ -46,7 +59,7 @@ export function TaskInboxPage() {
   if (inbox.isError) {
     return (
       <InboxShell>
-        <ScanDisabled />
+        {canMutate ? <ScanButton scanning={scanning} onSetScanning={setScanning} /> : null}
         <EmptyState
           variant="error"
           title={t("tasks.inboxFailed")}
@@ -67,7 +80,7 @@ export function TaskInboxPage() {
 
   return (
     <InboxShell>
-      <ScanDisabled />
+      {canMutate ? <ScanButton scanning={scanning} onSetScanning={setScanning} /> : null}
 
       {/* Adopted toggle — URL state (?adopted=1), honest checkbox semantics. */}
       <div className="flex items-center justify-between gap-3">
@@ -113,7 +126,7 @@ export function TaskInboxPage() {
           <ul className="space-y-2" aria-label={t("tasks.inboxLabel")}>
             {active.map((item) => (
               <li key={item.memory_id}>
-                <InboxCard item={item} lang={lang} />
+                <InboxCard item={item} lang={lang} canAdopt={canMutate} />
               </li>
             ))}
           </ul>
@@ -123,13 +136,12 @@ export function TaskInboxPage() {
               <ul className="space-y-2 opacity-60" aria-label={t("tasks.inboxStaleLabel")}>
                 {stale.map((item) => (
                   <li key={item.memory_id}>
-                    <InboxCard item={item} lang={lang} />
+                    <InboxCard item={item} lang={lang} canAdopt={false} />
                   </li>
                 ))}
               </ul>
             </div>
           ) : null}
-          <p className="text-xs text-foreground-muted">{t("tasks.readOnlyNote")}</p>
         </>
       )}
     </InboxShell>
@@ -150,19 +162,34 @@ function InboxShell({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * «Сканировать» — a MUTATION (POST /api/tasks/inbox/refresh): Ф2 renders it
- * disabled with the phase-3 tooltip (title) + visible badge, per the
- * honest-disabled canon; the caption repeats it for non-pointer users.
+ * «Сканировать хранилища» — POST /api/tasks/inbox/refresh (Ф3). The spinner
+ * spans click → toast, or click → token panel when the gate defers the run
+ * (`onSettled` fires either way — refreshInbox's contract); `aria-busy`
+ * carries the state to screen readers.
  */
-function ScanDisabled() {
+function ScanButton({
+  scanning,
+  onSetScanning,
+}: {
+  scanning: boolean;
+  onSetScanning: (scanning: boolean) => void;
+}) {
   const t = useT();
+  const { refreshInbox } = useTaskMutations();
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button variant="outline" size="sm" disabled title={t("tasks.scanDisabledTitle")}>
-        <ScanSearch className="size-4" aria-hidden="true" />
-        {t("tasks.scanLabel")}
+    <div className="flex flex-wrap items-center gap-2" aria-busy={scanning}>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={scanning}
+        onClick={() => {
+          onSetScanning(true);
+          refreshInbox(() => onSetScanning(false));
+        }}
+      >
+        <ScanSearch className={"size-4" + (scanning ? " animate-spin" : "")} aria-hidden="true" />
+        {scanning ? t("tasks.scanBusy") : t("tasks.scanLabel")}
       </Button>
-      <span className="text-xs text-foreground-muted">{t("tasks.scanPhaseNote")}</span>
     </div>
   );
 }
@@ -170,22 +197,15 @@ function ScanDisabled() {
 function InboxCard({
   item,
   lang,
+  canAdopt,
 }: {
-  item: {
-    memory_id: string;
-    server: string;
-    project: string;
-    title: string;
-    excerpt: string;
-    priority: string;
-    specialist: string;
-    created_at: string;
-    adopted: boolean;
-    adopted_task_id?: string | null;
-  };
+  item: TaskInboxEntry;
   lang: "ru" | "en";
+  canAdopt: boolean;
 }) {
   const t = useT();
+  const { adoptInboxItem } = useTaskMutations();
+  const adoptable = canAdopt && !item.stale && !item.adopted;
   return (
     <article className="min-h-row rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -210,9 +230,21 @@ function InboxCard({
       {item.excerpt ? (
         <p className="mt-0.5 line-clamp-2 text-xs text-foreground-secondary">{item.excerpt}</p>
       ) : null}
-      <p className="mt-1 text-xs text-foreground-muted">
-        {item.specialist || t("tasks.inboxNoSpecialist")}
-      </p>
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-foreground-muted">
+          {item.specialist || t("tasks.inboxNoSpecialist")}
+        </p>
+        {adoptable ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => adoptInboxItem(item.memory_id)}
+          >
+            <Inbox className="size-4" aria-hidden="true" />
+            {t("tasks.adoptLabel")}
+          </Button>
+        ) : null}
+      </div>
     </article>
   );
 }

@@ -5,14 +5,19 @@ import type {
   ArchiveParams,
   BoardHealthDetail,
   BoardSummary,
+  BoardTask,
+  InboxRefreshResult,
   MemoryPulse,
   PulseParams,
+  TaskCreateInput,
   TaskHistory,
   TaskInbox,
   TaskMemories,
+  TaskMutationAck,
+  TaskPatchInput,
   TaskReports,
+  TaskUnarchiveResult,
 } from "./boardTypes";
-import type { BoardTask } from "./boardTypes";
 import type { InboxParams } from "./BoardAdapter";
 
 /**
@@ -87,4 +92,39 @@ export function isTaskEventSource(
   gateway: MemoryGateway,
 ): gateway is MemoryGateway & TaskEventSource {
   return typeof (gateway as Partial<TaskEventSource>).events === "function";
+}
+
+/**
+ * Ф3 mutation surface: the write side of the task domain. Every method is
+ * ui-token gated on the wire (401 without one); pages probe through this
+ * structural guard so an adapter that grows the methods lights the mutation
+ * affordances up without a page change — same capability-not-configuration
+ * rule as the read guards above. `hasUiToken` stays on the adapter (not the
+ * provider) because the adapter owns the wire: it is the single source for
+ * "would a mutation carry a token right now".
+ */
+export interface TaskMutationSource {
+  hasUiToken(): boolean;
+  createTask(payload: TaskCreateInput): Promise<BoardTask>;
+  patchTask(taskId: string, patch: TaskPatchInput): Promise<BoardTask>;
+  moveTask(taskId: string, col: string, position?: number): Promise<BoardTask>;
+  archiveTask(taskId: string): Promise<TaskMutationAck>;
+  unarchiveTask(taskId: string): Promise<TaskUnarchiveResult>;
+  adoptInboxItem(memoryId: string): Promise<BoardTask>;
+  refreshInbox(): Promise<InboxRefreshResult>;
+}
+
+/** Gateway type that also speaks the Ф3 mutation wire. */
+export type TaskMutationGateway = MemoryGateway & TaskSource & TaskMutationSource;
+
+export function isTaskMutationSource(
+  gateway: MemoryGateway,
+): gateway is TaskMutationGateway {
+  return (
+    typeof (gateway as Partial<TaskMutationSource>).patchTask === "function" &&
+    typeof (gateway as Partial<TaskMutationSource>).moveTask === "function" &&
+    typeof (gateway as Partial<TaskMutationSource>).archiveTask === "function" &&
+    typeof (gateway as Partial<TaskMutationSource>).adoptInboxItem === "function" &&
+    typeof (gateway as Partial<TaskMutationSource>).hasUiToken === "function"
+  );
 }

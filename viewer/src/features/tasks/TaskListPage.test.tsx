@@ -10,6 +10,8 @@ import { GatewayContext } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { I18nProvider } from "@/i18n";
 import { ApiError } from "@/lib/errors";
+import { ToastProvider } from "@/components/Toast/ToastProvider";
+import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 
 /**
  * Ф2 list page (QA verdict §3 — "страницы на мок-BoardAdapter"): the mock
@@ -33,11 +35,15 @@ async function renderTasks(
   return renderToString(
     <GatewayContext.Provider value={gateway}>
       <QueryClientProvider client={queryClient}>
-        <I18nProvider initialLang="en">
-          <MemoryRouter initialEntries={[path]}>
-            <TaskListPage />
-          </MemoryRouter>
-        </I18nProvider>
+        <ToastProvider>
+          <UiTokenProvider>
+            <I18nProvider initialLang="en">
+              <MemoryRouter initialEntries={[path]}>
+                <TaskListPage />
+              </MemoryRouter>
+            </I18nProvider>
+          </UiTokenProvider>
+        </ToastProvider>
       </QueryClientProvider>
     </GatewayContext.Provider>,
   );
@@ -67,8 +73,10 @@ describe("TaskListPage (mock adapter)", () => {
     expect(html).toMatch(/href="\/tasks\/TB-1"/);
     // Group toggles are disclosed via aria-expanded.
     expect(html).toContain('aria-expanded="true"');
-    // Read-only honesty note.
-    expect(html).toContain("Read-only list");
+    // Ф3: the create button and the per-row action menu render. SSR emits
+    // BOTH layouts (desktop table + mobile card-rows): 12 tasks × 2.
+    expect(html).toContain("Actions for task TB-1");
+    expect(html.match(/Actions for task /g)?.length).toBe(24);
   });
 
   it("keeps the list state in the URL: ?status=blocked narrows to blocked rows", async () => {
@@ -122,11 +130,15 @@ describe("TaskListPage (mock adapter)", () => {
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
         <QueryClientProvider client={client}>
-          <I18nProvider initialLang="en">
-            <MemoryRouter initialEntries={["/tasks"]}>
-              <TaskListPage />
-            </MemoryRouter>
-          </I18nProvider>
+          <ToastProvider>
+            <UiTokenProvider>
+              <I18nProvider initialLang="en">
+                <MemoryRouter initialEntries={["/tasks"]}>
+                  <TaskListPage />
+                </MemoryRouter>
+              </I18nProvider>
+            </UiTokenProvider>
+          </ToastProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
     );
@@ -148,11 +160,15 @@ describe("TaskListPage (mock adapter)", () => {
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
         <QueryClientProvider client={client}>
-          <I18nProvider initialLang="en">
-            <MemoryRouter initialEntries={["/tasks"]}>
-              <TaskListPage />
-            </MemoryRouter>
-          </I18nProvider>
+          <ToastProvider>
+            <UiTokenProvider>
+              <I18nProvider initialLang="en">
+                <MemoryRouter initialEntries={["/tasks"]}>
+                  <TaskListPage />
+                </MemoryRouter>
+              </I18nProvider>
+            </UiTokenProvider>
+          </ToastProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
     );
@@ -164,5 +180,7 @@ describe("TaskListPage (mock adapter)", () => {
     const html = await renderTasks(new HttpAdapter("/api"));
     expect(html).toContain("The Tasks domain is unavailable in mnemos mode");
     expect(html).not.toContain("<table");
+    // No mutation affordances outside the mutation-capable adapters.
+    expect(html).not.toContain("Actions for task");
   });
 });
