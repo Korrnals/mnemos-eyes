@@ -55,6 +55,8 @@ class TestSchemasPresent:
         "LaunchOut", "LaunchesOut", "ConditionItem", "ScheduleRunOut",
         "AutomationStatusOut", "AutomationSettingsOut",
         "AutomationSettingsBody", "RuleDeletedOut",
+        # W5 (ROADMAP-v2 §5): mesh nodes as observable entities
+        "MeshNodeOut", "MeshNodesOut", "MeshNodeHealthOut", "MeshNodeSpec",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -337,3 +339,33 @@ class TestKeyRoutesReferenceSchemas:
         listing = _components(spec)["LaunchesOut"]
         assert {"items", "next_cursor", "truncated"} <= set(
             listing.get("properties", {}))
+
+    def test_mesh_nodes(self, spec):
+        """W5 (ROADMAP-v2 §5): the mesh-node routes must reference the
+        registry models. MeshNodeOut carries the live healthz snapshot
+        but NO secret material — a mesh node holds no token by contract."""
+        assert _ref_name(_response_schema(spec, "/api/mesh/nodes", "get")) \
+            == "MeshNodesOut"
+        post = spec["paths"]["/api/mesh/nodes"]["post"]
+        assert _ref_name(post["requestBody"]["content"]
+                         ["application/json"]["schema"]) == "MeshNodeSpec"
+        assert _ref_name(_response_schema(
+            spec, "/api/mesh/nodes", "post", "201")) == "MeshNodeOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/mesh/nodes/{name}", "patch")) == "MeshNodeOut"
+        out = _components(spec)["MeshNodeOut"]
+        must_have = {"name", "base_url", "description", "enabled",
+                     "status", "ok", "error", "health"}
+        assert must_have <= set(out.get("properties", {}))
+        # secret hygiene: the node contract is token-free end to end
+        assert not ({"token", "token_ref", "secret"}
+                    & set(out.get("properties", {})))
+        assert not ({"token", "token_ref", "secret"}
+                    & set(_components(spec)["MeshNodeSpec"]
+                          .get("properties", {})))
+        health = _components(spec)["MeshNodeHealthOut"]
+        assert {"version", "node_id", "uptime_seconds", "core_connected",
+                "peers_total", "peers_reachable"} \
+            <= set(health.get("properties", {}))
+        listing = _components(spec)["MeshNodesOut"]
+        assert {"ok", "nodes"} <= set(listing.get("properties", {}))

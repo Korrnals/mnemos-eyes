@@ -196,6 +196,25 @@ for the full runbook (token minting, LAN bind, troubleshooting).
 
 ---
 
+## Mesh nodes (W5, read-only observation)
+
+The board also watches **mnemos-mesh nodes** as observable entities
+(ROADMAP-v2 W5): the rail section «Узлы меша» shows each cluster node's
+healthz state (ok / degraded / offline), version, peer reachability
+(`peers N/M`) and uptime. Nodes are managed **via the API only**
+(`POST/PATCH/DELETE /api/mesh/nodes`); the UI is display-only by design
+(freeze exception: `docs/decisions/freeze-exceptions.md`). A node's
+`base_url` is its metrics/healthz address; `GET {base_url}/healthz` is
+unauthenticated, so no token is stored for nodes — and the same SEC-1
+egress allowlist (`VESMARO_ALLOWED_MEMORY_HOSTS`) applies.
+
+**Laptop node (out of phase 1):** the laptop node's metrics listen on
+`127.0.0.1` and are unreachable from the cluster **by design** — do not
+register it as a board node in W5. It appears after the W2.5 network leg
+or a separate decision (lan-bind metrics with an NP counterpart).
+
+---
+
 ## Architecture
 
 ```text
@@ -227,6 +246,7 @@ one or more mnemos HTTP APIs (8787/8788 …)
 | `POST/PATCH/DELETE /api/tasks…` | task CRUD + `/move`, `/archive`, `/unarchive` |
 | `GET /api/tasks/{id}/history` | unified timeline (board events + memory) |
 | `GET /api/memories/servers` | declared servers + groups + health |
+| `GET/POST/PATCH/DELETE /api/mesh/nodes` | mesh-node registry + live healthz state (W5) |
 | `GET /api/memories/pulse?scope=…` | merged pulse (all / group / server) |
 | `GET /api/mnemos/search?q=…&scope=…` | merged memory search |
 | `GET /api/tags/{tag}/drill` | tag drill-down (tasks + memories) |

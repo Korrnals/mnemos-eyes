@@ -721,6 +721,45 @@ class ServerActionOut(_ApiModel):
     server: MemoryServerOut | None = None
 
 
+# W5 (ROADMAP-v2 §5): mesh nodes as observable entities. A node row holds
+# NO secret — healthz is unauthenticated by contract, so there is no
+# token_ref to model (and nothing to redact). ``health`` is the live
+# healthz snapshot (None when disabled / not probed yet).
+class MeshNodeSpec(BaseModel):
+    """Create/update a mesh-node observation entry."""
+    name: str = Field(min_length=1, max_length=60, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    base_url: str = Field(min_length=1)   # host:port of the node metrics/healthz addr
+    description: str = ""
+    enabled: bool = True
+
+
+class MeshNodeHealthOut(_ApiModel):
+    version: str = ""
+    node_id: str = ""
+    uptime_seconds: int | None = None
+    core_connected: bool | None = None
+    unix_socket_path: str = ""
+    peers_total: int = 0
+    peers_reachable: int = 0
+
+
+class MeshNodeOut(_ApiModel):
+    name: str
+    base_url: str
+    description: str = ""
+    enabled: bool = True
+    status: str = "unknown"     # ok | degraded | offline | disabled
+    ok: bool | None = None
+    error: str | None = None
+    health: MeshNodeHealthOut | None = None
+    probe_status: int | None = None
+
+
+class MeshNodesOut(_ApiModel):
+    ok: bool
+    nodes: list[MeshNodeOut]
+
+
 class GroupsOut(_ApiModel):
     ok: bool
     groups: list[GroupOut]
@@ -1345,12 +1384,21 @@ async def health() -> dict[str, Any]:
             "error": p.get("error"),
             "memories_total": (st or {}).get("memories_total"),
         })
+    # W5: mesh nodes ride the same on-request health snapshot (short
+    # healthz timeout, honest-offline) so the UI health loop and probes
+    # share one aggregation point.
+    mesh_rows = store.list_mesh_nodes()
+    mesh_healths = await asyncio.gather(
+        *(_mesh_node_health(r) for r in mesh_rows))
+    mesh_nodes_health = [_mesh_node_public(r, h)
+                         for r, h in zip(mesh_rows, mesh_healths)]
     return {
         "ok": True,
         "service": "vesmaro-eyes",
         "board_tasks": sum(store.board()["counts"].values()),
         "servers": per_server,
         "groups": store.list_groups(),
+        "mesh": {"nodes": mesh_nodes_health},
     }
 
 
@@ -1742,6 +1790,150 @@ async def delete_memory_group(name: str, request: Request) -> OkNoteOut:
         raise HTTPException(404, f"group '{name}' not found")
     _broadcast({"kind": "server.changed", "server": f"group:{name}"})
     return {"ok": True, "note": "servers moved to group 'default'"}
+
+
+# -------------------------------------------------- mesh nodes (W5 board)
+# ROADMAP-v2 §5: mesh nodes appear on the board alongside memory servers,
+# honest-offline principle identical to stores. Health is PROBED, never
+# persisted: every read of the list (or /api/health) re-fetches healthz
+# with a short timeout. No token exists for a node — nothing to store,
+# nothing to leak.
+def _parse_healthz(body: Any) -> dict[str, Any]:
+    """Distill the mesh healthz contract into the board's health block:
+    version / node_id / uptime / unix-socket core state / peer counts.
+    Unknown or malformed fields degrade to honest defaults, never raise."""
+    if not isinstance(body, dict):
+        return {}
+    peers = body.get("peers")
+    peer_list = peers if isinstance(peers, list) else []
+    sock = body.get("unix_socket")
+    sock = sock if isinstance(sock, dict) else {}
+    uptime = body.get("uptime_seconds")
+    return {
+        "version": str(body.get("version") or ""),
+        "node_id": str(body.get("node_id") or ""),
+        "uptime_seconds": uptime if isinstance(uptime, int) else None,
+        "core_connected": sock.get("core_connected")
+        if isinstance(sock.get("core_connected"), bool) else None,
+        "unix_socket_path": str(sock.get("path") or ""),
+        "peers_total": len(peer_list),
+        "peers_reachable": sum(1 for p in peer_list
+                               if isinstance(p, dict) and p.get("reachable") is True),
+    }
+
+
+def _health_from_probe(code: int, body: Any) -> dict[str, Any]:
+    """Health dict from one healthz probe result — 200 + a dict carrying
+    status ok/degraded is healthy; EVERYTHING else (non-200, non-JSON,
+    unknown status) is honestly offline with the reason."""
+    if code == 200 and isinstance(body, dict) and body.get("status") in ("ok", "degraded"):
+        return {"status": body["status"], "ok": True, "error": None,
+                "health": _parse_healthz(body)}
+    detail = body.get("detail") if isinstance(body, dict) else str(body)
+    return {"status": "offline", "ok": False,
+            "error": f"http {code}: {detail}" if detail else f"http {code}",
+            "health": None}
+
+
+async def _mesh_node_health(row: dict[str, Any]) -> dict[str, Any]:
+    """Live healthz snapshot for one node row (disabled rows are not
+    probed — the metrics address may legitimately be firewalled off)."""
+    if not row.get("enabled"):
+        return {"status": "disabled", "ok": None, "error": None, "health": None}
+    code, body = await mnemos_client.mesh_node_healthz(
+        {"name": row["name"], "base_url": row["base_url"]})
+    return _health_from_probe(code, body)
+
+
+def _mesh_node_public(row: dict[str, Any],
+                      health: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Public node shape — there is no secret material anywhere in the
+    row; ``health`` (when given) is the live probe snapshot."""
+    out = {
+        "name": row["name"],
+        "base_url": row["base_url"],
+        "description": row.get("description", ""),
+        "enabled": bool(row.get("enabled")),
+    }
+    if health is None:
+        out["status"], out["ok"], out["error"] = "unknown", None, None
+        out["health"] = None
+    else:
+        out.update(health)
+    return out
+
+
+async def _validate_mesh_node_url(raw_url: str) -> str:
+    """SEC-1 boundary for node base_url — same egress policy as memory
+    servers (VESMARO_ALLOWED_MEMORY_HOSTS allowlist, SSRF-safe parse)
+    BEFORE any network activity or persistence. Raises 422 on violation."""
+    try:
+        return await asyncio.to_thread(validate_memory_url, raw_url)
+    except ValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/mesh/nodes")
+async def mesh_nodes() -> MeshNodesOut:
+    rows = store.list_mesh_nodes()
+    healths = await asyncio.gather(*(_mesh_node_health(r) for r in rows))
+    return {"ok": True,
+            "nodes": [_mesh_node_public(r, h) for r, h in zip(rows, healths)]}
+
+
+@app.post("/api/mesh/nodes", status_code=201)
+async def add_mesh_node(body: MeshNodeSpec, request: Request) -> MeshNodeOut:
+    _guard_write(request, classes=("ui",))
+    base_url = await _validate_mesh_node_url(body.base_url)
+    if store.get_mesh_node(body.name) is not None:
+        raise HTTPException(409, f"mesh node '{body.name}' already exists")
+    # reachability probe before first save, honest and non-blocking.
+    # healthz is unauthenticated BY CONTRACT: the probe never carries a
+    # token (nothing to exfiltrate — same SEC-1 posture as store probes).
+    code, hz = await mnemos_client.mesh_node_healthz(
+        {"name": body.name, "base_url": base_url})
+    row = store.upsert_mesh_node({
+        "name": body.name, "base_url": base_url,
+        "description": body.description, "enabled": body.enabled,
+    })
+    if not body.enabled:
+        # disabled from birth: probe still validated the address (the
+        # honest probe_status rides along) but the health block keeps the
+        # disabled shape — the list endpoint never probes disabled rows.
+        health: dict[str, Any] = {"status": "disabled", "ok": None,
+                                  "error": None, "health": None}
+    else:
+        health = _health_from_probe(code, hz)
+    _broadcast({"kind": "mesh.node.changed", "node": body.name})
+    return {**_mesh_node_public(row, health), "probe_status": code}
+
+
+@app.patch("/api/mesh/nodes/{name}")
+async def edit_mesh_node(name: str, body: MeshNodeSpec,
+                         request: Request) -> MeshNodeOut:
+    """Full-spec update (create body semantics, memory-server PATCH
+    pattern). ``enabled`` rides here — nodes deliberately have no action
+    endpoint; node management is API-only, the UI is read-only."""
+    _guard_write(request, classes=("ui",))
+    base_url = await _validate_mesh_node_url(body.base_url)
+    if store.get_mesh_node(name) is None:
+        raise HTTPException(404, f"mesh node '{name}' not found")
+    row = store.upsert_mesh_node({
+        "name": name, "base_url": base_url,
+        "description": body.description, "enabled": body.enabled,
+    })
+    _broadcast({"kind": "mesh.node.changed", "node": name})
+    return _mesh_node_public(row)
+
+
+@app.delete("/api/mesh/nodes/{name}")
+async def delete_mesh_node(name: str, request: Request) -> OkNoteOut:
+    """Remove from the board registry. The mesh node itself is untouched."""
+    _guard_write(request, classes=("ui",))
+    if not store.delete_mesh_node(name):
+        raise HTTPException(404, f"mesh node '{name}' not found")
+    _broadcast({"kind": "mesh.node.changed", "node": name})
+    return {"ok": True, "note": "removed from board; the mesh node itself is untouched"}
 
 
 # ------------------------------------------------------------- merged views

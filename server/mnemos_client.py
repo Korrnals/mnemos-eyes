@@ -68,6 +68,44 @@ async def post_json_async(server: dict[str, Any], path: str, body: dict[str, Any
 
 
 # ------------------------------------------------------------------ probes
+# W5 (ROADMAP-v2 §5): mesh-node healthz probe. healthz is intentionally
+# UNAUTHENTICATED (a mesh node must not hold board-class secrets, ADR
+# 0009 Amd 2) and lives on the node's metrics address, so this client
+# never attaches an Authorization header and never reads a token. Short
+# timeout: the board health loop probes every node on request and a dead
+# node must not stall it (honest-offline, same principle as store pings).
+MESH_HEALTHZ_TIMEOUT_S = 3.0
+
+
+async def mesh_node_healthz(node: dict[str, Any],
+                            timeout: float = MESH_HEALTHZ_TIMEOUT_S
+                            ) -> tuple[int, Any]:
+    """GET {base_url}/healthz on a mesh node. Returns (status_code, body).
+
+    200 + JSON dict is the healthy shape; 503 (with a ``detail``) means
+    unreachable/timeout/non-JSON — the same honest-failure contract as
+    fetch_json, minus any token plumbing.
+    """
+    url = f"{node['base_url']}/healthz"
+    try:
+        async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=min(timeout, 2.0)),
+                headers={"Accept": "application/json"}) as client:
+            resp = await client.get(url)
+    except httpx.HTTPError as exc:
+        return 503, {"detail": f"{node['name']}: unreachable ({exc.__class__.__name__})"}
+    if resp.status_code >= 400:
+        try:
+            body: Any = resp.json()
+        except ValueError:
+            body = {"detail": resp.text[:300]}
+        return resp.status_code, body
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, {"detail": "mesh node returned non-JSON"}
+
+
 async def ping(server: dict[str, Any]) -> dict[str, Any]:
     """Cheap liveness probe: GET /health (no vectorize, no search).
 
