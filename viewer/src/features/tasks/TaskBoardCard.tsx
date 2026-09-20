@@ -10,20 +10,24 @@ import {
   formatTaskDate,
   isArchcomReviewTask,
   isValidatingTask,
-  isValidationOverdue,
   priorityBadgeVariant,
   priorityLabelKey,
-  validationElapsed,
 } from "./taskStatus";
-import { useValidationNow } from "./useValidationClock";
+import { HighlightedTitle, ValidatingClock } from "./taskCardParts";
 import { TaskRowMenu } from "./TaskRowMenu";
 
 /**
- * One kanban card (Ф3, ARCHCOM-3 verdict §3). The card BODY is the pointer
- * drag surface (pointer sensor + DragOverlay live in the page); the TITLE is
- * the keyboard/screen-reader path into `/tasks/:id`, and the ⋯ menu carries
- * the canonical keyboard move («Переместить…» — the verdict's keyboard path;
- * a dnd-kit keyboard sensor stays a deliberate later enhancement).
+ * One kanban card (Ф3, ARCHCOM-3 verdict §3), TWO skins (CV-5):
+ * - "dense" — the Ф3 grouped-board card (project accordions), unchanged;
+ * - "classic" — the flat classic-kanban card: the SAME content (priority,
+ *   archcom badge, ⋯ menu, title link + q highlight, validation clock,
+ *   project/agents/date/reports meta) with roomier padding and rhythm —
+ *   the classic kanon without a second feature set.
+ * The card BODY is the pointer drag surface (pointer sensor + DragOverlay
+ * live in the page); the TITLE is the keyboard/screen-reader path into
+ * `/tasks/:id`, and the ⋯ menu carries the canonical keyboard move
+ * («Переместить…» — the verdict's keyboard path; a dnd-kit keyboard sensor
+ * stays a deliberate later enhancement).
  *
  * Without a ui token the card is NOT draggable (owner decision CV-4 §3: the
  * simpler honest option — no phantom "drag then log in" queue): the drag is
@@ -34,6 +38,26 @@ import { TaskRowMenu } from "./TaskRowMenu";
  * cheap to paint (verdict §3: the 100+-tasks posture without virtualizing).
  */
 
+/** Per-skin spacing/intrinsic-size scale (CV-5: classic = roomier canon). */
+const CARD_SKIN = {
+  dense: {
+    pad: "px-2.5 py-2 ",
+    intrinsic: "[contain-intrinsic-size:auto_7rem] ",
+    clockGap: "mt-0.5 ",
+    titleGap: "mt-1 ",
+    metaGap: "mt-1.5 gap-x-2 gap-y-1 ",
+  },
+  classic: {
+    pad: "px-3 py-3 ",
+    intrinsic: "[contain-intrinsic-size:auto_9rem] ",
+    clockGap: "mt-1 ",
+    titleGap: "mt-2 ",
+    metaGap: "mt-2 gap-x-2.5 gap-y-1.5 ",
+  },
+} as const;
+
+export type TaskCardSkin = keyof typeof CARD_SKIN;
+
 /** Shared card body — the sortable card and the DragOverlay ghost render it. */
 const TaskCardBody = forwardRef<
   HTMLLIElement,
@@ -43,6 +67,7 @@ const TaskCardBody = forwardRef<
     canDrag: boolean;
     showMenu: boolean;
     query?: string;
+    skin: TaskCardSkin;
     overlay?: boolean;
     dragging?: boolean;
     style?: React.CSSProperties;
@@ -56,6 +81,7 @@ const TaskCardBody = forwardRef<
     canDrag,
     showMenu,
     query = "",
+    skin,
     overlay = false,
     dragging = false,
     style,
@@ -66,13 +92,16 @@ const TaskCardBody = forwardRef<
 ) {
   const t = useT();
   const { lang } = useI18n();
+  const spacing = CARD_SKIN[skin];
   return (
     <li
       ref={ref}
       style={style}
       title={canDrag ? undefined : t("tasks.board.dragDisabled")}
       className={
-        "relative list-none rounded-md border border-border-subtle bg-well px-2.5 py-2 text-sm shadow-well transition-colors duration-instant [contain-intrinsic-size:auto_7rem] [content-visibility:auto] " +
+        "relative list-none rounded-md border border-border-subtle bg-well text-sm shadow-well transition-colors duration-instant [content-visibility:auto] " +
+        spacing.pad +
+        spacing.intrinsic +
         (overlay
           ? "rotate-2 border-iris-bright/60 shadow-modal "
           : "focus-within:border-iris-bright/60 ") +
@@ -102,7 +131,11 @@ const TaskCardBody = forwardRef<
         </span>
       </div>
 
-      <h3 className="mt-1 break-words text-sm font-medium leading-snug">
+      <h3
+        className={
+          "break-words text-sm font-medium leading-snug " + spacing.titleGap
+        }
+      >
         <Link
           to={`/tasks/${encodeURIComponent(task.id)}`}
           className="text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
@@ -112,10 +145,15 @@ const TaskCardBody = forwardRef<
       </h3>
 
       {isValidatingTask(task) ? (
-        <ValidatingClock since={task.validating_since} />
+        <ValidatingClock since={task.validating_since} className={spacing.clockGap} />
       ) : null}
 
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-secondary">
+      <div
+        className={
+          "flex flex-wrap items-center text-xs text-foreground-secondary " +
+          spacing.metaGap
+        }
+      >
         {task.project ? (
           <span className="rounded-sm bg-elevated px-1.5 py-0.5">{task.project}</span>
         ) : null}
@@ -157,6 +195,8 @@ export function TaskBoardCard(props: {
   canDrag: boolean;
   showMenu: boolean;
   query?: string;
+  /** Card skin (CV-5): "dense" for the grouped board, "classic" for flat. */
+  skin?: TaskCardSkin;
 }) {
   const { task, canDrag } = props;
   // NOTE: dnd-kit's useSortable returns plain render values (transform,
@@ -171,6 +211,7 @@ export function TaskBoardCard(props: {
   return (
     <TaskCardBody
       {...props}
+      skin={props.skin ?? "dense"}
       ref={setNodeRef}
       style={{
         transform: CSS.Transform.toString(transform),
@@ -196,12 +237,15 @@ export function TaskBoardCardGhost({
   reportCount,
   showMenu,
   query,
+  skin = "dense",
   reducedMotion = false,
 }: {
   task: BoardTask;
   reportCount?: number;
   showMenu: boolean;
   query?: string;
+  /** Card skin (CV-5) — the ghost mirrors the board the drag started on. */
+  skin?: TaskCardSkin;
   reducedMotion?: boolean;
 }) {
   return (
@@ -211,51 +255,8 @@ export function TaskBoardCardGhost({
       canDrag
       showMenu={showMenu}
       query={query}
+      skin={skin}
       overlay={!reducedMotion}
     />
-  );
-}
-
-/**
- * The WF-1 validation clock line: «в валидации Xч Yм». Reads the SHARED 1 Hz
- * ticker (useValidationClock) — no per-card interval; renders nothing while
- * the ticker is inactive (SSR) or the stamp is absent/unparsable.
- */
-function ValidatingClock({ since }: { since: string | null | undefined }) {
-  const t = useT();
-  const now = useValidationNow();
-  if (now === 0) return null;
-  const elapsed = validationElapsed(since, now);
-  if (!elapsed) return null;
-  const overdue = isValidationOverdue(since, now);
-  return (
-    <p
-      className={
-        "mt-0.5 font-mono text-xs " + (overdue ? "text-error" : "text-foreground-muted")
-      }
-      title={overdue ? t("tasks.board.validatingOverdueTitle") : undefined}
-    >
-      {t("tasks.board.validatingFor", {
-        hours: elapsed.hours,
-        minutes: elapsed.minutes,
-      })}
-    </p>
-  );
-}
-
-/** Title with the active `q` match highlighted (`<mark>`, semantic boost). */
-function HighlightedTitle({ title, query }: { title: string; query: string }) {
-  const needle = query.trim();
-  if (needle.length === 0) return <>{title}</>;
-  const index = title.toLowerCase().indexOf(needle.toLowerCase());
-  if (index < 0) return <>{title}</>;
-  return (
-    <>
-      {title.slice(0, index)}
-      <mark className="rounded-sm bg-iris/20 px-0.5 text-foreground">
-        {title.slice(index, index + needle.length)}
-      </mark>
-      {title.slice(index + needle.length)}
-    </>
   );
 }

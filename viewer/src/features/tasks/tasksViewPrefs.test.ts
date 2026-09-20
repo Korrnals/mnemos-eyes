@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_BOARD_STYLE,
   DEFAULT_TASK_VIEW,
+  BOARD_STYLE_STORAGE_KEY,
   TASK_VIEW_STORAGE_KEY,
+  loadBoardStyle,
   loadTaskView,
+  saveBoardStyle,
   saveTaskView,
 } from "./tasksViewPrefs";
 
@@ -74,5 +78,41 @@ describe("tasksViewPrefs (CV-4 §1 — persisted «Канбан | Список»
     const storage = new ThrowingStorage();
     expect(loadTaskView(storage)).toBe("kanban");
     expect(() => saveTaskView("list", storage)).not.toThrow();
+  });
+});
+
+describe("tasksViewPrefs (CV-5 — persisted «Группы | Классика» board style)", () => {
+  it("defaults to the grouped board (Ф3) with no storage at all", () => {
+    expect(loadBoardStyle(undefined)).toBe(DEFAULT_BOARD_STYLE);
+    expect(DEFAULT_BOARD_STYLE).toBe("groups");
+  });
+
+  it("round-trips the stored choice under vesmaro.boardStyle", () => {
+    const storage = new MemoryStorage();
+    saveBoardStyle("classic", storage);
+    expect(storage.getItem(BOARD_STYLE_STORAGE_KEY)).toBe("classic");
+    expect(loadBoardStyle(storage)).toBe("classic");
+  });
+
+  it("falls back to groups on corrupt values (never crashes, never 'classic')", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(BOARD_STYLE_STORAGE_KEY, "flat");
+    expect(loadBoardStyle(storage)).toBe("groups");
+    storage.setItem(BOARD_STYLE_STORAGE_KEY, "");
+    expect(loadBoardStyle(storage)).toBe("groups");
+  });
+
+  it("survives throwing storage (private mode): read → default, write → no-op", () => {
+    const storage = new ThrowingStorage();
+    expect(loadBoardStyle(storage)).toBe("groups");
+    expect(() => saveBoardStyle("classic", storage)).not.toThrow();
+  });
+
+  it("keeps the two preference namespaces apart (tasksView ≠ boardStyle)", () => {
+    const storage = new MemoryStorage();
+    saveTaskView("list", storage);
+    expect(loadBoardStyle(storage)).toBe("groups");
+    saveBoardStyle("classic", storage);
+    expect(loadTaskView(storage)).toBe("list");
   });
 });

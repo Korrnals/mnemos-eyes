@@ -35,7 +35,8 @@ import {
 import { useKanbanDnd } from "./useKanbanDnd";
 import { useBoardTasks, useReportCounts } from "./useTasks";
 import { useTaskMutations } from "./useTaskMutations";
-import { loadTaskView } from "./tasksViewPrefs";
+import { BoardStyleToggle } from "./BoardStyleToggle";
+import { loadBoardStyle, loadTaskView, type BoardStyle } from "./tasksViewPrefs";
 
 /**
  * `/tasks` — the KANBAN view of the domain, view №1 per the redesign concept
@@ -66,6 +67,9 @@ function TaskBoardView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const state = parseTaskListParams(searchParams);
   const [collapsed, setCollapsed] = useState(() => loadCollapsedGroups());
+  // CV-5: the board render style («Группы | Классика») — persisted locally
+  // under "vesmaro.boardStyle"; both styles share columns, DnD and filters.
+  const [boardStyle, setBoardStyle] = useState<BoardStyle>(() => loadBoardStyle());
   const [createOpen, setCreateOpen] = useState(false);
   const mutations = useTaskMutations();
 
@@ -118,7 +122,12 @@ function TaskBoardView() {
           <h1 id="tasks-title" className="text-xl font-semibold">
             {t("tasks.title")}
           </h1>
-          <TasksViewToggle />
+          <div className="flex flex-wrap items-center gap-2">
+            <TasksViewToggle />
+            {/* CV-5: board style lives ONLY on the kanban — the list has no
+             * accordion/classic distinction. */}
+            <BoardStyleToggle style={boardStyle} onChange={setBoardStyle} />
+          </div>
         </div>
         {canMutate ? (
           <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
@@ -254,6 +263,7 @@ function TaskBoardView() {
                 collapsed={collapsed}
                 onToggleGroup={toggleGroup}
                 compact={density === "compact"}
+                style={boardStyle}
               />
             ))}
           </div>
@@ -264,6 +274,7 @@ function TaskBoardView() {
                 reportCount={reportCounts[dnd.activeTask.id]}
                 showMenu={false}
                 query={state.q}
+                skin={boardStyle === "classic" ? "classic" : "dense"}
                 reducedMotion={reducedMotion}
               />
             ) : null}
