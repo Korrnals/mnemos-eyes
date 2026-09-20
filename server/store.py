@@ -188,7 +188,7 @@ HOOK_EVENT_WHITELIST = frozenset({
     "assignment.failed",
     "assignment.expired",
     "task.validation-timeout",   # WF-1 (future emitter)
-    "executor.offline",          # notify-only per SCHED-1 §5
+    "executor.offline",          # notify-only per SCHED-1 §5 (enforced below)
 })
 RULE_CONDITION_OPS = frozenset({"eq", "ne", "in"})
 # Condition sources (ADR 0013 §3): origin classes a rule may listen to.
@@ -204,13 +204,14 @@ HOOK_SOURCE_DEFAULTS: dict[str, tuple[str, ...]] = {
 }
 # ADR 0013 §2: interval triggers must be >= 60 s (422 below that).
 SCHEDULE_MIN_INTERVAL_S = 60.0
+SCHEDULE_MAX_INTERVAL_S = 366 * 24 * 3600   # 1 year cap: bigger values overflow datetime arithmetic
 SCHEDULE_DEFAULT_MAX_RUNS_PER_DAY = 4
 SCHEDULE_DEFAULT_COOLDOWN_S = 300
 # ADR 0013 §6 starting values: per-rule default 4/day lives in-row; the
 # global daily cap lives in board_meta (the S2 engine executes it).
 AUTOMATION_ENABLED_META_KEY = "automation.enabled"
 AUTOMATION_CAP_META_KEY = "automation.cap.global_per_day"
-AUTOMATION_DEFAULT_GLOBAL_CAP = 20
+AUTOMATION_DEFAULT_GLOBAL_CAP = 10  # ADR 0013 §6 starting value
 
 # Condition field allowlist (SCHED-1 H3 / ADR 0013 §3): STRUCTURED fields
 # only — never free text (spec, report bodies, notes). A None enum means
@@ -1543,12 +1544,17 @@ class Store:
                 db, task_id, specialist, harness, created_by, executor_id)
 
     def assignments(self, state: str | None = None,
-                    task_id: str | None = None) -> list[dict[str, Any]]:
+                    task_id: str | None = None,
+                    by: str | None = None) -> list[dict[str, Any]]:
         """Assignment listing (poller inbox + UI badge source). ``state`` /
-        ``task_id`` are optional exact filters; oldest first (queue order)."""
+        ``task_id`` are optional exact filters; ``by='automation'`` keeps
+        only engine-minted rows (``created_by LIKE 'automation:%'`` —
+        ADR 0013 §2); oldest first (queue order)."""
         q = "SELECT * FROM task_assignments"
         where: list[str] = []
         params: list[Any] = []
+        if by == "automation":
+            where.append("created_by LIKE 'automation:%'")
         if state is not None:
             where.append("state=?")
             params.append(state)
@@ -2333,6 +2339,10 @@ class Store:
                 raise AutomationValidationError(
                     f"interval must be >= {int(SCHEDULE_MIN_INTERVAL_S)}s, "
                     f"got {trigger_value!r}")
+            if seconds > SCHEDULE_MAX_INTERVAL_S:
+                raise AutomationValidationError(
+                    f"interval must be <= {int(SCHEDULE_MAX_INTERVAL_S)}s, "
+                    f"got {trigger_value!r}")
         else:  # time-of-day (kind validated upstream)
             _validate_hhmm(trigger_value, "trigger_value")
 
@@ -2510,6 +2520,14 @@ class Store:
                     f"unknown action: {payload['action']!r}; allowed: "
                     f"{sorted(HOOK_ACTIONS)}")
             fields["action"] = payload["action"]
+        # SCHED-1 §5: executor.offline is notify-only — a create_assignment
+        # hook on it is rejected at CRUD time so S2 never inherits an
+        # unenforced intention.
+        if payload.get("on") == "executor.offline" and \
+                payload.get("action") == "create_assignment":
+            raise AutomationValidationError(
+                "executor.offline is notify-only (SCHED-1 §5): "
+                "create_assignment hooks on it are not allowed")
         if "source_allowlist" in payload:
             action = payload.get("action")
             if action is None:

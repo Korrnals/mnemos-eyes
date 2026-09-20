@@ -1155,6 +1155,7 @@ class AutomationStatusOut(_ApiModel):
     daily_cap: int
     daily_used: int
     condition_meta: dict[str, Any]     # fields/ops/values_hint (+ events/actions)
+    rules: dict[str, dict[str, int]]   # per-kind {total, enabled} counts
 
 
 class AutomationSettingsBody(BaseModel):
@@ -2384,7 +2385,8 @@ def _touch_presence_if_authenticated(request: Request, executor_id: str) -> None
 
 @app.get("/api/assignments")
 async def list_assignments(request: Request, state: str = "",
-                           task_id: str = "", executor_id: str = "") -> AssignmentsOut:
+                           task_id: str = "", executor_id: str = "",
+                           by: str = "") -> AssignmentsOut:
     """Assignment queue projection (ADR 0009). OPEN read (no bearer), same
     boundary as GET /api/board: the cluster ingress is the auth boundary.
     ``state`` must be a dictionary value (422); ``task_id`` is an exact
@@ -2407,7 +2409,7 @@ async def list_assignments(request: Request, state: str = "",
     executor_id = executor_id.strip()
     if executor_id:
         _touch_presence_if_authenticated(request, executor_id)
-    items = store.assignments(state=state or None, task_id=task_id or None)
+    items = store.assignments(state=state or None, task_id=task_id or None, by=(by or None))
     executors = store.list_executors()
     global_default = (store.get_meta("default_executor") or "").strip()
     task_cache: dict[str, dict[str, Any] | None] = {}

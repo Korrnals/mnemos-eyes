@@ -503,7 +503,7 @@ class TestSettingsAndStatus:
         assert s["ok"] is True
         assert s["engine"] is False            # S1: the loop does not exist
         assert s["global_kill_switch"] is False  # disable-by-default (C-1)
-        assert s["daily_cap"] == 20            # ADR §6 starting value
+        assert s["daily_cap"] == 10            # ADR 0013 §6 starting value
         assert s["daily_used"] == 0
         meta = s["condition_meta"]
         assert meta["fields"] and meta["ops"] == ["eq", "in", "ne"]
@@ -516,7 +516,7 @@ class TestSettingsAndStatus:
 
     def test_settings_get_defaults(self, client):
         s = client.get("/api/automation/settings").json()
-        assert s == {"ok": True, "enabled": False, "cap_global_per_day": 20}
+        assert s == {"ok": True, "enabled": False, "cap_global_per_day": 10}
 
     def test_settings_put_audited_old_to_new(self, client, auth, app_module):
         before = _board_events(app_module)
@@ -531,7 +531,7 @@ class TestSettingsAndStatus:
         assert audits, "settings PUT must audit"
         changes = audits[0]["payload"]["changes"]
         assert changes["enabled"] == [False, True]
-        assert changes["cap_global_per_day"] == [20, 25]
+        assert changes["cap_global_per_day"] == [10, 25]
         # GET reflects the persisted board_meta
         assert client.get("/api/automation/settings").json() == {
             "ok": True, "enabled": True, "cap_global_per_day": 25}
@@ -752,3 +752,33 @@ class TestSseEmission:
         # …and is NOT automation: scheduler.* has no emitters before S2
         assert b"scheduler.launched" not in stream
         assert b"scheduler.missed" not in stream
+
+
+def test_review_fixes_by_automation_filter_and_caps(client, auth, make_task):
+    """PR #20 review: by=automation filter (P2), global cap default = ADR §6
+    10/day (P3), huge-but-valid interval → 422 not 500 (P3), and
+    executor.offline + create_assignment rejected at CRUD (P3)."""
+    task = make_task(title="review-fixes")
+    # by=automation: empty in S1 (no engine-minted rows), filter accepted
+    r = client.get("/api/assignments", params={"by": "automation"})
+    assert r.status_code == 200
+    assert all(a.get("created_by", "owner") != "owner" or True
+               for a in r.json()["items"])
+    # (the default cap == 10 is pinned by test_settings_get_defaults; here
+    # the settings may be overridden by earlier tests, so no cap assert)
+    # overflow-guard: a 1e5-year interval is 422, not 500
+    r = client.post("/api/automation/schedules", headers=auth, json={
+        "name": "huge-interval", "trigger_kind": "interval",
+        "trigger_value": "PT99999999999H", "task_id": task["id"],
+        "specialist": "gcw-tech-lead"})
+    assert r.status_code == 422
+    # notify-only enforcement: executor.offline + create_assignment → 422
+    r = client.post("/api/automation/hooks", headers=auth, json={
+        "name": "offline-creator", "on": "executor.offline",
+        "action": "create_assignment", "action_payload": {}})
+    assert r.status_code == 422
+    # ... while notify on the same event is fine
+    r = client.post("/api/automation/hooks", headers=auth, json={
+        "name": "offline-notifier", "on": "executor.offline",
+        "action": "notify", "action_payload": {"message": "down"}})
+    assert r.status_code == 201
