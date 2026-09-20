@@ -165,7 +165,7 @@ def _host_allowed(host: str, eff_port: int) -> bool:
             if any(ip == eip for ip in ips):
                 return True
             continue
-        if fnmatch(host, ehost):
+        if fnmatch.fnmatch(host, ehost):
             return True
     return False
 
