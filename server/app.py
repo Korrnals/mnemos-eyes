@@ -51,6 +51,7 @@ from .store import (
     ExecutorNotFoundError,
     ExecutorQuotaError,
     ExecutorStateError,
+    InvalidTransitionError,
     PRESENCE_ONLINE_S,
     PRESENCE_STALE_S,
     REPORT_KINDS,
@@ -370,6 +371,56 @@ async def _presence_sweeper() -> None:
             pass
 
 
+# ------------------------------------- WF-1 validation sweep (24 h timeout)
+# Proposal §6 variant A: an in-process loop (pattern: the reaper above).
+# Every 15 min it flags tasks sitting in `validating` longer than 24 h:
+# ARCHCOM_REVIEW_TAG + work notification + SSE task.updated. The task is
+# NEVER auto-moved — the confirm-or-return decision belongs to the owner /
+# architectural committee (proposal §4.1 outcome B). Idempotency is the
+# tag itself: store.mark_validation_timeout re-checks it inside the write
+# transaction, so reruns and restarts never duplicate the flag.
+_VALIDATION_SWEEP_INTERVAL_S = 900.0
+_validation_sweep_log = logging.getLogger("vesmaro.validation-sweep")
+
+
+def _validation_sweep_once() -> int:
+    """One synchronous sweep pass — no sleeps, directly testable (the
+    reaper-tick pattern). Returns the number of newly flagged tasks."""
+    flagged = 0
+    for row in store.stale_validating_tasks():
+        task = store.mark_validation_timeout(row["id"])
+        if task is None:
+            # raced out of the lane (moved/archived) between scan and
+            # write — nothing to flag; the next tick re-scans from state
+            _validation_sweep_log.info(
+                "validation sweep skipped task=%s: left the lane before "
+                "the write", row["id"])
+            continue
+        flagged += 1
+        _notify_and_broadcast(
+            "work", f"{task['id']}: в валидации >24ч",
+            "требуется решение: подтвердить или вернуть",
+            task["id"], {"kind": "task.updated", "task": task})
+        _validation_sweep_log.info(
+            "validation timeout flagged task=%s since=%s",
+            task["id"], task.get("validating_since", ""))
+    if flagged:
+        _validation_sweep_log.info(
+            "validation sweep pass: flagged=%d", flagged)
+    return flagged
+
+
+async def _validation_sweeper() -> None:
+    """Background loop (WF-1 §6): every 900 s call _validation_sweep_once.
+    A tick failure is logged with the traceback and never kills the loop."""
+    while True:
+        await asyncio.sleep(_VALIDATION_SWEEP_INTERVAL_S)
+        try:
+            _validation_sweep_once()
+        except Exception:  # noqa — background loop must never die
+            _validation_sweep_log.exception("validation sweep tick failed")
+
+
 # Routing resolution chain (Amd 2 §5), computed per GET — stored nowhere
 # (no staleness). Tiers: explicit pin → assignment.specialist capability
 # match → task.specialists match → project default → global default →
@@ -465,14 +516,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     reaper_task = asyncio.create_task(_assignment_reaper())
     # ---- ARCH-9: presence sweeper (separate block, staggered from reaper).
     presence_task = asyncio.create_task(_presence_sweeper())
+    # ---- WF-1: validation sweep (24h timeout → archcom branch).
+    validation_task = asyncio.create_task(_validation_sweeper())
     yield
     task.cancel()
     inbox_task.cancel()
     reaper_task.cancel()
     presence_task.cancel()
+    validation_task.cancel()
 
 
 COLUMN_RU = {
+    "backlog": "бэклог", "validating": "на валидации",
     "open": "открыто", "in-progress": "в работе", "blocked": "блокировано",
     "resolved": "решено", "done": "готово",
 }
@@ -608,6 +663,7 @@ class TaskOut(_ApiModel):
     status: str                     # BE-10: workflow dictionary value — store always returns it post-migration
     priority: str                   # BE-12: priority dictionary value — store always returns it post-migration
     archived_from: str = ""         # BE-11b: pre-archive column
+    validating_since: str = ""      # WF-1: 24h clock start (ISO) while col=validating; '' off-lane
 
 
 class BoardOut(_ApiModel):
@@ -1371,6 +1427,10 @@ async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
     _guard_write(request, classes=("ui",))
     try:
         task = store.move_task(task_id, body.col, body.position)
+    except InvalidTransitionError as exc:
+        # WF-1 v1 transition mirror: blocked → done/resolved is refused
+        # with a hint (422, owner-facing message from the store).
+        raise HTTPException(422, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if task is None:

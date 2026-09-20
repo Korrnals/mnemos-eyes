@@ -27,15 +27,46 @@ from typing import Any
 
 from .security import mask_secrets
 
-# Columns of the kanban board, in display order. Values equal the mnemos
-# workflow state machine so a task can graduate into a memory later.
-COLUMNS: tuple[str, ...] = ("open", "in-progress", "blocked", "resolved", "done")
-VALID_STATUSES = frozenset(COLUMNS)
+# WF-1: board columns in display order — two pre-validation lanes
+# (backlog, validating) join the kanban left of `open`
+# (workflow-lifecycle-proposal §3). They are BOARD stages, not workflow
+# statuses: both map onto the mnemos status `open` (see COLUMN_STATUS_MAP).
+TASK_COLUMNS: tuple[str, ...] = (
+    "backlog", "validating", "open", "in-progress", "blocked", "resolved", "done",
+)
+# Values valid for the ``col`` field (the kanban projection).
+VALID_STATUSES = frozenset(TASK_COLUMNS)
 # BE-10: per-task status dictionary = the mnemos workflow state machine.
-# Superset of COLUMNS: `withdrawn` is a terminal mnemos status with no board
-# column (cancelled tasks are archived instead — WF-1 proposal §7). Validated
-# on create and PATCH; `col` remains the kanban projection (see move_task).
-TASK_STATUSES = frozenset({*COLUMNS, "withdrawn"})
+# `withdrawn` is a terminal mnemos status with no board column (cancelled
+# tasks are archived instead — WF-1 proposal §7). Validated on create and
+# PATCH; `col` remains the kanban projection (see move_task).
+TASK_STATUSES = frozenset({"open", "in-progress", "blocked", "resolved",
+                           "done", "withdrawn"})
+# WF-1 (proposal §5): board column → workflow status. The pre-validation
+# lanes read as `open` (work has not started); the stage distinction lives
+# in the column itself and the task:stage:* mnemos tags, never in the
+# status dictionary.
+COLUMN_STATUS_MAP: dict[str, str] = {
+    "backlog": "open", "validating": "open", "open": "open",
+    "in-progress": "in-progress", "blocked": "blocked",
+    "resolved": "resolved", "done": "done",
+}
+# WF-1 validation lane (proposal §4/§6): entering `validating` starts a
+# 24h wall clock (``validating_since`` — restart-safe, wall-clock based).
+# On timeout the background sweep flags the task for the architectural
+# committee; it NEVER moves the task (the decision is human).
+VALIDATING_WINDOW_S = 24 * 3600.0
+ARCHCOM_REVIEW_TAG = "task:stage:archcom-review"
+# WF-1 v1 transition mirror (proposal §4.3, minimal): a blocked task may
+# not jump straight to a resolution column — the block must lift first
+# (blocked → in-progress → resolved → done). Everything else stays free:
+# the owner is free to move tasks; a full state machine is a later phase.
+BLOCKED_DIRECT_TARGETS = frozenset({"done", "resolved"})
+
+
+class InvalidTransitionError(Exception):
+    """WF-1: a column move the transition mirror forbids (HTTP 422
+    upstream). v1 guards only blocked → done / blocked → resolved."""
 # BE-11a: agent report kinds for a task.
 REPORT_KINDS = ("intermediate", "final")
 VALID_ENVS = frozenset({"cluster", "laptop", "local", "cloud", "unknown"})
@@ -219,7 +250,7 @@ AUTOMATION_DEFAULT_GLOBAL_CAP = 10  # ADR 0013 §6 starting value
 # field carries its dictionary so the UI form is a triple of selects over
 # server data (Frontend blocker, АРХКОМ-5).
 RULE_CONDITION_FIELD_ENUMS: dict[str, tuple[str, ...] | None] = {
-    "col": tuple(COLUMNS),
+    "col": tuple(TASK_COLUMNS),
     "status": tuple(sorted(TASK_STATUSES)),
     "state": tuple(sorted(ASSIGNMENT_STATES)),
     "env": tuple(sorted(VALID_ENVS)),
@@ -430,7 +461,7 @@ CREATE TABLE IF NOT EXISTS board_meta (
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id           TEXT PRIMARY KEY,
-    col          TEXT NOT NULL CHECK (col IN ('open','in-progress','blocked','resolved','done')),
+    col          TEXT NOT NULL CHECK (col IN ('backlog','validating','open','in-progress','blocked','resolved','done')),
     position     INTEGER NOT NULL DEFAULT 0,
     title        TEXT NOT NULL,
     summary      TEXT NOT NULL DEFAULT '',
@@ -654,6 +685,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_launches_hook_event
 ON launches (rule_id, event_id) WHERE rule_kind='hook';
 """
 
+# WF-1 table-rebuild target (Store._rebuild_tasks_for_wf1): the full
+# CURRENT tasks shape with the 7-column CHECK. SQLite cannot ALTER a CHECK
+# constraint, so widening tasks.col goes create-new → copy → swap-names.
+_TASKS_WF1_DDL = """
+CREATE TABLE tasks_new (
+    id               TEXT PRIMARY KEY,
+    col              TEXT NOT NULL CHECK (col IN ('backlog','validating','open','in-progress','blocked','resolved','done')),
+    position         INTEGER NOT NULL DEFAULT 0,
+    title            TEXT NOT NULL,
+    summary          TEXT NOT NULL DEFAULT '',
+    spec             TEXT NOT NULL DEFAULT '',
+    agents           TEXT NOT NULL DEFAULT '[]',
+    specialists      TEXT NOT NULL DEFAULT '[]',
+    env              TEXT NOT NULL DEFAULT 'unknown' CHECK (env IN ('cluster','laptop','local','cloud','unknown')),
+    project          TEXT NOT NULL DEFAULT '',
+    memory_ids       TEXT NOT NULL DEFAULT '[]',
+    mnemos_tags      TEXT NOT NULL DEFAULT '[]',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    archived         INTEGER NOT NULL DEFAULT 0,
+    status           TEXT NOT NULL DEFAULT 'open',
+    archived_from    TEXT NOT NULL DEFAULT '',
+    priority         TEXT NOT NULL DEFAULT 'normal',
+    validating_since TEXT NOT NULL DEFAULT ''
+)
+"""
+# Column order shared by the rebuild's INSERT … SELECT (source table has
+# every column except validating_since — the ALTER below has not run yet).
+_TASK_COLUMNS_FULL = (
+    "id", "col", "position", "title", "summary", "spec", "agents",
+    "specialists", "env", "project", "memory_ids", "mnemos_tags",
+    "created_at", "updated_at", "archived", "status", "archived_from",
+    "priority",
+)
+_TASKS_BACKUP_WF1 = "tasks_backup_wf1"
+
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
 # Single source of truth: server/seed.py (imported lazily to avoid a cycle).
 def _seed_version() -> str:
@@ -747,6 +814,20 @@ class Store:
             # SEED_VERSION bump (the seed-version check wipes all tasks).
             db.execute(
                 "ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'")
+        # WF-1 (proposal §7 risks 2-3): widen the tasks.col CHECK to the
+        # 7-column dictionary via table rebuild — rows and ids are
+        # preserved verbatim, a safety snapshot is kept, and SEED_VERSION
+        # is NOT bumped (the seed-version check below wipes all tasks).
+        self._rebuild_tasks_for_wf1(db)
+        cols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(tasks)").fetchall()}
+        if "validating_since" not in cols:
+            # WF-1: 24h validation clock. Only the rebuild path on an old
+            # DB skips this (the rebuilt table already carries the column);
+            # fresh schemas created after the rebuild no-op land here.
+            db.execute(
+                "ALTER TABLE tasks "
+                "ADD COLUMN validating_since TEXT NOT NULL DEFAULT ''")
         # ARCH-9: denormalized topics on assignments (Amd 2 §9). Additive
         # ALTER for pre-ARCH-9 databases — the '[]' DEFAULT covers existing
         # rows; new rows are filled at creation. executors and the partial
@@ -769,6 +850,48 @@ class Store:
                 "INSERT OR REPLACE INTO board_meta (key, value) VALUES ('seed_version', ?)",
                 (_seed_version(),),
             )
+
+    def _rebuild_tasks_for_wf1(self, db: sqlite3.Connection) -> None:
+        """WF-1: rebuild ``tasks`` with the 7-column CHECK (idempotent).
+
+        SQLite cannot ALTER a CHECK constraint, so the widen goes: safety
+        snapshot → create tasks_new → INSERT SELECT (ids verbatim — the
+        task_reports/events/task_inbox references survive) → drop old →
+        rename → recreate idx_tasks_col. Runs inside the caller's boot
+        transaction, so a crash mid-rebuild rolls back to the intact old
+        table. The snapshot table (_TASKS_BACKUP_WF1) is deliberately LEFT
+        IN PLACE — operational cleanup happens outside the boot path.
+
+        No-op when the stored CHECK already knows the 7-column dictionary
+        (fresh schemas and already-migrated databases), so repeated boots
+        never rebuild twice and never overwrite the snapshot.
+        """
+        row = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'"
+        ).fetchone()
+        if row is None:  # pragma: no cover — _SCHEMA just created the table
+            return
+        # The 5-column predecessor schema contains no 'validating' token;
+        # the rebuilt/new schema always does (CHECK + validating_since).
+        if "'validating'" in (row["sql"] or ""):
+            return
+        db.execute(f"DROP TABLE IF EXISTS {_TASKS_BACKUP_WF1}")
+        db.execute(
+            f"CREATE TABLE {_TASKS_BACKUP_WF1} AS SELECT * FROM tasks")
+        n_rows = db.execute("SELECT COUNT(*) AS n FROM tasks").fetchone()["n"]
+        db.execute(_TASKS_WF1_DDL)
+        cols_sel = ", ".join(_TASK_COLUMNS_FULL)
+        db.execute(
+            f"INSERT INTO tasks_new ({cols_sel}, validating_since) "
+            f"SELECT {cols_sel}, '' FROM tasks")
+        db.execute("DROP TABLE tasks")
+        db.execute("ALTER TABLE tasks_new RENAME TO tasks")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_col "
+                   "ON tasks (col, position)")
+        self._log(db, "schema.wf1_tasks_rebuilt", None, {
+            "rows": n_rows, "backup": _TASKS_BACKUP_WF1,
+            "col_check": "7-column",
+        })
 
     def _seed_if_empty(self, db: sqlite3.Connection) -> None:
         count = db.execute("SELECT COUNT(*) AS n FROM tasks").fetchone()["n"]
@@ -840,10 +963,10 @@ class Store:
             t["specialists"] = _loads(t["specialists"])
             t["memory_ids"] = _loads(t["memory_ids"])
             t["mnemos_tags"] = _loads(t["mnemos_tags"])
-        counts = {c: 0 for c in COLUMNS}
+        counts = {c: 0 for c in TASK_COLUMNS}
         for r in stats:
             counts[r["col"]] = r["n"]
-        return {"columns": list(COLUMNS), "tasks": tasks, "counts": counts}
+        return {"columns": list(TASK_COLUMNS), "tasks": tasks, "counts": counts}
 
     def task(self, task_id: str) -> dict[str, Any] | None:
         with self._lock, self._conn() as db:
@@ -866,7 +989,9 @@ class Store:
         # garbage and must 422, not silently fall back to the column.
         status = payload.get("status")
         if status is None:
-            status = col
+            # WF-1: pre-validation lanes carry the workflow status `open`
+            # (COLUMN_STATUS_MAP), not their column name.
+            status = COLUMN_STATUS_MAP[col]
         if status not in TASK_STATUSES:
             raise ValueError(f"invalid status: {status}")
         env = payload.get("env", "unknown")
@@ -884,6 +1009,9 @@ class Store:
         # collide on the tasks.id UNIQUE constraint (QA-1 regression)
         task_id = payload.get("id") or f"t-{int(time.time()*1000)}-{secrets.token_hex(2)}"
         now = _now()
+        # WF-1: a task born directly in the validation lane starts its 24h
+        # clock immediately (the sweep must not skip it for an empty stamp).
+        validating_since = now if col == "validating" else ""
         with self._lock, self._conn() as db:
             pos = db.execute(
                 "SELECT COALESCE(MAX(position)+1, 0) AS p FROM tasks WHERE col=?",
@@ -893,8 +1021,9 @@ class Store:
                 """INSERT INTO tasks
                        (id, col, status, position, title, summary, spec,
                         agents, specialists, env, project, memory_ids,
-                        mnemos_tags, priority, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        mnemos_tags, priority, validating_since,
+                        created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     task_id, col, status, pos, payload["title"],
                     payload.get("summary", ""), payload.get("spec", ""),
@@ -903,7 +1032,7 @@ class Store:
                     env, payload.get("project", ""),
                     json.dumps(payload.get("memory_ids", [])),
                     json.dumps(payload.get("mnemos_tags", [])),
-                    priority,
+                    priority, validating_since,
                     now, now,
                 ),
             )
@@ -911,28 +1040,57 @@ class Store:
         return self.task(task_id)  # type: ignore[return-value]
 
     def move_task(self, task_id: str, col: str, position: int | None = None) -> dict[str, Any] | None:
-        """Kanban move (BE-10 v1 semantics): moving a column synchronously
-        re-derives ``status`` from the column map. A status set by a manual
-        PATCH therefore lives only until the next move — that keeps the
-        ``?status=`` filter honest with respect to the kanban state.
-        (Decision documented on BE-10; per-status persistence independent of
-        columns is deferred to the WF-1 transition-machine phase.)"""
+        """Kanban move (BE-10 semantics + the WF-1 v1 transition mirror).
+
+        - ``status`` re-derives from COLUMN_STATUS_MAP: pre-validation
+          lanes (backlog/validating) read as workflow `open`; a status set
+          by a manual PATCH lives only until the next move (the ``?status=``
+          filter stays honest with the kanban state).
+        - WF-1 v1 guard (proposal §4.3, minimal): blocked → done and
+          blocked → resolved raise InvalidTransitionError — the block must
+          lift first. Every other move stays free (owner's discretion);
+          the full state machine is a later phase.
+        - WF-1 clock: ENTERING validating stamps ``validating_since``
+          (starts the 24h sweep window); LEAVING the lane clears it; a
+          same-column reorder keeps the clock (position-only moves must
+          not reset the deadline).
+        """
         if col not in VALID_STATUSES:
             raise ValueError(f"invalid col: {col}")
         with self._lock, self._conn() as db:
             row = db.execute("SELECT col FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
                 return None
+            src = row["col"]
+            if src == "blocked" and col in BLOCKED_DIRECT_TARGETS:
+                raise InvalidTransitionError(
+                    f"недопустимый переход: {src} → {col} — сначала "
+                    "in-progress (приёмка идёт через resolved)")
             if position is None:
                 position = db.execute(
                     "SELECT COALESCE(MAX(position)+1, 0) AS p FROM tasks WHERE col=?",
                     (col,),
                 ).fetchone()["p"]
-            db.execute(
-                "UPDATE tasks SET col=?, status=?, position=?, updated_at=? WHERE id=?",
-                (col, col, position, _now(), task_id),
-            )
-            self._log(db, "task.moved", task_id, {"from": row["col"], "to": col})
+            status = COLUMN_STATUS_MAP[col]
+            if col == "validating" and src != "validating":
+                db.execute(
+                    "UPDATE tasks SET col=?, status=?, position=?, "
+                    "validating_since=?, updated_at=? WHERE id=?",
+                    (col, status, position, _now(), _now(), task_id),
+                )
+            elif col != "validating":
+                db.execute(
+                    "UPDATE tasks SET col=?, status=?, position=?, "
+                    "validating_since='', updated_at=? WHERE id=?",
+                    (col, status, position, _now(), task_id),
+                )
+            else:
+                # reorder inside validating — clock untouched
+                db.execute(
+                    "UPDATE tasks SET col=?, status=?, position=?, updated_at=? WHERE id=?",
+                    (col, status, position, _now(), task_id),
+                )
+            self._log(db, "task.moved", task_id, {"from": src, "to": col})
         return self.task(task_id)
 
     def update_task(self, task_id: str, patch: dict[str, Any],
@@ -1285,9 +1443,12 @@ class Store:
     def unarchive_task(self, task_id: str) -> dict[str, Any] | None:
         """Restore an archived task (BE-11b). It returns to its pre-archive
         column (``archived_from``); rows archived before that column existed
-        (``archived_from=''``) fall back to ``open``. Status re-syncs to the
-        restored column (same semantics as move). Returns the restored task
-        or None when the id is unknown / not archived."""
+        (``archived_from=''``) — or carrying a value outside the column
+        dictionary — fall back to ``open``. Status re-syncs via
+        COLUMN_STATUS_MAP (same semantics as move). ``validating_since`` is
+        deliberately untouched: archiving is a board flag orthogonal to the
+        column, and a task returning to the validation lane with an old
+        stamp is honestly overdue — it still needs the decision."""
         with self._lock, self._conn() as db:
             row = db.execute(
                 "SELECT archived, archived_from FROM tasks WHERE id=?",
@@ -1296,9 +1457,13 @@ class Store:
             if row is None or not row["archived"]:
                 return None
             col = row["archived_from"] or "open"
+            if col not in VALID_STATUSES:
+                # Legacy garbage must not hit the 7-column CHECK
+                # (IntegrityError → 500) — documented fallback instead.
+                col = "open"
             db.execute(
                 "UPDATE tasks SET archived=0, col=?, status=?, updated_at=? WHERE id=?",
-                (col, col, _now(), task_id),
+                (col, COLUMN_STATUS_MAP[col], _now(), task_id),
             )
             self._log(db, "task.unarchived", task_id, {"to": col})
         return self.task(task_id)
@@ -1970,6 +2135,73 @@ class Store:
                 "WHERE task_id IS ? AND message=? LIMIT 1",
                 (task_id, message),
             ).fetchone() is not None
+
+    # -------------------------------------- WF-1 validation sweep (24 h)
+    # Proposal §6: the scan half of the validation timeout. The write half
+    # (tag + audit event) lives in mark_validation_timeout; the app-level
+    # sweep loop drives both. Wall-clock on the STORED validating_since —
+    # restart-safe: rows that went stale during downtime are caught by the
+    # first tick after boot, and the tag is the double-processing guard.
+
+    def stale_validating_tasks(self) -> list[dict[str, Any]]:
+        """Live tasks in ``validating`` past VALIDATING_WINDOW_S and not
+        yet flagged for the archcom branch. The tag filter is part of the
+        SELECT so a flagged task is never re-selected; the write side
+        re-checks it inside its transaction (scan→write race guard)."""
+        cut = (datetime.now(timezone.utc)
+               - timedelta(seconds=VALIDATING_WINDOW_S)
+               ).isoformat(timespec="seconds")
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                """SELECT * FROM tasks
+                   WHERE col='validating' AND archived=0
+                     AND NULLIF(validating_since, '') IS NOT NULL
+                     AND validating_since < ?
+                     AND mnemos_tags NOT LIKE ?
+                   ORDER BY validating_since ASC""",
+                (cut, f'%"{ARCHCOM_REVIEW_TAG}"%'),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            t = dict(r)
+            for k in ("agents", "specialists", "memory_ids", "mnemos_tags"):
+                t[k] = _loads(t[k])
+            out.append(t)
+        return out
+
+    def mark_validation_timeout(self, task_id: str) -> dict[str, Any] | None:
+        """Flag one overdue validating task for the archcom branch (WF-1
+        proposal §4.1 outcome B): append ARCHCOM_REVIEW_TAG to mnemos_tags
+        and write the task.validation-timeout audit event. The task is NOT
+        moved — the confirm-or-return decision belongs to the owner/archcom.
+
+        Idempotent: the tag is re-checked inside the transaction, so sweep
+        reruns (and any racing second sweeper) can never double-tag.
+        Deliberately NOT update_task(): that path enforces the 24h CONTENT
+        edit window, which would lock the sweep out of exactly the tasks
+        it exists for. Returns the updated task, or None when the task
+        left the lane / was archived between scan and write."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                """SELECT * FROM tasks
+                   WHERE id=? AND col='validating' AND archived=0""",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            tags = _loads(row["mnemos_tags"])
+            if ARCHCOM_REVIEW_TAG in tags:
+                return self._task_in_txn(db, task_id)
+            tags.append(ARCHCOM_REVIEW_TAG)
+            db.execute(
+                "UPDATE tasks SET mnemos_tags=?, updated_at=? WHERE id=?",
+                (json.dumps(tags), _now(), task_id),
+            )
+            self._log(db, "task.validation-timeout", task_id, {
+                "tag": ARCHCOM_REVIEW_TAG,
+                "validating_since": row["validating_since"],
+            })
+            return self._task_in_txn(db, task_id)
     # ------------------------------------------------ executors (ARCH-9)
     def _executor(self, db: sqlite3.Connection,
                   executor_id: str) -> dict[str, Any] | None:

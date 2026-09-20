@@ -60,7 +60,8 @@ class TestTaskCrudApi:
         assert task["env"] == "laptop"
 
     def test_create_invalid_col_422(self, client, auth):
-        r = client.post("/api/tasks", json={"title": "x", "col": "backlog"},
+        # WF-1: 'backlog'/'validating' became VALID columns — garbage only
+        r = client.post("/api/tasks", json={"title": "x", "col": "nowhere"},
                         headers=auth)
         assert r.status_code == 422
 
@@ -96,7 +97,7 @@ class TestTaskCrudApi:
     def test_move_invalid_col_422(self, client, auth, make_task):
         task = make_task(title="mover2")
         r = client.post(f"/api/tasks/{task['id']}/move",
-                        json={"col": "backlog"}, headers=auth)
+                        json={"col": "nowhere"}, headers=auth)
         assert r.status_code == 422
 
     def test_move_unknown_task_404(self, client, auth):
@@ -146,7 +147,7 @@ class TestBE1InvalidEnvIs422Never500:
         assert r.status_code == 422
 
     def test_post_invalid_col_422_not_500(self, client, auth):
-        r = client.post("/api/tasks", json={"title": "x", "col": "backlog"},
+        r = client.post("/api/tasks", json={"title": "x", "col": "nowhere"},
                         headers=auth)
         assert r.status_code == 422
 
