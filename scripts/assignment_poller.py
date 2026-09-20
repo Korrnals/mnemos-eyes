@@ -31,7 +31,11 @@ Disciplines implemented here (ADR 0009):
       exit 0 → complete (fallback final when the agent was silent),
       exit ≠0 → fail with the stderr tail; flock singleton;
       recovery sweep on start fails own claimed|running leftovers;
-- §5  the launch prompt is the assignment envelope (render_envelope).
+- §5  the launch prompt is the assignment envelope (render_envelope);
+- AB-FU-1 hardening: max_concurrent cap (at capacity the tick is skipped,
+      the assignment stays queued), child termination on a background
+      worker (SIGTERM → grace → SIGKILL, never blocking heartbeats or
+      the poll), and a full-scan audit pid lookup in the sweep.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ import fcntl
 import json
 import logging
 import os
+import queue
 import random
 import re
 import signal
@@ -49,7 +54,6 @@ import sys
 import tempfile
 import threading
 import time
-from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +70,7 @@ POLL_INTERVAL_DEFAULT = 10.0     # seconds between queue scans (ADR §4 ~10 s)
 POLL_JITTER_DEFAULT = 2.0        # ± seconds on the poll interval
 HEARTBEAT_INTERVAL_DEFAULT = 60.0  # poller-driven liveness tick (ADR §4)
 KILL_GRACE_SECONDS = 10.0        # SIGTERM → SIGKILL grace for children
+MAX_CONCURRENT_DEFAULT = 2       # cap on simultaneously supervised children
 STDERR_TAIL_CHARS = 400          # fail-reason tail cap (server caps at 2000)
 FINISH_RETRIES = 5               # complete/fail retries on transient errors
 SWEEP_FAIL_REASON = "poller restart, no local process"
@@ -144,6 +149,10 @@ class PollerConfig:
     poll_interval: float = POLL_INTERVAL_DEFAULT
     poll_jitter: float = POLL_JITTER_DEFAULT
     heartbeat_interval: float = HEARTBEAT_INTERVAL_DEFAULT
+    # Cap on children supervised at once (AB-FU-1): at capacity the poll
+    # tick is skipped with a log line — the assignment stays queued and is
+    # claimed when a slot frees. Protects the laptop from fan-out meltdowns.
+    max_concurrent: int = MAX_CONCURRENT_DEFAULT
     ca_bundle: str = ""                  # lab CA for self-signed board TLS
     # This poller's OWN executor designation (ARCH-9 derived view). NEVER
     # the assignment's executor pin: forwarding the pin would attribute
@@ -223,6 +232,11 @@ class PollerConfig:
 
         audit = raw.get("audit_path")
         lock = raw.get("lock_path")
+        max_concurrent = raw.get("max_concurrent", MAX_CONCURRENT_DEFAULT)
+        if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int):
+            raise ConfigError("max_concurrent must be an integer")
+        if max_concurrent < 1:
+            raise ConfigError("max_concurrent must be >= 1")
         ca_bundle = str(raw.get("ca_bundle") or "").strip()
         if ca_bundle and not Path(ca_bundle).expanduser().is_file():
             raise ConfigError(f"ca_bundle not found: {ca_bundle}")
@@ -237,6 +251,7 @@ class PollerConfig:
             heartbeat_interval=_number("heartbeat_interval",
                                        HEARTBEAT_INTERVAL_DEFAULT,
                                        positive=True),
+            max_concurrent=max_concurrent,
             ca_bundle=ca_bundle,
             executor_id=str(raw.get("executor_id") or "").strip()[:120],
             audit_path=Path(audit).expanduser() if audit
@@ -512,23 +527,26 @@ class AuditLog:
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def last_pid_for(self, assignment_id: int, *, scan: int = 400) -> int | None:
+    def last_pid_for(self, assignment_id: int) -> int | None:
         """Most recent recorded pid for an assignment (orphan detection in
-        the recovery sweep). Scans only the tail — the file grows forever."""
+        the recovery sweep). Full scan of the audit (AB-FU-1): a live child
+        whose launch record has been pushed out of any fixed tail window
+        must never be lost — the sweep runs once at start, so an unbounded
+        read of a local one-line-per-event file is the correct trade."""
+        last: int | None = None
         try:
             with self.path.open("r", encoding="utf-8") as fh:
-                tail = deque(fh, maxlen=scan)
+                for line in fh:
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if rec.get("assignment_id") == assignment_id:
+                        pid = rec.get("pid")
+                        last = int(pid) if pid else None
         except FileNotFoundError:
             return None
-        for line in reversed(tail):
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if rec.get("assignment_id") == assignment_id:
-                pid = rec.get("pid")
-                return int(pid) if pid else None
-        return None
+        return last
 
 
 # ------------------------------------------------------------------ poller
@@ -555,12 +573,17 @@ class AssignmentPoller:
     def __init__(self, config: PollerConfig, board: BoardClient,
                  audit: AuditLog, *,
                  clock: Callable[[], float] = time.monotonic,
-                 dry_run: bool = False):
+                 dry_run: bool = False,
+                 kill_grace: float = KILL_GRACE_SECONDS):
         self.config = config
         self.board = board
         self.audit = audit
         self._clock = clock
         self.dry_run = dry_run
+        # AB-FU-1: child termination runs on a background worker — the
+        # blocking SIGTERM→grace→SIGKILL sequence must never stall the
+        # supervision loop (heartbeats of the other children, queue poll).
+        self.terminator = ChildTerminator(kill_grace)
         self._children: dict[int, _Child] = {}
         self._refused: set[int] = set()   # allowlist-miss dedup (per process)
         self._stop = threading.Event()
@@ -689,6 +712,14 @@ class AssignmentPoller:
                 log.error("poll: malformed assignment record skipped: %r",
                           sorted(a))
                 continue
+            if len(self._children) >= self.config.max_concurrent:
+                # AB-FU-1: at capacity the tick is skipped — the assignment
+                # stays queued and will be claimed when a slot frees.
+                log.info("poll: at capacity (%d/%d children, %d queued "
+                         "waiting) — skipping this tick",
+                         len(self._children), self.config.max_concurrent,
+                         len(queued))
+                return
             if a["id"] in self._children:
                 continue
             harness = a.get("harness") or ""
@@ -712,10 +743,12 @@ class AssignmentPoller:
             self._launch(assignment, claim_token, entry)
 
     def _dry_run_decisions(self, queued: list[dict[str, Any]]) -> None:
-        """--once smoke mode: log what WOULD happen per queued assignment.
-        No claim, no launch, no report, no audit — dry-run never mutates
-        board or local state (a spawned child outliving the process would
-        strand the claim token with no one to complete it)."""
+        """--once smoke mode: log what WOULD happen per queued assignment,
+        honouring the max_concurrent cap (AB-FU-1). No claim, no launch, no
+        report, no audit — dry-run never mutates board or local state (a
+        spawned child outliving the process would strand the claim token
+        with no one to complete it)."""
+        would_run = len(self._children)   # always 0 here, kept explicit
         for a in queued:
             if not isinstance(a.get("id"), int):
                 continue
@@ -726,11 +759,16 @@ class AssignmentPoller:
                 log.info("dry-run: assignment %s (task %s) — allowlist miss "
                          "for %s/%s, would stay queued (fail-closed)",
                          a["id"], a.get("task_id"), harness, specialist)
+            elif would_run >= self.config.max_concurrent:
+                log.info("dry-run: assignment %s (task %s) — would stay "
+                         "queued: max_concurrent=%d already taken",
+                         a["id"], a.get("task_id"), self.config.max_concurrent)
             else:
                 log.info("dry-run: assignment %s (task %s) — would claim as "
                          "%s and launch %s",
                          a["id"], a.get("task_id"),
                          self.config.executor_name, list(entry.command))
+                would_run += 1
 
     def _refuse(self, assignment: dict[str, Any], harness: str,
                 specialist: str) -> None:
@@ -850,7 +888,9 @@ class AssignmentPoller:
             # 'claimed': the claim token lives only in this process and
             # nothing else (no reaper yet, poller scans only 'queued')
             # would ever move it — the task would lie in-progress forever.
-            _terminate(proc)
+            # Async kill (AB-FU-1): the grace/SIGKILL wait must not block
+            # this launch path (other children still need heartbeats).
+            self.terminator.submit(proc, f"board start failed for {aid}")
             log.error("start %s failed: %s — child terminated, failing "
                       "assignment", aid, exc)
             try:
@@ -904,7 +944,11 @@ class AssignmentPoller:
             except BoardConflict as exc:
                 log.warning("heartbeat %s → 409 (%s): killing child pid %s",
                             aid, exc.detail, child.proc.pid)
-                _terminate(child.proc)
+                # Async by design (AB-FU-1): the kill (and its grace window)
+                # happens on the terminator worker; the audit record marks
+                # the kill decision, the corpse is reaped off-thread.
+                self.terminator.submit(child.proc,
+                                       f"heartbeat 409 on assignment {aid}")
                 self.audit.append(assignment_id=aid,
                                   specialist=child.specialist,
                                   spec_hash=child.spec_hash,
@@ -1003,8 +1047,12 @@ def _tail(path: Path, limit: int = STDERR_TAIL_CHARS) -> str:
         return ""
 
 
-def _terminate(proc: subprocess.Popen) -> None:
-    """SIGTERM the child's session, escalate to SIGKILL after the grace."""
+def _terminate(proc: subprocess.Popen,
+               grace: float = KILL_GRACE_SECONDS) -> None:
+    """SIGTERM the child's session, escalate to SIGKILL after ``grace``
+    seconds, and reap the corpse either way (a zombie keeps answering
+    signal 0 as "alive"). ``grace`` is a parameter so tests can shrink
+    the window; production always passes KILL_GRACE_SECONDS."""
     if proc.poll() is not None:
         return
     try:
@@ -1015,15 +1063,75 @@ def _terminate(proc: subprocess.Popen) -> None:
         except ProcessLookupError:
             return
     try:
-        proc.wait(timeout=KILL_GRACE_SECONDS)
+        proc.wait(timeout=grace)
+        return
     except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
+        except ProcessLookupError:
+            return
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        log.error("terminate: pid %s survived SIGKILL "
+                  "(uninterruptible sleep?)", proc.pid)
+
+
+class ChildTerminator:
+    """Background SIGTERM → grace → SIGKILL executor (AB-FU-1).
+
+    ``_terminate`` blocks for up to ``grace`` seconds per stubborn child;
+    run inline from send_heartbeats()/_launch() it would stall heartbeats
+    of every OTHER child and the queue poll for the whole window. submit()
+    only enqueues; a single daemon worker performs the blocking sequence.
+    """
+
+    def __init__(self, kill_grace: float = KILL_GRACE_SECONDS):
+        self.kill_grace = kill_grace
+        self._queue: queue.SimpleQueue[tuple[subprocess.Popen, str]] = \
+            queue.SimpleQueue()
+        self._start_lock = threading.Lock()
+        self._worker: threading.Thread | None = None
+        self._busy = False
+
+    def submit(self, proc: subprocess.Popen, reason: str) -> None:
+        """Non-blocking termination request; ``reason`` lands in the log."""
+        with self._start_lock:
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(
+                    target=self._work, name="poller-child-terminator",
+                    daemon=True)
+                self._worker.start()
+        # Flagged BEFORE the put: closes the put→get gap so drain() cannot
+        # observe "empty and idle" with a termination in flight.
+        self._busy = True
+        self._queue.put((proc, reason))
+
+    def _work(self) -> None:
+        while True:
+            proc, reason = self._queue.get()
             try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+                log.info("terminator: stopping pid %s (%s)", proc.pid, reason)
+                _terminate(proc, self.kill_grace)
+                log.info("terminator: pid %s stopped (%s)", proc.pid, reason)
+            finally:
+                self._busy = False
+
+    def drain(self, timeout: float) -> bool:
+        """Best-effort shutdown wait for already-submitted terminations.
+        Returns True when the queue is empty and the worker is idle; a
+        False return means the process exited with a kill still pending
+        (the daemon thread dies with us — the recovery sweep's orphan
+        SIGTERM is the backstop)."""
+        deadline = time.monotonic() + timeout
+        while (not self._queue.empty() or self._busy) \
+                and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return self._queue.empty() and not self._busy
 
 
 def _cleanup_files(*paths: Path | None) -> None:
@@ -1102,6 +1210,12 @@ def main(argv: list[str] | None = None) -> int:
         for aid in poller.active_assignment_ids:
             log.warning("shutdown: assignment %s left running (recovery "
                         "sweep will fail it on next start)", aid)
+        # Let already-submitted kills land (SIGTERM at least) before the
+        # process exits; children still RUNNING at shutdown are deliberately
+        # left alone — the next start's sweep owns them.
+        if not poller.terminator.drain(timeout=KILL_GRACE_SECONDS + 5.0):
+            log.warning("shutdown: terminator still busy — a pending kill "
+                        "may not have landed")
         board.close()
         os.close(lock_fd)
     return 0

@@ -24,6 +24,13 @@ poll_interval: 10        # seconds between GET /api/assignments?state=queued
 poll_jitter: 2           # ± seconds on each interval
 heartbeat_interval: 60   # poller-driven liveness ticks (ADR 0009 §4)
 
+# Cap on simultaneously supervised children (AB-FU-1). At capacity the
+# poll skips its tick with a log line — queued assignments stay queued
+# and are claimed when a slot frees (nothing is lost, nothing is refused).
+# 1 = strictly serial execution; raise consciously: each child is a full
+# agent harness process on this laptop.
+max_concurrent: 2
+
 # The board's TLS is lab-issued (self-signed): point at the lab CA instead
 # of disabling verification. Empty/absent = system trust store; a path to a
 # MISSING file refuses to start (fail-closed, not silent TLS-off).
