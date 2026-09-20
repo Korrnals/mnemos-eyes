@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { useCallback, forwardRef, useState } from "react";
 import { Link } from "react-router";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -36,6 +36,14 @@ import { TaskRowMenu } from "./TaskRowMenu";
  *
  * `content-visibility: auto` + `contain-intrinsic-size` keep long columns
  * cheap to paint (verdict §3: the 100+-tasks posture without virtualizing).
+ *
+ * Context menu (fix/kanban-context-menu): the card carries the SAME ⋯ menu
+ * as the list (TaskRowMenu in controlled mode) with TWO entries — the
+ * hover-revealed ⋯ trigger (tab-reachable, focus-visible) and the card
+ * right-click (`onContextMenu` + preventDefault → popup at the cursor).
+ * The card root gets a light hover state (token border shift) so the ⋯
+ * affordance reads; pointer presses inside the trigger/popup never reach
+ * the dnd-kit listeners (TaskRowMenu stops pointerdown propagation).
  */
 
 /** Per-skin spacing/intrinsic-size scale (CV-5: classic = roomier canon). */
@@ -93,13 +101,33 @@ const TaskCardBody = forwardRef<
   const t = useT();
   const { lang } = useI18n();
   const spacing = CARD_SKIN[skin];
+  // Card-owned context menu (right-click + ⋯): `menuAt` is the cursor anchor
+  // of the LAST right-click; it is cleared on close so the next ⋯ open
+  // anchors to the button again.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const handleMenuOpenChange = useCallback((next: boolean) => {
+    setMenuOpen(next);
+    if (!next) setMenuAt(null);
+  }, []);
   return (
     <li
       ref={ref}
       style={style}
       title={canDrag ? undefined : t("tasks.board.dragDisabled")}
+      onContextMenu={
+        showMenu
+          ? (event) => {
+              // Right-click = the same ⋯ menu, anchored at the cursor (the
+              // browser menu yields; the keyboard path stays the ⋯ button).
+              event.preventDefault();
+              setMenuAt({ x: event.clientX, y: event.clientY });
+              setMenuOpen(true);
+            }
+          : undefined
+      }
       className={
-        "relative list-none rounded-md border border-border-subtle bg-well text-sm shadow-well transition-colors duration-instant [content-visibility:auto] " +
+        "group/card relative list-none rounded-md border border-border-subtle bg-well text-sm shadow-well transition-colors duration-instant hover:border-iris-bright/40 [content-visibility:auto] " +
         spacing.pad +
         spacing.intrinsic +
         (overlay
@@ -127,7 +155,15 @@ const TaskCardBody = forwardRef<
               {t("tasks.board.archcomBadge")}
             </Badge>
           ) : null}
-          {showMenu ? <TaskRowMenu task={task} /> : null}
+          {showMenu ? (
+            <TaskRowMenu
+              task={task}
+              open={menuOpen}
+              onOpenChange={handleMenuOpenChange}
+              position={menuAt}
+              revealOnParentHover
+            />
+          ) : null}
         </span>
       </div>
 
