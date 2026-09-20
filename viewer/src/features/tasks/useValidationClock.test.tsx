@@ -3,10 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { TaskBoardCard } from "@/features/tasks/TaskBoardCard";
 import { resetValidationClock } from "@/features/tasks/useValidationClock";
 import { I18nProvider } from "@/i18n";
+import { MockAdapter } from "@/gateway/MockAdapter";
+import { GatewayContext } from "@/gateway/GatewayContext";
 import type { BoardTask } from "@/gateway/boardTypes";
 
 /**
@@ -14,7 +17,9 @@ import type { BoardTask } from "@/gateway/boardTypes";
  * renders «в валидации Xч Yм» from the SHARED 1 Hz ticker — ONE interval for
  * the whole board however many validating cards are mounted, stopped when
  * the last one unmounts. Frozen system clock + fake timers keep the elapsed
- * arithmetic deterministic.
+ * arithmetic deterministic. The card carries the AGW-2 assignment badge,
+ * so the mount provides the gateway context it reads (no agents cache is
+ * seeded — the badge renders nothing, the clock stays the subject).
  */
 
 const NOW = Date.parse("2026-09-19T10:00:00+00:00");
@@ -52,13 +57,17 @@ function mountCards(tasks: BoardTask[]): void {
   root = createRoot(container);
   act(() => {
     root!.render(
-      <I18nProvider initialLang="ru">
-        <MemoryRouter>
-          {tasks.map((task) => (
-            <TaskBoardCard key={task.id} task={task} canDrag={false} showMenu={false} />
-          ))}
-        </MemoryRouter>
-      </I18nProvider>,
+      <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
+        <QueryClientProvider client={new QueryClient()}>
+          <I18nProvider initialLang="ru">
+            <MemoryRouter>
+              {tasks.map((task) => (
+                <TaskBoardCard key={task.id} task={task} canDrag={false} showMenu={false} />
+              ))}
+            </MemoryRouter>
+          </I18nProvider>
+        </QueryClientProvider>
+      </GatewayContext.Provider>,
     );
   });
 }

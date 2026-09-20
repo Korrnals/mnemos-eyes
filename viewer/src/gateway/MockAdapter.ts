@@ -1,5 +1,6 @@
 import type { MemoryGateway } from "./MemoryGateway";
 import type { InboxParams } from "./BoardAdapter";
+import { resolveRoutingAnnotation } from "./routing";
 import { ApiError } from "@/lib/errors";
 import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
@@ -1147,51 +1148,23 @@ export class MockAdapter implements MemoryGateway {
   }
 
   /**
-   * Routing mirror (Amd 2 §5 tier chain, presence-agnostic nomination tiers
-   * + presence-ranked deterministic best pick): explicit pin → assignment
-   * specialist → task specialists → global default → auto live local worker
-   * → unmatched. Presence is read from the static corpus snapshot.
+   * Routing mirror (Amd 2 §5 tier chain): delegated to the shared pure
+   * resolver (gateway/routing.ts) over the mock's live registry + settings —
+   * the same implementation the AssignExecutorSheet preview uses, so dev
+   * mode and the preview can never drift apart.
    */
   private resolveRouting(
     pin: string,
     specialist: string,
     taskSpecialists: readonly string[],
   ): RoutingAnnotation {
-    if (pin) return { resolved: pin, reason: "explicit" };
-    const eligible = this.executors.filter(
-      (executor) => executor.state === "approved" && executor.enabled,
-    );
-    const best = (candidates: readonly ExecutorItem[]): ExecutorItem =>
-      candidates.reduce((a, b) => {
-        const byPresence = PRESENCE_RANK[b.presence] - PRESENCE_RANK[a.presence];
-        if (byPresence !== 0) return byPresence > 0 ? b : a;
-        return b.id < a.id ? b : a; // deterministic id tiebreak (server min())
-      });
-    const byCapability = (role: string): ExecutorItem[] =>
-      eligible.filter((executor) => executor.capabilities.includes(role));
-    if (specialist) {
-      const candidates = byCapability(specialist);
-      if (candidates.length > 0) {
-        return { resolved: best(candidates).id, reason: "specialist" };
-      }
-    }
-    for (const role of taskSpecialists) {
-      const candidates = byCapability(role);
-      if (candidates.length > 0) {
-        return { resolved: best(candidates).id, reason: "task-specialists" };
-      }
-    }
-    const eligibleIds = new Set(eligible.map((executor) => executor.id));
-    const globalDefault = this.executionSettings.default_executor;
-    if (globalDefault && eligibleIds.has(globalDefault)) {
-      return { resolved: globalDefault, reason: "global-default" };
-    }
-    const auto = eligible.filter(
-      (executor) =>
-        executor.transport === "local-poll" && executor.presence === "online",
-    );
-    if (auto.length > 0) return { resolved: best(auto).id, reason: "auto" };
-    return { resolved: null, reason: "unmatched" };
+    return resolveRoutingAnnotation({
+      pin,
+      specialist,
+      taskSpecialists,
+      executors: this.executors,
+      globalDefault: this.executionSettings.default_executor,
+    });
   }
 
   /** Append one journal row for a manual trigger (the only S1 origin). */
@@ -1362,13 +1335,6 @@ const ACTIVE_ASSIGNMENT_STATES: readonly AssignmentLifecycleState[] = [
   "claimed",
   "running",
 ];
-
-/** Presence rank for the deterministic best-pick (server `_PRESENCE_RANK`). */
-const PRESENCE_RANK: Readonly<Record<string, number>> = {
-  online: 2,
-  stale: 1,
-  offline: 0,
-};
 
 /** SCHED-1 S1 AC: rule names are unique across BOTH rule kinds (422 mirror). */
 function assertUniqueRuleName(

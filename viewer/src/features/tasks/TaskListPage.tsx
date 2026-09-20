@@ -8,6 +8,7 @@ import { TableRowSkeleton } from "@/components/skeletons/Skeletons";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { BoardTask } from "@/gateway/boardTypes";
+import { ActiveAssignmentBadge } from "@/features/agents/ActiveAssignmentBadge";
 import { useI18n, useT } from "@/i18n";
 import {
   TASK_PRIORITIES,
@@ -442,6 +443,9 @@ function TaskTableRow({
         >
           {task.title}
         </Link>
+        <span className="ml-1.5 align-middle">
+          <ActiveAssignmentBadge taskId={task.id} />
+        </span>
         {reportCount ? (
           <span
             className="ml-2 inline-flex items-center gap-0.5 align-middle text-xs text-foreground-muted"
@@ -492,6 +496,7 @@ function TaskCardRow({
           <Badge variant={statusBadgeVariant(task.status)}>
             {t(statusLabelKey(task.status))}
           </Badge>
+          <ActiveAssignmentBadge taskId={task.id} />
           {reportCount ? (
             <span className="inline-flex items-center gap-0.5 text-xs text-foreground-muted">
               <MessageSquare className="size-3" aria-hidden="true" />

@@ -1,9 +1,11 @@
+import { useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AssignmentCancelledResult,
   AssignmentCreateInput,
   AssignmentCreatedResult,
   AssignmentListParams,
+  AssignmentsPage,
   ExecutionSettings,
   ExecutionSettingsInput,
 } from "@/gateway/boardTypes";
@@ -11,6 +13,7 @@ import { isAgentsMutationSource, isAgentsSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { GC_TIMES, STALE_TIMES } from "@/lib/queryClient";
+import { activeAssignmentOf } from "./assignmentStatus";
 
 /**
  * AGW-1 agents-domain data hooks (spec 2026-09-19). Reads are
@@ -81,6 +84,37 @@ export function useExecutionSettings() {
     enabled: capable,
     staleTime: STALE_TIMES.agentsSettings,
     gcTime: GC_TIMES.agentsSettings,
+  });
+}
+
+/**
+ * The ACTIVE assignment of one task (≤1 invariant), read from the shared
+ * unfiltered queue query through a `select` — every card, list row and the
+ * detail page observe ONE wire call (the same single-projection decision as
+ * tasks.board). undefined = no active attempt (or no agents capability —
+ * mnemos mode renders no badge, which is the honest state).
+ */
+export function useActiveAssignment(taskId: string | undefined) {
+  const gateway = useGateway();
+  const capable = isAgentsSource(gateway) && taskId !== undefined;
+  const select = useCallback(
+    (page: AssignmentsPage) => activeAssignmentOf(page.items, taskId ?? ""),
+    [taskId],
+  );
+  return useQuery({
+    // MUST stay key-identical with useAssignments() — one cache entry feeds
+    // the tab (filtered), the cards and the list rows (selected).
+    queryKey: keys.agents.assignments.list({}),
+    queryFn: ({ signal }) => {
+      if (!isAgentsSource(gateway)) {
+        throw new Error("useActiveAssignment: gateway has no agents capability.");
+      }
+      return gateway.listAssignments({}, signal);
+    },
+    enabled: capable,
+    select,
+    staleTime: STALE_TIMES.agentsAssignments,
+    gcTime: GC_TIMES.agentsAssignments,
   });
 }
 

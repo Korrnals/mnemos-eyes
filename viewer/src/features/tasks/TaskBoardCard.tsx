@@ -5,6 +5,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { MessageSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { BoardTask } from "@/gateway/boardTypes";
+import { ActiveAssignmentBadge } from "@/features/agents/ActiveAssignmentBadge";
 import { useT, useI18n } from "@/i18n";
 import {
   formatTaskDate,
@@ -142,9 +143,14 @@ const TaskCardBody = forwardRef<
       {...rest}
     >
       <div className="flex items-start justify-between gap-1">
-        <Badge variant={priorityBadgeVariant(task.priority)} className="shrink-0">
-          {t(priorityLabelKey(task.priority))}
-        </Badge>
+        <span className="flex min-w-0 flex-wrap items-center gap-1">
+          <Badge variant={priorityBadgeVariant(task.priority)} className="shrink-0">
+            {t(priorityLabelKey(task.priority))}
+          </Badge>
+          {/* Active-assignment chip (AGW-2): iris contour for claimed/running,
+           * neutral for queued; deep-links to the «Исполнение» tab. */}
+          <ActiveAssignmentBadge taskId={task.id} />
+        </span>
         <span className="flex items-center gap-1">
           {isArchcomReviewTask(task) ? (
             <Badge
