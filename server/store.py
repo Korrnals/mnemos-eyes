@@ -107,6 +107,70 @@ class AssignmentTokenError(AssignmentError):
 class TaskNotAssignableError(AssignmentError):
     """Target task is archived or workflow-terminal (HTTP 422 upstream)."""
 
+
+# ----------------------------------------------------------- executors
+# ARCH-9 (ADR 0009 Amendment 2 §3-§4): the executor registry — the third
+# entity (specialist ≠ harness ≠ executor). Registry state model is
+# pending → approved → revoked (owner-approval identity gate; routing
+# considers approved+enabled only). Presence is COMPUTED on read from the
+# last_seen TTL — there is no presence column and the background sweeper
+# NEVER mutates executor rows.
+EXECUTOR_STATES = frozenset({"pending", "approved", "revoked"})
+EXECUTOR_TRANSPORTS = frozenset({"local-poll", "mesh-r4"})
+# Two-clock discipline (Amd 2 §6): these thresholds read ONLY executor
+# clocks (executors.last_seen); the ARCH-7 reaper reads only assignment
+# clocks. Initial values per the АРХКОМ-4 verdict: online ≤ 2 min,
+# stale 2–10 min, offline > 10 min. Server-documented constants — the API
+# exposes them in GET /api/executors meta so clients never hardcode.
+PRESENCE_ONLINE_S = 120.0
+PRESENCE_STALE_S = 600.0
+
+
+class ExecutorError(Exception):
+    """Base class for executor-registry violations (ARCH-9)."""
+
+
+class ExecutorNotFoundError(ExecutorError):
+    """Unknown executor id (HTTP 404 upstream)."""
+
+
+class ExecutorConflictError(ExecutorError):
+    """Registry invariant violation — duplicate name (HTTP 409 upstream)."""
+
+
+class ExecutorStateError(ExecutorError):
+    """Illegal registry-state transition (HTTP 409 upstream). ``revoked``
+    is terminal: a revoked secret must not be resurrected by re-approval —
+    re-registration is the path (kill-switch semantics, Amd 2 §5)."""
+
+
+class ExecutorQuotaError(ExecutorError):
+    """Open-pending registry quota exhausted (HTTP 429 upstream — a
+    resource guard, same class as rate limits, not a conflict)."""
+
+
+# F5 (security review PR #18): a machine-token holder can mint pending
+# registrations without a total cap (the 10/60s/IP limiter bounds pace,
+# not volume). Cap the OPEN pending backlog; approving/revoking/deleting
+# frees quota. Constant, not config — it is an abuse ceiling, not a
+# deployment knob.
+EXECUTOR_PENDING_CAP = 20
+
+
+def presence_from_last_seen(last_seen: str) -> str:
+    """Computed presence (Amd 2 §6): ``online`` when last_seen is younger
+    than PRESENCE_ONLINE_S, ``stale`` up to PRESENCE_STALE_S, ``offline``
+    beyond — never-heartbeated (``''``) included. Reads only the executor
+    clock; never persisted."""
+    if not last_seen:
+        return "offline"
+    age = _age_seconds(last_seen)
+    if age <= PRESENCE_ONLINE_S:
+        return "online"
+    if age <= PRESENCE_STALE_S:
+        return "stale"
+    return "offline"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS board_meta (
     key   TEXT PRIMARY KEY,
@@ -224,6 +288,7 @@ CREATE TABLE IF NOT EXISTS task_assignments (
     spec_hash           TEXT NOT NULL DEFAULT '',
     executor_id         TEXT NOT NULL DEFAULT '',
     claimed_by_executor TEXT NOT NULL DEFAULT '',
+    topics              TEXT NOT NULL DEFAULT '[]',
     created_at          TEXT NOT NULL,
     claimed_at          TEXT,
     started_at          TEXT,
@@ -232,6 +297,33 @@ CREATE TABLE IF NOT EXISTS task_assignments (
 );
 CREATE INDEX IF NOT EXISTS idx_task_assignments_state ON task_assignments (state, id);
 CREATE INDEX IF NOT EXISTS idx_task_assignments_task ON task_assignments (task_id, id);
+-- PR #13 review P3a: the ≤1-active-assignment-per-task invariant becomes
+-- STRUCTURAL. A partial unique index rejects a second queued/claimed/
+-- running row for the same task even if the create-side check is ever
+-- bypassed; create_assignment maps the IntegrityError to 409.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_assignments_active_task
+ON task_assignments (task_id) WHERE state IN ('queued','claimed','running');
+-- ARCH-9: executor registry (pending → approved → revoked). secret_hash is
+-- sha256(executor_secret) — the plaintext secret exists exactly once, in
+-- the register response. last_seen is the presence clock; NOTHING writes
+-- it except authenticated presence ticks (the sweeper only reads).
+CREATE TABLE IF NOT EXISTS executors (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    harness       TEXT NOT NULL,
+    host          TEXT NOT NULL DEFAULT '',
+    transport     TEXT NOT NULL DEFAULT 'local-poll'
+                  CHECK (transport IN ('local-poll','mesh-r4')),
+    capabilities  TEXT NOT NULL DEFAULT '[]',
+    version       TEXT NOT NULL DEFAULT '',
+    enabled       INTEGER NOT NULL DEFAULT 0,
+    state         TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (state IN ('pending','approved','revoked')),
+    secret_hash   TEXT NOT NULL DEFAULT '',
+    last_seen     TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
 """
 
 # Bumped on incompatible seed layout changes; reseed wipes user edits.
@@ -327,6 +419,16 @@ class Store:
             # SEED_VERSION bump (the seed-version check wipes all tasks).
             db.execute(
                 "ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'")
+        # ARCH-9: denormalized topics on assignments (Amd 2 §9). Additive
+        # ALTER for pre-ARCH-9 databases — the '[]' DEFAULT covers existing
+        # rows; new rows are filled at creation. executors and the partial
+        # unique index ride on the _SCHEMA executescript (IF NOT EXISTS).
+        acols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(task_assignments)").fetchall()}
+        if "topics" not in acols:
+            db.execute(
+                "ALTER TABLE task_assignments "
+                "ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
@@ -912,11 +1014,16 @@ class Store:
 
     # ------------------------------------------------------- agent reports
     def add_report(self, task_id: str, body: str, kind: str,
-                   agent: str = "") -> tuple[dict[str, Any], list[int]] | None:
+                   agent: str = "", *, identity_mismatch: bool = False,
+                   ) -> tuple[dict[str, Any], list[int]] | None:
         """Append an agent report to a task (BE-11a). A new ``final`` report
         supersedes all previous live finals (they stay in history flagged
         ``superseded``); intermediates are never touched. Returns
-        (report, superseded_ids) or None when the task does not exist."""
+        (report, superseded_ids) or None when the task does not exist.
+
+        ARCH-9: ``identity_mismatch`` flags a report whose declared agent
+        string disagrees with the token-backed executor (spoofing signal,
+        Amd 2 §7) — it lands in the task.report audit payload."""
         if kind not in REPORT_KINDS:
             raise ValueError(f"invalid report kind: {kind}")
         text = body.strip()
@@ -948,9 +1055,12 @@ class Store:
                 (task_id, kind, agent, text, now),
             )
             rid = int(cur.lastrowid)
-            self._log(db, "task.report", task_id,
-                      {"report_id": rid, "kind": kind, "agent": agent,
-                       "superseded": superseded_ids})
+            payload: dict[str, Any] = {
+                "report_id": rid, "kind": kind, "agent": agent,
+                "superseded": superseded_ids}
+            if identity_mismatch:
+                payload["identity_mismatch"] = True
+            self._log(db, "task.report", task_id, payload)
         report = {"id": rid, "task_id": task_id, "kind": kind, "agent": agent,
                   "body": text, "superseded": False, "created_at": now}
         return report, superseded_ids
@@ -982,7 +1092,24 @@ class Store:
         row = db.execute(
             "SELECT * FROM task_assignments WHERE id=?", (assignment_id,)
         ).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        a = dict(row)
+        a["topics"] = _loads(a.get("topics") or "[]")
+        return a
+
+    @staticmethod
+    def _executor_transport(db: sqlite3.Connection, executor_id: str) -> str:
+        """Transport tag for assignment audit events (Amd 2 §7: executor_id
+        + transport ride together). Empty for an empty id or an executor
+        deleted from the registry (attribution strings outlive rows —
+        DELETE deliberately keeps assignments untouched)."""
+        if not executor_id:
+            return ""
+        row = db.execute(
+            "SELECT transport FROM executors WHERE id=?",
+            (executor_id,)).fetchone()
+        return row["transport"] if row else ""
 
     @staticmethod
     def _claim_token_matches(stored: str | None, token: str | None) -> bool:
@@ -1022,7 +1149,8 @@ class Store:
         now = _now()
         with self._lock, self._conn() as db:
             task = db.execute(
-                "SELECT spec, archived, status FROM tasks WHERE id=?", (task_id,)
+                """SELECT spec, archived, status, mnemos_tags, project
+                   FROM tasks WHERE id=?""", (task_id,)
             ).fetchone()
             if task is None:
                 raise AssignmentNotFoundError(f"task {task_id} not found")
@@ -1043,20 +1171,37 @@ class Store:
                     f"task {task_id} already has an active assignment")
             spec = task["spec"] or ""
             spec_hash = hashlib.sha256(spec.encode("utf-8")).hexdigest()
-            cur = db.execute(
-                """INSERT INTO task_assignments
-                       (task_id, specialist, harness, state, created_by, note,
-                        spec_snapshot, spec_hash, executor_id, created_at)
-                       VALUES (?,?,?,'queued',?,?,?,?,?,?)""",
-                (task_id, specialist.strip()[:120], harness,
-                 created_by[:120], "", spec[:SPEC_SNAPSHOT_CAP], spec_hash,
-                 executor_id.strip()[:120], now),
-            )
+            # ARCH-9 (Amd 2 §9): denormalized topics — the project/domain
+            # tags mesh subscription filters need without joining through
+            # mnemos. project:<slug> from the task's project column is
+            # included when mnemos_tags does not already carry it (the
+            # column is the canonical project; metadata tier only).
+            topics = [t for t in _loads(task["mnemos_tags"])
+                      if isinstance(t, str)
+                      and t.startswith(("project:", "domain:"))]
+            if task["project"] and f"project:{task['project']}" not in topics:
+                topics.insert(0, f"project:{task['project']}")
+            try:
+                cur = db.execute(
+                    """INSERT INTO task_assignments
+                           (task_id, specialist, harness, state, created_by, note,
+                            spec_snapshot, spec_hash, executor_id, topics, created_at)
+                           VALUES (?,?,?,'queued',?,?,?,?,?,?,?)""",
+                    (task_id, specialist.strip()[:120], harness,
+                     created_by[:120], "", spec[:SPEC_SNAPSHOT_CAP], spec_hash,
+                     executor_id.strip()[:120], json.dumps(topics), now),
+                )
+            except sqlite3.IntegrityError as exc:
+                # P3a: the partial unique index is the structural backstop
+                # for the ≤1-active invariant (create-side check raced).
+                raise AssignmentConflictError(
+                    f"task {task_id} already has an active assignment") from exc
             aid = int(cur.lastrowid)
             self._log(db, "assignment.created", task_id, {
                 "assignment_id": aid, "specialist": specialist.strip()[:120],
                 "harness": harness, "created_by": created_by[:120],
                 "executor_id": executor_id.strip()[:120], "spec_hash": spec_hash,
+                "topics": topics,
             })
             return self._assignment(db, aid)  # type: ignore[return-value]
 
@@ -1077,17 +1222,32 @@ class Store:
             q += " WHERE " + " AND ".join(where)
         q += " ORDER BY id ASC"
         with self._lock, self._conn() as db:
-            return [dict(r) for r in db.execute(q, params).fetchall()]
+            rows = [dict(r) for r in db.execute(q, params).fetchall()]
+        for r in rows:
+            r["topics"] = _loads(r.get("topics") or "[]")
+        return rows
 
     def claim_assignment(self, assignment_id: int, claimed_by: str,
-                         executor_id: str = ""
+                         executor_id: str = "", *, token_executor_id: str | None = None,
                          ) -> tuple[dict[str, Any], str, dict[str, Any] | None, bool]:
         """Atomic claim (ADR 0009 A4): CAS ``UPDATE ... WHERE state='queued'``
         + rowcount check, with the task column move open → in-progress in
         the SAME transaction. Two pollers racing → one 200, one 409.
 
-        ``executor_id`` (optional, ARCH-9 contract) is stored verbatim into
-        ``claimed_by_executor`` — attribution only, no phase-1 enforcement.
+        Executor identity (ARCH-9): ``token_executor_id`` is the
+        token-BACKED executor id (executor-secret auth at the route);
+        ``executor_id`` is the declared body field. Only explicit pins are
+        enforced (Amd 2 §5), inside this same transaction:
+        - pinned assignment + no token executor → AssignmentConflictError
+          (409: the pin conflicts with a generic machine claim);
+        - pinned assignment + token executor of ANOTHER executor →
+          AssignmentTokenError (403: identity mismatch, spoofing gate);
+        - declared executor_id contradicting the token identity → 403.
+        The token-backed identity is authoritative for attribution.
+
+        PR #13 review P3c: a task archived AFTER the assignment was created
+        refuses the claim (422) — a poller must not execute work whose task
+        left the board between nomination and claim.
 
         Returns (assignment, claim_token, task_after, moved). The token is
         generated here (secrets.token_hex(16)) and handed to the caller —
@@ -1097,20 +1257,49 @@ class Store:
         now = _now()
         with self._lock, self._conn() as db:
             row = db.execute(
-                "SELECT task_id FROM task_assignments WHERE id=?",
+                "SELECT * FROM task_assignments WHERE id=?",
                 (assignment_id,),
             ).fetchone()
             if row is None:
                 raise AssignmentNotFoundError(
                     f"assignment {assignment_id} not found")
             task_id = row["task_id"]
-            cur = db.execute(
-                "UPDATE task_assignments SET state='claimed', claimed_by=?, "
-                "claim_token=?, claimed_at=?, claimed_by_executor=? "
-                "WHERE id=? AND state='queued'",
-                (claimed_by.strip()[:120], token, now,
-                 executor_id.strip()[:120], assignment_id),
-            )
+            pin = (row["executor_id"] or "").strip()
+            if pin:
+                if token_executor_id is None:
+                    raise AssignmentConflictError(
+                        f"assignment {assignment_id} is explicitly pinned to "
+                        f"executor '{pin}' — that executor's token is required "
+                        "to claim it")
+                if token_executor_id != pin:
+                    raise AssignmentTokenError(
+                        f"assignment {assignment_id} is pinned to executor "
+                        f"'{pin}'; the token belongs to '{token_executor_id}'")
+            if (executor_id.strip() and token_executor_id is not None
+                    and executor_id.strip() != token_executor_id):
+                raise AssignmentTokenError(
+                    f"declared executor_id '{executor_id.strip()}' does not "
+                    f"match the token-backed executor '{token_executor_id}'")
+            effective_executor = (token_executor_id if token_executor_id
+                                  else executor_id.strip())
+            # P3c: archived-after-creation guard
+            trow = db.execute(
+                "SELECT archived FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if trow is None or trow["archived"]:
+                raise TaskNotAssignableError(
+                    f"task {task_id} is archived (or gone) — claim refused")
+            try:
+                cur = db.execute(
+                    "UPDATE task_assignments SET state='claimed', claimed_by=?, "
+                    "claim_token=?, claimed_at=?, claimed_by_executor=? "
+                    "WHERE id=? AND state='queued'",
+                    (claimed_by.strip()[:120], token, now,
+                     effective_executor[:120], assignment_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise AssignmentConflictError(
+                    f"assignment {assignment_id} is not queued "
+                    "(already claimed or terminal)") from exc
             if cur.rowcount != 1:
                 raise AssignmentConflictError(
                     f"assignment {assignment_id} is not queued "
@@ -1118,7 +1307,11 @@ class Store:
             self._log(db, "assignment.claimed", task_id, {
                 "assignment_id": assignment_id,
                 "claimed_by": claimed_by.strip()[:120],
-                "executor_id": executor_id.strip()[:120],
+                "executor_id": effective_executor[:120],
+                # Amd 2 §7 (PR #18 F6b): executor identity rides with its
+                # transport on assignment events
+                "transport": self._executor_transport(
+                    db, effective_executor[:120]),
             })
             # Task column move, same transaction, only from 'open': the ADR
             # mapping is claim → open→in-progress (WF-1 §4.2 — an agent may
@@ -1171,7 +1364,13 @@ class Store:
                              note: str = "") -> dict[str, Any]:
         """Executor liveness tick (poller-driven, ~60 s). 409 unless running
         — a 409 on an expired assignment doubles as the kill signal to the
-        poller (ADR 0009 §10). No audit event: heartbeats are noise."""
+        poller (ADR 0009 §10). No audit event: heartbeats are noise.
+
+        ARCH-9 presence piggyback: when the assignment carries a
+        claimed_by_executor attribution, the same tick refreshes that
+        executor's last_seen (presence clock) in this transaction — the
+        poller's assignment heartbeat doubles as its presence heartbeat.
+        Revoked executors do not tick (touch_executor_last_seen gate)."""
         with self._lock, self._conn() as db:
             row = db.execute(
                 "SELECT * FROM task_assignments WHERE id=?", (assignment_id,)
@@ -1190,6 +1389,12 @@ class Store:
                 "note=COALESCE(NULLIF(?,''), note) WHERE id=?",
                 (_now(), note, assignment_id),
             )
+            if row["claimed_by_executor"]:
+                db.execute(
+                    "UPDATE executors SET last_seen=? "
+                    "WHERE id=? AND state<>'revoked'",
+                    (_now(), row["claimed_by_executor"]),
+                )
             return self._assignment(db, assignment_id)  # type: ignore[return-value]
 
     # Terminal outcome → assignment state (the audit/SSE kind mirrors it).
@@ -1219,14 +1424,26 @@ class Store:
     def finish_assignment(self, assignment_id: int, outcome: str,
                           note: str = "", *, token: str | None = None,
                           claimed_by: str | None = None,
+                          token_executor_id: str | None = None,
+                          allow_claimed_by_fallback: bool = False,
                           ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None, str | None]:
         """Terminal transition + task column mapping.
 
-        Token policy (correctness boundary, not security):
+        Token policy (correctness boundary + ARCH-9 identity gates):
         - complete: claim_token required, must match;
-        - fail: claim_token OR a claimed_by identity match (the poller's
-          recovery sweep fails its own claimed|running records after a
-          restart, when tokens are gone);
+        - fail (security review PR #18, F1): the claimed_by string is
+          SELF-ASSERTED and openly readable via GET /api/assignments —
+          an approved executor must not be able to fail a foreign
+          assignment by declaring the victim's name. Accepted:
+          (a) a matching claim_token; OR
+          (b) the token-BACKED executor identity equals the assignment's
+              claimed_by_executor (``token_executor_id`` from the route —
+              the mesh-leg recovery path: the executor lost its
+              claim_token but still holds its secret); OR
+          (c) a claimed_by string match — ONLY for the board-token class
+              (``allow_claimed_by_fallback``; the laptop poller's
+              recovery sweep authenticates with the board token, which
+              is board-class trust, and has no executor secret);
         - cancel: no claim token — the owner's UI token is the auth (route);
         - expired: in-process reaper (phase 3), no token by construction.
 
@@ -1250,10 +1467,14 @@ class Store:
                 raise AssignmentTokenError("claim_token mismatch")
             if outcome == "fail" and not (
                     self._claim_token_matches(row["claim_token"], token)
-                    or (claimed_by and row["claimed_by"] == claimed_by.strip())):
+                    or (token_executor_id
+                        and token_executor_id == row["claimed_by_executor"])
+                    or (allow_claimed_by_fallback and claimed_by
+                        and row["claimed_by"] == claimed_by.strip())):
                 raise AssignmentTokenError(
-                    "claim_token or claimed_by match required to fail "
-                    "an assignment")
+                    "claim_token, token-backed executor identity, or "
+                    "board-class claimed_by match required to fail an "
+                    "assignment")
             if row["state"] not in allowed_states:
                 raise AssignmentConflictError(
                     f"assignment {assignment_id} is {row['state']}; "
@@ -1271,6 +1492,10 @@ class Store:
             self._log(db, f"assignment.{target}", row["task_id"], {
                 "assignment_id": assignment_id, "outcome": outcome,
                 "by": (claimed_by or row["claimed_by"] or "")[:120],
+                "executor_id": row["claimed_by_executor"][:120],
+                # Amd 2 §7 (PR #18 F6b)
+                "transport": self._executor_transport(
+                    db, row["claimed_by_executor"]),
             })
             # Sibling guard: the column mapping belongs to the task's LAST
             # active assignment. The ≤1 create-side invariant keeps this a
@@ -1402,6 +1627,243 @@ class Store:
                 "WHERE task_id IS ? AND message=? LIMIT 1",
                 (task_id, message),
             ).fetchone() is not None
+    # ------------------------------------------------ executors (ARCH-9)
+    def _executor(self, db: sqlite3.Connection,
+                  executor_id: str) -> dict[str, Any] | None:
+        row = db.execute(
+            "SELECT * FROM executors WHERE id=?", (executor_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_executor(self, executor_id: str) -> dict[str, Any] | None:
+        """Raw registry row (includes secret_hash — caller-side concern;
+        the API layer NEVER serializes it)."""
+        with self._lock, self._conn() as db:
+            return self._executor(db, executor_id)
+
+    def list_executors(self) -> list[dict[str, Any]]:
+        with self._lock, self._conn() as db:
+            return [dict(r) for r in db.execute(
+                "SELECT * FROM executors ORDER BY name").fetchall()]
+
+    def pending_executors_by_host(self, host: str) -> int:
+        """Open pending registrations for one host (PR #18 F5): the owner
+        notification fires for the FIRST pending registration per host —
+        later ones from the same host are audit-only (spam guard). The
+        audit event (executor.registered) is always written."""
+        with self._lock, self._conn() as db:
+            return db.execute(
+                "SELECT COUNT(*) AS n FROM executors "
+                "WHERE state='pending' AND host=?",
+                (host,)).fetchone()["n"]
+
+    def register_executor(self, name: str, harness: str, host: str = "",
+                          transport: str = "local-poll",
+                          version: str = "") -> tuple[dict[str, Any], str]:
+        """Create a PENDING registry record and mint its secret (L0, Amd 2
+        §4). The board mints executor_secret (token_hex(24)); ONLY the
+        sha256 hash is stored — the plaintext exists exactly once, in the
+        register response (claim_token pattern, long-lived). Capabilities
+        are NOT accepted here: they are owner-declared via update_executor,
+        never executor-self-expanded.
+
+        Raises:
+            ValueError — empty name / unknown harness / unknown transport
+                         (HTTP 422 upstream);
+            ExecutorConflictError — name already registered (409);
+            ExecutorQuotaError — open-pending backlog at EXECUTOR_PENDING_CAP
+                         (429; PR #18 F5 — pace limits bound requests, not
+                         total volume; approve/revoke/delete frees quota).
+        """
+        name = name.strip()[:120]
+        if not name:
+            raise ValueError("executor name is empty")
+        if harness not in self.KNOWN_HARNESSES:
+            raise ValueError(
+                f"unknown harness: {harness}; known: {sorted(self.KNOWN_HARNESSES)}")
+        if transport not in EXECUTOR_TRANSPORTS:
+            raise ValueError(f"invalid transport: {transport}")
+        secret = secrets.token_hex(24)
+        secret_hash = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        now = _now()
+        with self._lock, self._conn() as db:
+            pending = db.execute(
+                "SELECT COUNT(*) AS n FROM executors WHERE state='pending'"
+            ).fetchone()["n"]
+            if pending >= EXECUTOR_PENDING_CAP:
+                raise ExecutorQuotaError(
+                    f"open pending executor registrations are capped at "
+                    f"{EXECUTOR_PENDING_CAP} — approve, revoke or delete "
+                    "existing ones before registering more")
+            if db.execute("SELECT 1 FROM executors WHERE name=?",
+                          (name,)).fetchone():
+                raise ExecutorConflictError(
+                    f"executor name '{name}' is already registered")
+            # id 'ex-' + 12 hex chars; PK collision retried (48 bits — the
+            # retry is paranoia, not expectation)
+            executor_id = "ex-" + secrets.token_hex(6)
+            while db.execute("SELECT 1 FROM executors WHERE id=?",
+                             (executor_id,)).fetchone():
+                executor_id = "ex-" + secrets.token_hex(6)
+            db.execute(
+                """INSERT INTO executors
+                       (id, name, harness, host, transport, capabilities,
+                        version, enabled, state, secret_hash, last_seen,
+                        registered_at, updated_at)
+                       VALUES (?,?,?,?,?,'[]',?,0,'pending',?,'',?,?)""",
+                (executor_id, name, harness, host.strip()[:200], transport,
+                 version.strip()[:60], secret_hash, now, now),
+            )
+            # token_id = tail of the stored hash: identifies the secret
+            # version in the audit trail without exposing any material
+            self._log(db, "executor.registered", None, {
+                "executor_id": executor_id, "name": name,
+                "harness": harness, "transport": transport,
+                "token_id": secret_hash[-8:],
+            })
+            row = self._executor(db, executor_id)
+        return row, secret  # type: ignore[return-value]
+
+    def authenticate_executor(self, token: str) -> dict[str, Any] | None:
+        """Executor-token check (L0): sha256 the presented secret and
+        constant-time compare the digest against every stored hash. Returns
+        the raw row or None; callers apply their own state gates (presence
+        ticks allow pending, the machine loop requires approved)."""
+        if not token:
+            return None
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM executors WHERE secret_hash<>''").fetchall()
+        for row in rows:
+            if hmac.compare_digest(row["secret_hash"], digest):
+                return dict(row)
+        return None
+
+    def touch_executor_last_seen(self, executor_id: str) -> bool:
+        """Presence tick: last_seen = now. Revoked executors never tick —
+        their presence must decay to offline (kill-switch, Amd 2 §5). The
+        background sweeper NEVER calls this (computed presence only)."""
+        with self._lock, self._conn() as db:
+            cur = db.execute(
+                "UPDATE executors SET last_seen=? "
+                "WHERE id=? AND state<>'revoked'",
+                (_now(), executor_id))
+            return cur.rowcount > 0
+
+    def update_executor(self, executor_id: str, patch: dict[str, Any],
+                        actor: str = "owner") -> tuple[dict[str, Any], dict[str, Any]]:
+        """Owner PATCH (ui-token class): name / state / capabilities /
+        enabled. Returns (row, changes) where ``changes`` maps field →
+        [old, new]; empty changes = idempotent no-op (no audit event).
+
+        State transitions: pending→approved (approve), pending/approved→
+        revoked (kill-switch). ``revoked`` is terminal — ExecutorStateError
+        on any attempt to leave it (re-register instead: a revoked secret
+        must stay dead). Audit kinds: executor.approved / executor.revoked
+        / executor.updated (approver + old→new carried in the payload).
+        """
+        changes: dict[str, list[Any]] = {}
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM executors WHERE id=?", (executor_id,)).fetchone()
+            if row is None:
+                raise ExecutorNotFoundError(f"executor {executor_id} not found")
+            updates: dict[str, Any] = {}
+            if patch.get("name") is not None:
+                name = str(patch["name"]).strip()[:120]
+                if not name:
+                    raise ValueError("executor name is empty")
+                if name != row["name"]:
+                    dup = db.execute(
+                        "SELECT 1 FROM executors WHERE name=? AND id<>?",
+                        (name, executor_id)).fetchone()
+                    if dup:
+                        raise ExecutorConflictError(
+                            f"executor name '{name}' is already registered")
+                    updates["name"] = name
+            if patch.get("state") is not None:
+                target = patch["state"]
+                if target not in EXECUTOR_STATES or target == "pending":
+                    raise ValueError(
+                        f"invalid executor state target: {target} "
+                        "(patchable targets: approved, revoked)")
+                if target != row["state"]:
+                    if row["state"] == "revoked":
+                        raise ExecutorStateError(
+                            "executor is revoked — terminal state; "
+                            "re-register a new executor instead")
+                    updates["state"] = target
+            if patch.get("capabilities") is not None:
+                raw = patch["capabilities"]
+                if (not isinstance(raw, list)
+                        or not all(isinstance(c, str) for c in raw)):
+                    raise ValueError("capabilities must be a list of strings")
+                caps: list[str] = []
+                for c in raw:
+                    c = c.strip()[:120]
+                    if c and c not in caps:
+                        caps.append(c)
+                if len(caps) > 64:
+                    raise ValueError("too many capabilities (max 64)")
+                packed = json.dumps(caps)
+                if packed != row["capabilities"]:
+                    updates["capabilities"] = packed
+            if patch.get("enabled") is not None:
+                flag = 1 if patch["enabled"] else 0
+                if flag != row["enabled"]:
+                    updates["enabled"] = flag
+            if not updates:
+                return dict(row), {}
+            old = dict(row)
+            updates["updated_at"] = _now()
+            sets = ", ".join(f"{k}=?" for k in updates)
+            db.execute(
+                f"UPDATE executors SET {sets} WHERE id=?",  # noqa: S608 — keys from a fixed allow-list
+                (*updates.values(), executor_id),
+            )
+            for k in ("name", "state", "capabilities", "enabled"):
+                if k in updates:
+                    old_v, new_v = old[k], updates[k]
+                    if k == "capabilities":
+                        old_v, new_v = _loads(old_v), _loads(new_v)
+                    elif k == "enabled":
+                        old_v, new_v = bool(old_v), bool(new_v)
+                    changes[k] = [old_v, new_v]
+            if updates.get("state") == "approved":
+                self._log(db, "executor.approved", None, {
+                    "executor_id": executor_id, "approver": actor[:120],
+                    "changes": changes})
+            elif updates.get("state") == "revoked":
+                self._log(db, "executor.revoked", None, {
+                    "executor_id": executor_id, "approver": actor[:120],
+                    "token_id": old["secret_hash"][-8:], "changes": changes})
+            else:
+                self._log(db, "executor.updated", None, {
+                    "executor_id": executor_id, "actor": actor[:120],
+                    "changes": changes})
+            out = self._executor(db, executor_id)
+        return out, changes  # type: ignore[return-value]
+
+    def delete_executor(self, executor_id: str) -> dict[str, Any] | None:
+        """Remove a registry record (ui-token route). Active assignments
+        are deliberately NOT touched: executor pins and claimed_by_executor
+        attribution strings stay verbatim — the assignment lifecycle is
+        independent of the registry (two-clock discipline, Amd 2 §3)."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM executors WHERE id=?", (executor_id,)).fetchone()
+            if row is None:
+                return None
+            db.execute("DELETE FROM executors WHERE id=?", (executor_id,))
+            self._log(db, "executor.deleted", None, {
+                "executor_id": executor_id, "name": row["name"]})
+        return dict(row)
+
+    def log_board_event(self, kind: str, payload: dict[str, Any]) -> None:
+        """Board-level audit event with no task attached (registry and
+        settings lifecycle — executor.*, default.changed)."""
+        with self._lock, self._conn() as db:
+            self._log(db, kind, None, payload)
 
     # ------------------------------------------------- reports backfill
     BACKFILL_META_KEY = "reports_backfill"
