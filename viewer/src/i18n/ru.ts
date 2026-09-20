@@ -29,6 +29,7 @@ export const ru = {
   // Task-domain sections (Ф2).
   "nav.task": "Задача",
   "nav.taskList": "Список",
+  "nav.taskBoard": "Канбан",
   "nav.taskInbox": "Входящие",
   "nav.taskArchive": "Архив",
   "nav.status": "Статус",
@@ -291,7 +292,8 @@ export const ru = {
   "login.title": "Вход",
   "login.description":
     "Войдите с ui-токеном, чтобы изменять задачи. Значение останется только в этой вкладке (sessionStorage) и уйдёт только на ваш board-сервер.",
-  "login.continueQueued": "Войдите, чтобы продолжить — действие выполнится автоматически",
+  "login.continueQueued":
+    "Войдите, чтобы продолжить — действие выполнится автоматически",
   "login.rejected": "Сервер отклонил токен (401) — вставьте актуальное значение.",
   "login.fieldLabel": "Токен",
   "login.showValue": "Показать значение токена",
@@ -333,9 +335,11 @@ export const ru = {
   "tasks.allColumns": "Все колонки",
   "tasks.limitLabel": "На странице",
   "tasks.noMatch": "Под эти фильтры ничего не подходит",
-  "tasks.noMatchHint": "Ослабьте фильтры или очистите поиск, чтобы поднять больше задач.",
+  "tasks.noMatchHint":
+    "Ослабьте фильтры или очистите поиск, чтобы поднять больше задач.",
   "tasks.boardEmpty": "Доска пуста",
-  "tasks.boardEmptyHint": "На борде пока нет задач — создайте первую или загляните во входящие.",
+  "tasks.boardEmptyHint":
+    "На борде пока нет задач — создайте первую или загляните во входящие.",
   "tasks.clearFilters": "Сбросить фильтры",
   "tasks.tableCaption": "Список задач, сгруппированный по проектам",
   "tasks.colPriority": "Приоритет",
@@ -444,6 +448,30 @@ export const ru = {
   "tasks.status.done": "завершена",
   "tasks.status.withdrawn": "отозвана",
   "tasks.status.unknown": "неизвестно",
+
+  // --- tasks: WF-1 kanban column titles (7 lanes; mirror server COLUMN_RU) ---------
+  "tasks.column.backlog": "бэклог",
+  "tasks.column.validating": "на валидации",
+  "tasks.column.open": "открыто",
+  "tasks.column.in-progress": "в работе",
+  "tasks.column.blocked": "блокировано",
+  "tasks.column.resolved": "решено",
+  "tasks.column.done": "готово",
+
+  // --- tasks: kanban board (Ф3, CV-4 — ARCHCOM-3 verdict §3) ------------------------
+  "tasks.view.toggleLabel": "Вид задач",
+  "tasks.view.kanban": "Канбан",
+  "tasks.view.list": "Список",
+  "tasks.board.label": "Канбан-доска задач",
+  "tasks.board.columnLabel": "Колонка «{{col}}»",
+  "tasks.board.emptyColumn": "Пусто",
+  "tasks.board.noMatchColumn": "Ничего не подходит под фильтры",
+  "tasks.board.archcomBadge": "archcom",
+  "tasks.board.archcomTitle": "требуется решение владельца",
+  "tasks.board.validatingFor": "в валидации {{hours}}ч {{minutes}}м",
+  "tasks.board.validatingOverdueTitle":
+    "в валидации дольше 24 часов — требуется решение владельца",
+  "tasks.board.dragDisabled": "войдите для управления",
   "tasks.priority.critical": "критический",
   "tasks.priority.high": "высокий",
   "tasks.priority.normal": "обычный",
@@ -454,7 +482,8 @@ export const ru = {
   "tasks.edit.description":
     "Контентные поля задачи {{id}}. Рабочие статусы меняются отдельно (перемещение, UI-8).",
   "tasks.edit.titleLabel": "Название",
-  "tasks.edit.titleError": "Название обязательно (1–200 символов) — пустую задачу сохранить нельзя.",
+  "tasks.edit.titleError":
+    "Название обязательно (1–200 символов) — пустую задачу сохранить нельзя.",
   "tasks.edit.summaryLabel": "Сводка",
   "tasks.edit.specLabel": "Спецификация",
   "tasks.edit.projectLabel": "Проект",
@@ -478,7 +507,8 @@ export const ru = {
   "tasks.create.description":
     "Первая строка — название, остальное — сводка. Задача создаётся сразу на борде в колонке «открыта».",
   "tasks.create.textLabel": "Сырой текст",
-  "tasks.create.textPlaceholder": "Название задачи с первой строки…\nДальше — сводка и контекст.",
+  "tasks.create.textPlaceholder":
+    "Название задачи с первой строки…\nДальше — сводка и контекст.",
   "tasks.create.textHint": "первая строка → название (1–200), остальное → сводка",
   "tasks.create.textError":
     "Первая строка обязательна и должна быть короче 200 символов — из неё получается название.",
@@ -492,7 +522,8 @@ export const ru = {
   "tasks.menu.edit": "Изменить",
   "tasks.menu.move": "Переместить…",
   "tasks.menu.archive": "Архивировать",
-  "tasks.menu.archiveConfirm": "Архивировать {{id}}? Задачу можно будет вернуть из архива.",
+  "tasks.menu.archiveConfirm":
+    "Архивировать {{id}}? Задачу можно будет вернуть из архива.",
   "tasks.menu.back": "Назад",
 
   // --- tasks: mutation toasts (Ф3) ---------------------------------------------------
@@ -504,6 +535,8 @@ export const ru = {
   "tasks.mutation.resumed": "{{id}}: возвращена в работу",
   "tasks.mutation.resumedDetail": "статус in-progress · колонка не менялась",
   "tasks.mutation.moveFailed": "Не удалось переместить задачу",
+  "tasks.mutation.moveInvalidTitle": "недопустимый переход: сначала в работу",
+  "tasks.mutation.moveRevertedDetail": "карточка возвращена на прежнее место",
   "tasks.mutation.moved": "{{id}}: перемещена",
   "tasks.mutation.movedDetail": "колонка: {{col}}",
   "tasks.mutation.archiveFailed": "Не удалось архивировать задачу",

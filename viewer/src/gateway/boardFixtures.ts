@@ -18,12 +18,22 @@ import type { BoardTask } from "./boardTypes";
  * renders. Like fixtures.ts: no `Date.now()`, no `Math.random()` — two
  * MockAdapter instances answer byte-identically.
  *
- * Coverage matrix (12 tasks): all five columns × all four priorities × three
- * projects × four envs; one task with 3 reports (superseded final), one with
+ * Coverage matrix (15 tasks, WF-1 7-lane board): all seven columns × all
+ * four priorities × three projects × four envs; three WF-1 lane rows (one
+ * backlog, two validating — one past the 24h window and archcom-flagged,
+ * the sweep's output), one task with 3 reports (superseded final), one with
  * memory links, plus one archived row for the archive page.
  */
 
-const TASK_COLUMNS = ["open", "in-progress", "blocked", "resolved", "done"] as const;
+const TASK_COLUMNS = [
+  "backlog",
+  "validating",
+  "open",
+  "in-progress",
+  "blocked",
+  "resolved",
+  "done",
+] as const;
 
 export const MOCK_TASKS: BoardTask[] = [
   {
@@ -50,6 +60,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "in-progress",
     priority: "critical",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "T6",
@@ -74,6 +85,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "in-progress",
     priority: "high",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-3",
@@ -94,6 +106,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "open",
     priority: "normal",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-4",
@@ -114,13 +127,15 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "open",
     priority: "low",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "RB-2",
     col: "blocked",
     position: 0,
     title: "Защитить publish-токены: fine-grained + атмосферу секретов",
-    summary: "Push-токен Korrnals не имеет org в Repository access (403) — ждать владельца.",
+    summary:
+      "Push-токен Korrnals не имеет org в Repository access (403) — ждать владельца.",
     spec: "Acceptance criteria:\n— [ ] плейсхолдеры выданы\n— [ ] 403 снят",
     agents: ["zcode"],
     specialists: ["@GCW: Tech Lead", "@GCW: Senior Security Engineer"],
@@ -134,6 +149,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "blocked",
     priority: "high",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-5",
@@ -154,13 +170,15 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "blocked",
     priority: "critical",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-6",
     col: "resolved",
     position: 0,
     title: "Снять recorded-corpus с merge-API для BoardAdapter-контрактов",
-    summary: "Корпус снят с живого сервера: board/reports/history/memories/inbox/archive.",
+    summary:
+      "Корпус снят с живого сервера: board/reports/history/memories/inbox/archive.",
     spec: "Acceptance criteria:\n— [x] корпус зашит в тесты",
     agents: ["zcode"],
     specialists: ["@GCW: Senior QA Engineer"],
@@ -174,13 +192,15 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "resolved",
     priority: "normal",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-7",
     col: "resolved",
     position: 1,
     title: "Согласовать IA домена «Задачи» с архкомом",
-    summary: "Список-вид против канбана: вердикт §3 — таблица на dense-токенах, канбан Ф3.",
+    summary:
+      "Список-вид против канбана: вердикт §3 — таблица на dense-токенах, канбан Ф3.",
     spec: "Acceptance criteria:\n— [x] вердикт ратифицирован",
     agents: [],
     specialists: ["@GCW: Architectural Committee"],
@@ -194,6 +214,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "resolved",
     priority: "low",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-8",
@@ -214,6 +235,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "done",
     priority: "high",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-9",
@@ -234,6 +256,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "done",
     priority: "normal",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-10",
@@ -254,6 +277,7 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "open",
     priority: "normal",
     archived_from: "",
+    validating_since: "",
   },
   {
     id: "TB-11",
@@ -274,6 +298,72 @@ export const MOCK_TASKS: BoardTask[] = [
     status: "in-progress",
     priority: "low",
     archived_from: "",
+    validating_since: "",
+  },
+  {
+    id: "TB-12",
+    col: "backlog",
+    position: 0,
+    title: "WF-1: разобрать бэклог валидации — очередь на проверку владельцем",
+    summary: "Пред-валидационная полоса: задачи ждут первого прохода до `open`.",
+    spec: "Acceptance criteria:\n— [ ] очередь разобрана",
+    agents: [],
+    specialists: ["owner"],
+    env: "cloud",
+    project: "vesmaro",
+    memory_ids: [],
+    mnemos_tags: ["project:vesmaro", "topic:workflow"],
+    created_at: "2026-09-19T07:15:00+00:00",
+    updated_at: "2026-09-19T07:15:00+00:00",
+    archived: 0,
+    status: "open",
+    priority: "normal",
+    archived_from: "",
+    validating_since: "",
+  },
+  {
+    id: "TB-13",
+    col: "validating",
+    position: 0,
+    title: "Валидация фазы Ф2: чтение домена «Задачи» без рефетчей",
+    summary: "Задача в полосе валидации; часы тикают с validating_since.",
+    spec: "Acceptance criteria:\n— [ ] владелец подтвердил приёмку",
+    agents: ["zcode"],
+    specialists: ["@GCW: Senior QA Engineer"],
+    env: "cluster",
+    project: "mnemos-eyes",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos-eyes"],
+    created_at: "2026-09-19T05:40:00+00:00",
+    updated_at: "2026-09-19T05:40:00+00:00",
+    archived: 0,
+    status: "open",
+    priority: "high",
+    archived_from: "",
+    // Fresh clock: ~6h before the 2026-09-19 corpus reference point.
+    validating_since: "2026-09-19T04:00:00+00:00",
+  },
+  {
+    id: "TB-14",
+    col: "validating",
+    position: 1,
+    title: "Валидация ADR 0013: контракты автоматизации против archcom-ревью",
+    summary: "Сидит в валидации дольше 24 часов — свип пометил archcom-review.",
+    spec: "Acceptance criteria:\n— [ ] решение владельца зафиксировано",
+    agents: ["zcode"],
+    specialists: ["@GCW: Architectural Committee"],
+    env: "cloud",
+    project: "mnemos",
+    memory_ids: [],
+    mnemos_tags: ["project:mnemos", "task:stage:archcom-review"],
+    created_at: "2026-09-17T09:00:00+00:00",
+    updated_at: "2026-09-18T09:00:00+00:00",
+    archived: 0,
+    status: "open",
+    priority: "critical",
+    archived_from: "",
+    // Overdue clock: >24h before the corpus reference point (sweep output).
+    validating_since: "2026-09-17T09:30:00+00:00",
   },
 ];
 
@@ -297,6 +387,7 @@ export const MOCK_ARCHIVED_TASK: BoardTask = {
   status: "blocked",
   priority: "normal",
   archived_from: "blocked",
+  validating_since: "",
 };
 
 function countByColumn(tasks: readonly BoardTask[]): Record<string, number> {
@@ -353,10 +444,26 @@ export const MOCK_REPORTS: TaskReports = {
 /** History for TB-1 — corpus shape: events desc, memory checkpoints desc. */
 export const MOCK_HISTORY: TaskHistory = {
   events: [
-    { ts: "2026-09-18T14:30:00+00:00", title: "task.report", detail: "final, агент: zcode" },
-    { ts: "2026-09-18T14:25:00+00:00", title: "task.report", detail: "final, агент: zcode" },
-    { ts: "2026-09-18T14:20:00+00:00", title: "task.report", detail: "intermediate, агент: zcode" },
-    { ts: "2026-09-18T14:10:00+00:00", title: "task.moved", detail: "open → in-progress" },
+    {
+      ts: "2026-09-18T14:30:00+00:00",
+      title: "task.report",
+      detail: "final, агент: zcode",
+    },
+    {
+      ts: "2026-09-18T14:25:00+00:00",
+      title: "task.report",
+      detail: "final, агент: zcode",
+    },
+    {
+      ts: "2026-09-18T14:20:00+00:00",
+      title: "task.report",
+      detail: "intermediate, агент: zcode",
+    },
+    {
+      ts: "2026-09-18T14:10:00+00:00",
+      title: "task.moved",
+      detail: "open → in-progress",
+    },
     { ts: "2026-09-18T14:00:00+00:00", title: "task.updated", detail: "поля: summary" },
     { ts: "2026-09-12T09:00:00+00:00", title: "task.created", detail: "колонка open" },
   ],
@@ -365,7 +472,8 @@ export const MOCK_HISTORY: TaskHistory = {
       ts: "2026-07-27T09:26:20.643428Z",
       title: "Session checkpoint — 2026-07-27",
       source: "laptop",
-      detail: "# Session checkpoint\n\n## Goals\nUpdate mnemos to latest version, run full code+QA review…",
+      detail:
+        "# Session checkpoint\n\n## Goals\nUpdate mnemos to latest version, run full code+QA review…",
     },
   ],
 };
@@ -382,7 +490,11 @@ export const MOCK_TASK_MEMORIES: TaskMemories = {
     },
   },
   unresolved: [
-    { id: "86ce17e7-1099-4e94-aa1b-eba431522560", status: "not_found", server: "laptop" },
+    {
+      id: "86ce17e7-1099-4e94-aa1b-eba431522560",
+      status: "not_found",
+      server: "laptop",
+    },
   ],
   sources: { "25cdc0e9-1912-4217-aaf0-0e7c48912df1": "laptop" },
 };

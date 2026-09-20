@@ -10,8 +10,8 @@ import { useGateway } from "@/gateway/GatewayContext";
 import type { BoardTask } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
 import {
-  TASK_COLUMNS,
   TASK_PRIORITIES,
+  WORKFLOW_COLUMNS,
   formatTaskDate,
   priorityBadgeVariant,
   priorityLabelKey,
@@ -34,35 +34,23 @@ import {
   sortGroupTasks,
 } from "./taskGrouping";
 import { CreateTaskDialog } from "./CreateTaskDialog";
+import { TaskFilterSelect } from "./TaskFilterSelect";
 import { TaskRowMenu } from "./TaskRowMenu";
+import { TasksUnsupported } from "./TasksUnsupported";
+import { TasksViewToggle } from "./TasksViewToggle";
 import { useBoardTasks, useReportCounts } from "./useTasks";
 
-/** Honest mnemos-mode state: the task domain is a board-native view (Ф2). */
-function TasksUnsupported() {
-  const t = useT();
-  return (
-    <section aria-labelledby="tasks-title" className="mx-auto max-w-5xl space-y-4">
-      <h1 id="tasks-title" className="text-xl font-semibold">
-        {t("tasks.title")}
-      </h1>
-      <EmptyState
-        variant="empty"
-        title={t("tasks.unavailableTitle")}
-        message={t("tasks.unavailableMessage")}
-      />
-    </section>
-  );
-}
-
 /**
- * `/tasks` — the task LIST view of the domain (ARCHCOM-3 verdict §3: dense
- * table on `--row-h` tokens; the kanban view needs WF-1 and is NOT in this
- * wave — moving is the row ⋯ action). Filters live in the URL
+ * `/tasks/list` — the task LIST view of the domain (ARCHCOM-3 verdict §3:
+ * dense table on `--row-h` tokens; the kanban at `/tasks` is the Ф3 view №1,
+ * this one stays for mass management). Filters live in the URL
  * (`?status=&priority=&project=&agent=&q=` — QA verdict §3), rows group by
  * project (collapsible, persisted under "vesmaro.taskGroups") and sort
  * priority → position inside a group. Desktop renders a semantic table;
- * under md the same rows render as card-rows (no second data path). Ф3
- * adds the row action menu (edit/move/archive) and «+ Задача».
+ * under md the same rows render as card-rows (no second data path). The
+ * mini-stats count WORKFLOW statuses (WF-1: the pre-validation lanes read
+ * as `open` here — the 7-way column split lives on the kanban, where the
+ * wire `counts` are column-keyed).
  */
 export function TaskListPage() {
   const t = useT();
@@ -76,16 +64,26 @@ export function TaskListPage() {
   const [collapsed, setCollapsed] = useState(() => loadCollapsedGroups());
   const [createOpen, setCreateOpen] = useState(false);
 
-  const tasks = board.data?.tasks ?? [];
+  const tasks = useMemo(() => board.data?.tasks ?? [], [board.data]);
   // Stable id list so the report-count memo does not re-derive per render.
   const taskIds = useMemo(() => tasks.map((task) => task.id), [tasks]);
   const reportCounts = useReportCounts(taskIds);
+  // WF-1: the wire `counts` are COLUMN-keyed (7 lanes); the list filters and
+  // badges speak WORKFLOW statuses, so the mini-stats derive their totals
+  // from the whole task set by status (backlog/validating read as `open` —
+  // store.COLUMN_STATUS_MAP). Counts still describe the WHOLE board, never
+  // the filtered view (ui-contract /api/board). Runs before the fetch-state
+  // early returns (hook-order discipline).
+  const statusCounts = useMemo(() => {
+    const byStatus: Record<string, number> = {};
+    for (const task of tasks) byStatus[task.status] = (byStatus[task.status] ?? 0) + 1;
+    return byStatus;
+  }, [tasks]);
 
   const patch = (changes: Partial<TaskListUrlState>) => {
-    setSearchParams(
-      serializeTaskListParams({ ...state, ...changes }),
-      { replace: false },
-    );
+    setSearchParams(serializeTaskListParams({ ...state, ...changes }), {
+      replace: false,
+    });
   };
 
   const toggleGroup = (project: string) => {
@@ -109,9 +107,12 @@ export function TaskListPage() {
   const header = (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 id="tasks-title" className="text-xl font-semibold">
-          {t("tasks.title")}
-        </h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 id="tasks-title" className="text-xl font-semibold">
+            {t("tasks.title")}
+          </h1>
+          <TasksViewToggle />
+        </div>
         {canMutate ? (
           <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="size-4" aria-hidden="true" />
@@ -160,7 +161,6 @@ export function TaskListPage() {
     tasks: sortGroupTasks(group.tasks),
   }));
   const filtered = hasActiveTaskFilters(state);
-  const counts = board.data?.counts ?? {};
   const projectChoices = projectOptions(tasks);
   const agentChoices = agentOptions(tasks);
 
@@ -168,27 +168,25 @@ export function TaskListPage() {
     <section aria-labelledby="tasks-title" className="mx-auto max-w-5xl space-y-4">
       {header}
 
-      {/* Mini-stats: per-column counts of the WHOLE board (wire semantics:
-       * counts never describe the filtered view — ui-contract /api/board). */}
-      <ul
-        aria-label={t("tasks.statsLabel")}
-        className="flex flex-wrap gap-2"
-      >
-        {TASK_COLUMNS.map((column) => (
-          <li key={column}>
+      {/* Mini-stats: per-status counts of the WHOLE board (see the memo above). */}
+      <ul aria-label={t("tasks.statsLabel")} className="flex flex-wrap gap-2">
+        {WORKFLOW_COLUMNS.map((status) => (
+          <li key={status}>
             <button
               type="button"
-              onClick={() => patch({ status: state.status === column ? undefined : column })}
-              aria-pressed={state.status === column}
+              onClick={() =>
+                patch({ status: state.status === status ? undefined : status })
+              }
+              aria-pressed={state.status === status}
               className="rounded-sm transition-colors duration-instant focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
             >
               <Badge
-                variant={state.status === column ? "iris" : "outline"}
+                variant={state.status === status ? "iris" : "outline"}
                 className="cursor-pointer gap-1 px-2 py-1"
               >
-                {t(statusLabelKey(column))}
+                {t(statusLabelKey(status))}
                 <span className="font-mono text-foreground-muted">
-                  {counts[column] ?? 0}
+                  {statusCounts[status] ?? 0}
                 </span>
               </Badge>
             </button>
@@ -215,18 +213,18 @@ export function TaskListPage() {
             className="h-9 w-48 rounded-md border border-border bg-well px-2 text-sm text-foreground placeholder:text-foreground-muted focus-visible:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
           />
         </div>
-        <FilterSelect
+        <TaskFilterSelect
           id="tasks-status"
           label={t("tasks.statusLabel")}
           value={state.status ?? ""}
           onChange={(value) => patch({ status: value || undefined })}
           allLabel={t("tasks.allStatuses")}
-          options={TASK_COLUMNS.map((status) => ({
+          options={WORKFLOW_COLUMNS.map((status) => ({
             value: status,
             label: t(statusLabelKey(status)),
           }))}
         />
-        <FilterSelect
+        <TaskFilterSelect
           id="tasks-priority"
           label={t("tasks.priorityLabel")}
           value={state.priority ?? ""}
@@ -237,15 +235,18 @@ export function TaskListPage() {
             label: t(priorityLabelKey(priority)),
           }))}
         />
-        <FilterSelect
+        <TaskFilterSelect
           id="tasks-project"
           label={t("tasks.projectLabel")}
           value={state.project ?? ""}
           onChange={(value) => patch({ project: value || undefined })}
           allLabel={t("tasks.allProjects")}
-          options={projectChoices.map((project) => ({ value: project, label: project }))}
+          options={projectChoices.map((project) => ({
+            value: project,
+            label: project,
+          }))}
         />
-        <FilterSelect
+        <TaskFilterSelect
           id="tasks-agent"
           label={t("tasks.agentLabel")}
           value={state.agent ?? ""}
@@ -305,7 +306,9 @@ export function TaskListPage() {
                   {t("tasks.colDate")}
                 </th>
                 <th scope="col" className="px-2 py-1 font-medium">
-                  {canMutate ? <span className="sr-only">{t("tasks.colActions")}</span> : null}
+                  {canMutate ? (
+                    <span className="sr-only">{t("tasks.colActions")}</span>
+                  ) : null}
                 </th>
               </tr>
             </thead>
@@ -365,44 +368,6 @@ export function TaskListPage() {
         </>
       )}
     </section>
-  );
-}
-
-/** Labeled native select (keyboard + SR paths for free). */
-function FilterSelect({
-  id,
-  label,
-  value,
-  onChange,
-  allLabel,
-  options,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  allLabel: string;
-  options: readonly { value: string; label: string }[];
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-xs text-foreground-secondary">
-        {label}
-      </label>
-      <select
-        id={id}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-9 rounded-md border border-border bg-well px-2 text-sm text-foreground focus-visible:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
-      >
-        <option value="">{allLabel}</option>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </div>
   );
 }
 

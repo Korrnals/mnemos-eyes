@@ -636,8 +636,591 @@ export interface paths {
          *     unknown kind or an empty body; 429 when the per-client rate limit is
          *     exhausted. A second kind="final" supersedes previous live finals
          *     (history kept, flagged).
+         *
+         *     Auth composition (ADR 0009 A1 + Amd 2 §2): the owner UI writes with
+         *     the ui-class token; the machine loop writes with the board (machine)
+         *     token OR an approved executor token (the mesh leg reports with its
+         *     own credential). When the report is executor-token-backed, a declared
+         *     ``agent`` string that references neither the executor's registered
+         *     name nor its harness lands in the audit trail flagged
+         *     ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
+         *     refusal: the report is still accepted).
          */
         readonly post: operations["create_task_report_api_tasks__task_id__reports_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/assignments": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * List Assignments
+         * @description Assignment queue projection (ADR 0009). OPEN read (no bearer), same
+         *     boundary as GET /api/board: the cluster ingress is the auth boundary.
+         *     ``state`` must be a dictionary value (422); ``task_id`` is an exact
+         *     filter. Items never carry claim_token or spec_snapshot — the SSE
+         *     dictionary §11 keeps them out for the same reason.
+         *
+         *     ARCH-9 additions:
+         *     - ``?executor_id=`` presence piggyback: a poller announcing itself
+         *       ticks that executor's last_seen — but only when authenticated as
+         *       that executor (its token) or with the machine token.
+         *     - every item carries ``routing`` {resolved, reason} — the resolution
+         *       chain (Amd 2 §5) computed per GET, stored nowhere: explicit pin →
+         *       assignment specialist → task specialists → project default →
+         *       global default → auto best-match (online + local-poll) →
+         *       unmatched (visible to all). Only the explicit pin is enforced at
+         *       claim; the annotation is a visibility hint, CAS stays the arbiter.
+         *     - ``topics``: denormalized project/domain tags (metadata tier).
+         */
+        readonly get: operations["list_assignments_api_assignments_get"];
+        readonly put?: never;
+        /**
+         * Create Assignment
+         * @description Queue an execution attempt on a task (ADR 0009 §3). UI-token class
+         *     (A1) — the owner nominates, the poller decides (A3). 404 unknown task;
+         *     422 archived/terminal task; 409 while another active assignment holds
+         *     the task (≤1 invariant).
+         */
+        readonly post: operations["create_assignment_api_assignments_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/assignments/{assignment_id}/claim": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Claim Assignment
+         * @description Atomic claim (A4): machine-token class — the board token OR an
+         *     approved executor token (ARCH-9: on the mesh leg the executor token
+         *     is the credential; a mesh node must not hold board-class secrets).
+         *     CAS on state='queued'; the task column moves open → in-progress in
+         *     the same transaction. The response carries the claim_token
+         *     (correctness boundary: a stale poller cannot finish a re-claimed
+         *     assignment) and the spec_snapshot (A2: the poller executes the
+         *     snapshot, never the live spec). 409 when another poller got there
+         *     first.
+         *
+         *     ARCH-9 explicit-pin enforcement (Amd 2 §5, in the store transaction):
+         *     an assignment pinned via executor_id claims ONLY with the pinned
+         *     executor's token — a plain machine claim is 409, another executor's
+         *     token is 403 (spoofing gate, CWE-290). A claim with an executor token
+         *     records claimed_by_executor from the token identity (authoritative).
+         */
+        readonly post: operations["claim_assignment_api_assignments__assignment_id__claim_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/assignments/{assignment_id}/start": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Start Assignment
+         * @description claimed → running (machine class + claim_token).
+         */
+        readonly post: operations["start_assignment_api_assignments__assignment_id__start_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/assignments/{assignment_id}/heartbeat": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Heartbeat Assignment
+         * @description Executor liveness tick (machine class + claim_token). 409 unless
+         *     running — on an expired assignment that 409 doubles as the kill signal
+         *     to the poller (ADR 0009 §10). Deliberately NO SSE: heartbeats are
+         *     noise. PR #13 review P3b: own rate budget (60/60 s) — heartbeat
+         *     traffic never touches the shared machine 30/60 s budget. ARCH-9: the
+         *     tick also refreshes the claiming executor's presence clock
+         *     (claimed_by_executor piggyback, store-side).
+         */
+        readonly post: operations["heartbeat_assignment_api_assignments__assignment_id__heartbeat_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/assignments/{assignment_id}/complete": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Complete Assignment
+         * @description running → done (machine class + claim_token). The final report rides
+         *     inline: it is written through the existing reports store (kind='final',
+         *     agent = the declared claim identity) right after the terminal
+         *     transition — a 409/403 leaves no half-written report behind. Task maps
+         *     in-progress → resolved (acceptance resolved → done stays with the
+         *     owner). ARCH-9: machine class = board token OR an approved executor
+         *     token (claim_token stays the correctness boundary; the executor loop
+         *     keeps one credential end-to-end, Amd 2 §2). PR #18 F3: the final
+         *     report's declared agent string (the claim identity) runs through the
+         *     same identity_mismatch check as intermediate reports — from the
+         *     token-BACKED executor identity, not the self-assertion.
+         */
+        readonly post: operations["complete_assignment_api_assignments__assignment_id__complete_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/assignments/{assignment_id}/fail": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Fail Assignment
+         * @description Fail an execution attempt (machine class). Auth (PR #18 F1 — the
+         *     claimed_by string is self-asserted and openly readable, so it is no
+         *     longer a standalone credential for executor tokens): a matching
+         *     claim_token; OR the token-BACKED executor identity equal to the
+         *     assignment's claimed_by_executor (mesh-leg recovery: the secret
+         *     outlives the claim_token); OR a claimed_by string match — board-token
+         *     class only (the laptop poller's recovery sweep, board-class trust).
+         *     Task maps in-progress → blocked.
+         */
+        readonly post: operations["fail_assignment_api_assignments__assignment_id__fail_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/assignments/{assignment_id}/cancel": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Cancel Assignment
+         * @description Cancel an assignment (UI-token class — an owner action). Legal from
+         *     queued/claimed/running; the task returns to open when it had moved to
+         *     in-progress. No claim token: the UI token is the auth.
+         */
+        readonly post: operations["cancel_assignment_api_assignments__assignment_id__cancel_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/executors": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * List Executors
+         * @description Executor registry projection — OPEN read (same boundary as
+         *     GET /api/board; the cluster ingress is the auth boundary).
+         *
+         *     ``presence`` is COMPUTED from last_seen per the two-clock discipline:
+         *     online = last tick ≤ 120 s ago, stale = ≤ 600 s, offline = beyond
+         *     (never-heartbeated included). These are server-owned constants and
+         *     travel in ``meta`` — clients must read them, never hardcode. The
+         *     sweeper interval is exposed the same way. secret_hash never leaves
+         *     the store.
+         */
+        readonly get: operations["list_executors_api_executors_get"];
+        readonly put?: never;
+        /**
+         * Register Executor
+         * @description Register an executor (ARCH-9, ladder L0 — Amd 2 §4).
+         *
+         *     MACHINE-token bootstrap: registration via the board token creates a
+         *     PENDING record; the owner approves via ui-token PATCH. The board mints
+         *     ``executor_secret`` (token_hex(24)) and stores ONLY its sha256 hash —
+         *     the plaintext appears exactly once, in this response (claim_token
+         *     pattern, long-lived). Capabilities are owner-declared via PATCH, never
+         *     accepted at registration. 422 unknown harness/transport; 409 duplicate
+         *     name; 429 rate 10/60 s per client AND a total cap on OPEN pending
+         *     registrations (PR #18 F5: pace limits bound requests, not volume —
+         *     approving/revoking/deleting frees quota). The owner NOTIFICATION fires
+         *     for the first open pending registration per host; later ones from the
+         *     same host are audit + SSE only (spam guard — the audit event is
+         *     always written).
+         */
+        readonly post: operations["register_executor_api_executors_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/executors/{executor_id}/heartbeat": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Executor Heartbeat
+         * @description Executor presence tick (idle poller liveness; assignment heartbeats
+         *     piggyback separately in the assignment routes). EXECUTOR-token class:
+         *     the URL id must equal the token-backed executor — a mismatch is 403
+         *     (identity error), which also means an unknown id never 404s here.
+         *     Pending executors MAY tick (the owner sees liveness before approving);
+         *     revoked may not (kill-switch — presence must decay to offline). Own
+         *     rate budget 60/60 s. NO SSE: per-heartbeat events are forbidden (§11)
+         *     — clients render age from GET + a local 1 Hz ticker.
+         */
+        readonly post: operations["executor_heartbeat_api_executors__executor_id__heartbeat_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/executors/{executor_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Delete Executor
+         * @description Remove a registry record (ui-token). Active assignments are NOT
+         *     touched: executor pins and claimed_by_executor attribution strings
+         *     stay verbatim — the assignment lifecycle is independent of the
+         *     registry (two-clock discipline, Amd 2 §3).
+         */
+        readonly delete: operations["delete_executor_api_executors__executor_id__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        /**
+         * Patch Executor
+         * @description Owner PATCH (ui-token): approve (state=approved), revoke
+         *     (state=revoked — terminal kill-switch; re-register to revive), rename,
+         *     owner-declared capabilities, enabled (routing kill-switch). Audit
+         *     old→new lands in the board events (executor.approved / revoked /
+         *     updated); SSE carries executor.updated with the registry
+         *     prev_state→state. Idempotent: a no-op PATCH emits nothing.
+         */
+        readonly patch: operations["patch_executor_api_executors__executor_id__patch"];
+        readonly trace?: never;
+    };
+    readonly "/api/settings/execution": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Get Execution Settings
+         * @description Read the default-executor resolution settings (OPEN read — ids
+         *     only, no secrets; the chain itself is computed per GET on
+         *     /api/assignments).
+         */
+        readonly get: operations["get_execution_settings_api_settings_execution_get"];
+        /**
+         * Put Execution Settings
+         * @description Set the default / fallback executor (UI-token only — Amd 2 §5
+         *     gates, see _validate_default_executor). Empty string clears a slot.
+         *     Audit: default.changed old→new per field (actor = the ui-token class).
+         *     ``scope`` reserves project defaults (board_meta
+         *     ``default_executor:project:<slug>``); the fallback is global-scope
+         *     only. The fallback does NOT join the GET routing chain — it is the
+         *     UI's no-silent-substitution preview value; dispatch stays explicit.
+         */
+        readonly put: operations["put_execution_settings_api_settings_execution_put"];
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/automation/schedules": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Automation Schedules
+         * @description List schedule rules (OPEN read — same boundary as GET /api/board;
+         *     the cluster ingress is the auth boundary). Soft-deleted rules stay
+         *     listed with enabled=false (retention, ADR 0013 §2).
+         */
+        readonly get: operations["automation_schedules_api_automation_schedules_get"];
+        readonly put?: never;
+        /**
+         * Automation Create Schedule
+         * @description Create a schedule (ui-token, 10/60 s). Creation is DISABLED —
+         *     enablement is a separate audited PATCH (rule.toggled). next_run_at is
+         *     computed server-side from now; a client value is ignored. 422 on
+         *     contract violations (unknown harness/target_kind, interval < 60 s,
+         *     bad 'HH:MM'/ISO-duration, duplicate name); never on task existence —
+         *     assignability belongs to fire time (SCHED-1 Н2).
+         */
+        readonly post: operations["automation_create_schedule_api_automation_schedules_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/automation/schedules/{rule_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Automation Delete Schedule
+         * @description DELETE = soft-disable retention (ADR 0013 §2): the row is never
+         *     destroyed, the rule stays listed with enabled=false and its UNIQUE
+         *     name keeps holding (rename or re-enable via PATCH). Audited as
+         *     rule.deleted old→new.
+         */
+        readonly delete: operations["automation_delete_schedule_api_automation_schedules__rule_id__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        /**
+         * Automation Patch Schedule
+         * @description PATCH a schedule (ui-token). Every effective patch recomputes
+         *     next_run_at from now (schedule clock is server-owned). A pure
+         *     {enabled} flip is audited as rule.toggled — the per-rule kill-switch;
+         *     anything else is rule.updated (old→new in the audit trail). Idempotent
+         *     no-op patches emit nothing.
+         */
+        readonly patch: operations["automation_patch_schedule_api_automation_schedules__rule_id__patch"];
+        readonly trace?: never;
+    };
+    readonly "/api/automation/schedules/{rule_id}/run": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Automation Run Schedule
+         * @description «Запустить сейчас» — the MANUAL trigger (ADR 0013 §2: not T2; the
+         *     owner's hand, not the engine).
+         *
+         *     Synchronous: the response carries the decision and the assignment id.
+         *     The assignment is created through the same code path as POST
+         *     /api/assignments with created_by='owner' (manual = ui-token action,
+         *     NOT automation); budgets and the global kill-switch do NOT apply. The
+         *     create gates translate honestly: 404 unknown task, 422 archived/
+         *     terminal, 409 while an active assignment holds the task (≤1
+         *     invariant) — a journal skipped(reason) row is written for every
+         *     refused attempt. The launches row is trigger='manual', origin='ui',
+         *     run_at = click time (+1 s walk on a same-second collision — the S2
+         *     occurrence key is shared, not forked). Works on disabled rules: the
+         *     per-rule kill-switch stops the engine, not the owner (manual run-now
+         *     is the conscious replacement for missed occurrences, ADR §4).
+         *
+         *     SSE: assignment.created via the standard notification path — and
+         *     deliberately NO scheduler.launched (this is not automation).
+         */
+        readonly post: operations["automation_run_schedule_api_automation_schedules__rule_id__run_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/automation/hooks": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Automation Hooks
+         * @description List hook rules (OPEN read; retention semantics as schedules).
+         */
+        readonly get: operations["automation_hooks_api_automation_hooks_get"];
+        readonly put?: never;
+        /**
+         * Automation Create Hook
+         * @description Create a hook (ui-token). ``on`` is validated against the server
+         *     constant HOOK_EVENT_WHITELIST (automation.* and heartbeats are
+         *     structurally absent); condition fields/ops/values against the closed
+         *     allowlist (422 at CRUD time, never at fire time); source_allowlist
+         *     defaults by action — notify hears everything except automation,
+         *     create_assignment only ui/server (machine = explicit audited opt-in).
+         *     Creation is disabled; enablement is a separate PATCH.
+         */
+        readonly post: operations["automation_create_hook_api_automation_hooks_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/automation/hooks/{rule_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Automation Delete Hook
+         * @description DELETE = soft-disable retention (same semantics as schedules).
+         */
+        readonly delete: operations["automation_delete_hook_api_automation_hooks__rule_id__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        /**
+         * Automation Patch Hook
+         * @description PATCH a hook (ui-token). Changing ``action`` without an explicit
+         *     ``source_allowlist`` resets the list to the new action's default (А-1:
+         *     a machine-origin list must not silently survive under
+         *     create_assignment). rule.toggled / rule.updated audit as schedules.
+         */
+        readonly patch: operations["automation_patch_hook_api_automation_hooks__rule_id__patch"];
+        readonly trace?: never;
+    };
+    readonly "/api/automation/launches": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Automation Launches
+         * @description Launch journal page (OPEN read; append-only). Uniform cursor
+         *     contract (ADR 0011 §11): ``limit`` (default 50, hard cap 200) + opaque
+         *     ``cursor`` → ``next_cursor``; sort ``attempted_at DESC`` with the
+         *     unique ``id`` tiebreak; ``truncated`` is true only when the request
+         *     limit was silently capped. Filters: rule_id, kind (schedule|hook),
+         *     decision (launched|skipped|missed) — 422 on garbage; a cursor is only
+         *     valid for the parameters it was issued with.
+         */
+        readonly get: operations["automation_launches_api_automation_launches_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/automation/status": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Automation Status
+         * @description Engine/caps/condition-meta projection (OPEN read — the UI status
+         *     banner source). ``engine`` is a CONSTANT false in S1: the scheduler
+         *     loop does not exist in this build (ADR 0013 §2 — contracts only).
+         *     ``daily_used`` counts non-manual launches today (provably 0 in S1,
+         *     computed honestly so S2 keeps the reader). ``condition_meta`` is the
+         *     meta-dictionary the condition form is built from — the Frontend
+         *     blocker: fields/ops/values come from the server, never hardcoded.
+         */
+        readonly get: operations["automation_status_api_automation_status_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/automation/settings": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Automation Get Settings
+         * @description Read the global kill-switch + daily cap (OPEN read — ids and flags
+         *     only, no secrets).
+         */
+        readonly get: operations["automation_get_settings_api_automation_settings_get"];
+        /**
+         * Automation Put Settings
+         * @description Set the kill-switch / daily cap (ui-token, audited old→new as
+         *     automation.settings.changed). In S1 flipping ``enabled`` is INERT
+         *     data — no engine exists to kill; the flag is the persistent owner
+         *     opt-in the S2 loop will read at boot (default false, C-1).
+         */
+        readonly put: operations["automation_put_settings_api_automation_settings_put"];
+        readonly post?: never;
         readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
@@ -883,6 +1466,252 @@ export interface components {
         } & {
             readonly [key: string]: unknown;
         };
+        /** AssignmentCancelBody */
+        readonly AssignmentCancelBody: {
+            /**
+             * Reason
+             * @default
+             */
+            readonly reason: string;
+        };
+        /** AssignmentClaimBody */
+        readonly AssignmentClaimBody: {
+            /** Claimed By */
+            readonly claimed_by: string;
+            /**
+             * Executor Id
+             * @default
+             */
+            readonly executor_id: string;
+        };
+        /** AssignmentClaimedOut */
+        readonly AssignmentClaimedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly assignment: components["schemas"]["AssignmentOut"];
+            /** Claim Token */
+            readonly claim_token: string;
+            readonly task?: components["schemas"]["TaskOut"] | null;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** AssignmentCompleteBody */
+        readonly AssignmentCompleteBody: {
+            /** Claim Token */
+            readonly claim_token: string;
+            /**
+             * Final Report
+             * @default
+             */
+            readonly final_report: string;
+            /**
+             * Note
+             * @default
+             */
+            readonly note: string;
+        };
+        /** AssignmentCreate */
+        readonly AssignmentCreate: {
+            /** Task Id */
+            readonly task_id: string;
+            /** Specialist */
+            readonly specialist: string;
+            /**
+             * Harness
+             * @default zcode
+             */
+            readonly harness: string;
+            /**
+             * Executor Id
+             * @default
+             */
+            readonly executor_id: string;
+        };
+        /** AssignmentCreatedOut */
+        readonly AssignmentCreatedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly assignment: components["schemas"]["AssignmentOut"];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** AssignmentFailBody */
+        readonly AssignmentFailBody: {
+            /**
+             * Reason
+             * @default
+             */
+            readonly reason: string;
+            /**
+             * Claim Token
+             * @default
+             */
+            readonly claim_token: string;
+            /**
+             * Claimed By
+             * @default
+             */
+            readonly claimed_by: string;
+        };
+        /** AssignmentFinishedOut */
+        readonly AssignmentFinishedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly assignment: components["schemas"]["AssignmentOut"];
+            readonly task?: components["schemas"]["TaskOut"] | null;
+            /**
+             * Moved
+             * @default []
+             */
+            readonly moved: readonly string[];
+            readonly report?: components["schemas"]["ReportOut"] | null;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** AssignmentHeartbeatBody */
+        readonly AssignmentHeartbeatBody: {
+            /** Claim Token */
+            readonly claim_token: string;
+            /**
+             * Note
+             * @default
+             */
+            readonly note: string;
+        };
+        /** AssignmentOut */
+        readonly AssignmentOut: {
+            /** Id */
+            readonly id: number;
+            /** Task Id */
+            readonly task_id: string;
+            /**
+             * Specialist
+             * @default
+             */
+            readonly specialist: string;
+            /**
+             * Harness
+             * @default zcode
+             */
+            readonly harness: string;
+            /** State */
+            readonly state: string;
+            /**
+             * Created By
+             * @default owner
+             */
+            readonly created_by: string;
+            /** Claimed By */
+            readonly claimed_by?: string | null;
+            /**
+             * Note
+             * @default
+             */
+            readonly note: string;
+            /**
+             * Spec Hash
+             * @default
+             */
+            readonly spec_hash: string;
+            /**
+             * Executor Id
+             * @default
+             */
+            readonly executor_id: string;
+            /**
+             * Claimed By Executor
+             * @default
+             */
+            readonly claimed_by_executor: string;
+            /** Created At */
+            readonly created_at: string;
+            /** Claimed At */
+            readonly claimed_at?: string | null;
+            /** Started At */
+            readonly started_at?: string | null;
+            /** Heartbeat At */
+            readonly heartbeat_at?: string | null;
+            /** Finished At */
+            readonly finished_at?: string | null;
+            /**
+             * Topics
+             * @default []
+             */
+            readonly topics: readonly string[];
+            /** Routing */
+            readonly routing?: {
+                readonly [key: string]: unknown;
+            } | null;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** AssignmentStateOut */
+        readonly AssignmentStateOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly assignment: components["schemas"]["AssignmentOut"];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** AssignmentTokenBody */
+        readonly AssignmentTokenBody: {
+            /** Claim Token */
+            readonly claim_token: string;
+        };
+        /** AssignmentsOut */
+        readonly AssignmentsOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["AssignmentOut"][];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** AutomationSettingsBody */
+        readonly AutomationSettingsBody: {
+            /** Enabled */
+            readonly enabled?: boolean | null;
+            /** Cap Global Per Day */
+            readonly cap_global_per_day?: number | null;
+        };
+        /** AutomationSettingsOut */
+        readonly AutomationSettingsOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Enabled */
+            readonly enabled: boolean;
+            /** Cap Global Per Day */
+            readonly cap_global_per_day: number;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** AutomationStatusOut */
+        readonly AutomationStatusOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Engine */
+            readonly engine: boolean;
+            /** Global Kill Switch */
+            readonly global_kill_switch: boolean;
+            /** Daily Cap */
+            readonly daily_cap: number;
+            /** Daily Used */
+            readonly daily_used: number;
+            /** Condition Meta */
+            readonly condition_meta: {
+                readonly [key: string]: unknown;
+            };
+            /** Rules */
+            readonly rules: {
+                readonly [key: string]: {
+                    readonly [key: string]: number;
+                };
+            };
+        } & {
+            readonly [key: string]: unknown;
+        };
         /** BoardOut */
         readonly BoardOut: {
             /** Columns */
@@ -896,6 +1725,20 @@ export interface components {
         } & {
             readonly [key: string]: unknown;
         };
+        /**
+         * ConditionItem
+         * @description One hook condition clause. Strict: unknown keys are a 422 at the
+         *     pydantic boundary; field/op/value dictionaries are re-validated in the
+         *     store against the closed allowlists (defense in depth).
+         */
+        readonly ConditionItem: {
+            /** Field */
+            readonly field: string;
+            /** Op */
+            readonly op: string;
+            /** Value */
+            readonly value: unknown;
+        };
         /** EventItem */
         readonly EventItem: {
             /** Ts */
@@ -904,6 +1747,183 @@ export interface components {
             readonly title: string;
             /** Detail */
             readonly detail?: string | null;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /**
+         * ExecutionSettingsBody
+         * @description Default/fallback executor settings (Amd 2 §5). ``scope`` reserves
+         *     project-level defaults: '' (global, default) or 'project:<slug>'. The
+         *     fallback is a global-scope UI-preview value (no silent substitution);
+         *     it does not participate in the GET routing chain.
+         */
+        readonly ExecutionSettingsBody: {
+            /**
+             * Default Executor
+             * @default
+             */
+            readonly default_executor: string;
+            /**
+             * Fallback Executor
+             * @default
+             */
+            readonly fallback_executor: string;
+            /**
+             * Scope
+             * @default
+             */
+            readonly scope: string;
+        };
+        /** ExecutionSettingsOut */
+        readonly ExecutionSettingsOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /**
+             * Default Executor
+             * @default
+             */
+            readonly default_executor: string;
+            /**
+             * Fallback Executor
+             * @default
+             */
+            readonly fallback_executor: string;
+            /**
+             * Scope
+             * @default
+             */
+            readonly scope: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** ExecutorListOut */
+        readonly ExecutorListOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["ExecutorOut"][];
+            /** Meta */
+            readonly meta: {
+                readonly [key: string]: unknown;
+            };
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** ExecutorOut */
+        readonly ExecutorOut: {
+            /** Id */
+            readonly id: string;
+            /** Name */
+            readonly name: string;
+            /** Harness */
+            readonly harness: string;
+            /**
+             * Host
+             * @default
+             */
+            readonly host: string;
+            /**
+             * Transport
+             * @default local-poll
+             */
+            readonly transport: string;
+            /**
+             * Capabilities
+             * @default []
+             */
+            readonly capabilities: readonly string[];
+            /**
+             * Version
+             * @default
+             */
+            readonly version: string;
+            /**
+             * Enabled
+             * @default false
+             */
+            readonly enabled: boolean;
+            /**
+             * State
+             * @default pending
+             */
+            readonly state: string;
+            /**
+             * Last Seen
+             * @default
+             */
+            readonly last_seen: string;
+            /**
+             * Presence
+             * @default offline
+             */
+            readonly presence: string;
+            /**
+             * Registered At
+             * @default
+             */
+            readonly registered_at: string;
+            /**
+             * Updated At
+             * @default
+             */
+            readonly updated_at: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** ExecutorPatch */
+        readonly ExecutorPatch: {
+            /** Name */
+            readonly name?: string | null;
+            /** State */
+            readonly state?: string | null;
+            /** Capabilities */
+            readonly capabilities?: readonly string[] | null;
+            /** Enabled */
+            readonly enabled?: boolean | null;
+        };
+        /**
+         * ExecutorRegister
+         * @description L0 bootstrap registration (machine token). Capabilities are NOT
+         *     accepted here — they are owner-declared via PATCH (Amd 2 §4).
+         */
+        readonly ExecutorRegister: {
+            /** Name */
+            readonly name: string;
+            /** Harness */
+            readonly harness: string;
+            /**
+             * Host
+             * @default
+             */
+            readonly host: string;
+            /**
+             * Transport
+             * @default local-poll
+             */
+            readonly transport: string;
+            /**
+             * Version
+             * @default
+             */
+            readonly version: string;
+        };
+        /** ExecutorRegisteredOut */
+        readonly ExecutorRegisteredOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly executor: components["schemas"]["ExecutorOut"];
+            /** Executor Secret */
+            readonly executor_secret: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** ExecutorStateChangeOut */
+        readonly ExecutorStateChangeOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly executor: components["schemas"]["ExecutorOut"];
         } & {
             readonly [key: string]: unknown;
         };
@@ -997,6 +2017,176 @@ export interface components {
             readonly events: readonly components["schemas"]["EventItem"][];
             /** Memories */
             readonly memories: readonly components["schemas"]["MemoryItem"][];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** HookCreate */
+        readonly HookCreate: {
+            /** Name */
+            readonly name: string;
+            /** On */
+            readonly on: string;
+            /** Condition */
+            readonly condition?: readonly components["schemas"]["ConditionItem"][] | null;
+            /** Source Allowlist */
+            readonly source_allowlist?: readonly string[] | null;
+            /**
+             * Action
+             * @default notify
+             */
+            readonly action: string;
+            /** Action Payload */
+            readonly action_payload?: {
+                readonly [key: string]: unknown;
+            } | null;
+            /**
+             * Cooldown S
+             * @default 300
+             */
+            readonly cooldown_s: number;
+            /**
+             * Budget
+             * @default 4
+             */
+            readonly budget: number;
+        };
+        /** HookOut */
+        readonly HookOut: {
+            /** Id */
+            readonly id: number;
+            /** Name */
+            readonly name: string;
+            /** Enabled */
+            readonly enabled: boolean;
+            /** On */
+            readonly on: string;
+            /**
+             * Condition
+             * @default []
+             */
+            readonly condition: readonly components["schemas"]["ConditionItem"][];
+            /**
+             * Source Allowlist
+             * @default []
+             */
+            readonly source_allowlist: readonly string[];
+            /** Action */
+            readonly action: string;
+            /**
+             * Action Payload
+             * @default {}
+             */
+            readonly action_payload: {
+                readonly [key: string]: unknown;
+            };
+            /**
+             * Cooldown S
+             * @default 300
+             */
+            readonly cooldown_s: number;
+            /**
+             * Budget
+             * @default 4
+             */
+            readonly budget: number;
+            /**
+             * Created By
+             * @default owner
+             */
+            readonly created_by: string;
+            /** Created At */
+            readonly created_at: string;
+            /** Updated At */
+            readonly updated_at: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** HookPatch */
+        readonly HookPatch: {
+            /** Name */
+            readonly name?: string | null;
+            /** On */
+            readonly on?: string | null;
+            /** Condition */
+            readonly condition?: readonly components["schemas"]["ConditionItem"][] | null;
+            /** Source Allowlist */
+            readonly source_allowlist?: readonly string[] | null;
+            /** Action */
+            readonly action?: string | null;
+            /** Action Payload */
+            readonly action_payload?: {
+                readonly [key: string]: unknown;
+            } | null;
+            /** Cooldown S */
+            readonly cooldown_s?: number | null;
+            /** Budget */
+            readonly budget?: number | null;
+            /** Enabled */
+            readonly enabled?: boolean | null;
+        };
+        /** HooksOut */
+        readonly HooksOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["HookOut"][];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** LaunchOut */
+        readonly LaunchOut: {
+            /** Id */
+            readonly id: number;
+            /** Rule Id */
+            readonly rule_id: number;
+            /** Rule Kind */
+            readonly rule_kind: string;
+            /** Rule Name */
+            readonly rule_name: string;
+            /** Run At */
+            readonly run_at: string;
+            /** Event Id */
+            readonly event_id?: number | null;
+            /** Trigger */
+            readonly trigger: string;
+            /**
+             * Origin
+             * @default
+             */
+            readonly origin: string;
+            /** Decision */
+            readonly decision: string;
+            /**
+             * Reason
+             * @default
+             */
+            readonly reason: string;
+            /** Assignment Id */
+            readonly assignment_id?: number | null;
+            /** Attempted At */
+            readonly attempted_at: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** LaunchesOut */
+        readonly LaunchesOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Total */
+            readonly total: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["LaunchOut"][];
+            /** Next Cursor */
+            readonly next_cursor?: string | null;
+            /**
+             * Truncated
+             * @default false
+             */
+            readonly truncated: boolean;
         } & {
             readonly [key: string]: unknown;
         };
@@ -1363,6 +2553,184 @@ export interface components {
         } & {
             readonly [key: string]: unknown;
         };
+        /** RuleDeletedOut */
+        readonly RuleDeletedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /**
+             * Note
+             * @default
+             */
+            readonly note: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** ScheduleCreate */
+        readonly ScheduleCreate: {
+            /** Name */
+            readonly name: string;
+            /**
+             * Target Kind
+             * @default task
+             */
+            readonly target_kind: string;
+            /** Task Id */
+            readonly task_id: string;
+            /** Specialist */
+            readonly specialist: string;
+            /**
+             * Harness
+             * @default zcode
+             */
+            readonly harness: string;
+            /**
+             * Executor Id
+             * @default
+             */
+            readonly executor_id: string;
+            /** Trigger Kind */
+            readonly trigger_kind: string;
+            /** Trigger Value */
+            readonly trigger_value: string;
+            /** Window From */
+            readonly window_from?: string | null;
+            /** Window To */
+            readonly window_to?: string | null;
+            /**
+             * Max Runs Per Day
+             * @default 4
+             */
+            readonly max_runs_per_day: number;
+            /**
+             * Cooldown S
+             * @default 300
+             */
+            readonly cooldown_s: number;
+        };
+        /** ScheduleOut */
+        readonly ScheduleOut: {
+            /** Id */
+            readonly id: number;
+            /** Name */
+            readonly name: string;
+            /** Enabled */
+            readonly enabled: boolean;
+            /** Target Kind */
+            readonly target_kind: string;
+            /** Task Id */
+            readonly task_id: string;
+            /** Specialist */
+            readonly specialist: string;
+            /**
+             * Harness
+             * @default zcode
+             */
+            readonly harness: string;
+            /**
+             * Executor Id
+             * @default
+             */
+            readonly executor_id: string;
+            /** Trigger Kind */
+            readonly trigger_kind: string;
+            /** Trigger Value */
+            readonly trigger_value: string;
+            /** Window From */
+            readonly window_from?: string | null;
+            /** Window To */
+            readonly window_to?: string | null;
+            /**
+             * Max Runs Per Day
+             * @default 4
+             */
+            readonly max_runs_per_day: number;
+            /**
+             * Cooldown S
+             * @default 300
+             */
+            readonly cooldown_s: number;
+            /** Next Run At */
+            readonly next_run_at?: string | null;
+            /** Last Run At */
+            readonly last_run_at?: string | null;
+            /**
+             * Created By
+             * @default owner
+             */
+            readonly created_by: string;
+            /** Created At */
+            readonly created_at: string;
+            /** Updated At */
+            readonly updated_at: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** SchedulePatch */
+        readonly SchedulePatch: {
+            /** Name */
+            readonly name?: string | null;
+            /** Target Kind */
+            readonly target_kind?: string | null;
+            /** Task Id */
+            readonly task_id?: string | null;
+            /** Specialist */
+            readonly specialist?: string | null;
+            /** Harness */
+            readonly harness?: string | null;
+            /** Executor Id */
+            readonly executor_id?: string | null;
+            /** Trigger Kind */
+            readonly trigger_kind?: string | null;
+            /** Trigger Value */
+            readonly trigger_value?: string | null;
+            /** Window From */
+            readonly window_from?: string | null;
+            /** Window To */
+            readonly window_to?: string | null;
+            /** Max Runs Per Day */
+            readonly max_runs_per_day?: number | null;
+            /** Cooldown S */
+            readonly cooldown_s?: number | null;
+            /** Enabled */
+            readonly enabled?: boolean | null;
+        };
+        /**
+         * ScheduleRunOut
+         * @description Synchronous «Запустить сейчас» result. Gates of create_assignment
+         *     are translated honestly as HTTP 404/422/409 (a journal skipped row is
+         *     still written); the 200 arm is decision=launched. The skipped arm of
+         *     ``decision`` is reserved for soft refusals the engine may add in S2.
+         */
+        readonly ScheduleRunOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Decision */
+            readonly decision: string;
+            /**
+             * Reason
+             * @default
+             */
+            readonly reason: string;
+            /** Assignment Id */
+            readonly assignment_id?: number | null;
+            /** Launch Id */
+            readonly launch_id: number;
+            /** Run At */
+            readonly run_at: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** SchedulesOut */
+        readonly SchedulesOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["ScheduleOut"][];
+        } & {
+            readonly [key: string]: unknown;
+        };
         /** ServerAction */
         readonly ServerAction: {
             /** Action */
@@ -1679,6 +3047,11 @@ export interface components {
              * @default
              */
             readonly archived_from: string;
+            /**
+             * Validating Since
+             * @default
+             */
+            readonly validating_since: string;
         } & {
             readonly [key: string]: unknown;
         };
@@ -2881,6 +4254,863 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["ReportCreatedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly list_assignments_api_assignments_get: {
+        readonly parameters: {
+            readonly query?: {
+                readonly state?: string;
+                readonly task_id?: string;
+                readonly executor_id?: string;
+                readonly by?: string;
+            };
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentsOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly create_assignment_api_assignments_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AssignmentCreate"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentCreatedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly claim_assignment_api_assignments__assignment_id__claim_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly assignment_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AssignmentClaimBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentClaimedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly start_assignment_api_assignments__assignment_id__start_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly assignment_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AssignmentTokenBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentStateOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly heartbeat_assignment_api_assignments__assignment_id__heartbeat_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly assignment_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AssignmentHeartbeatBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentStateOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly complete_assignment_api_assignments__assignment_id__complete_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly assignment_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AssignmentCompleteBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentFinishedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly fail_assignment_api_assignments__assignment_id__fail_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly assignment_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AssignmentFailBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentFinishedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly cancel_assignment_api_assignments__assignment_id__cancel_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly assignment_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AssignmentCancelBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AssignmentFinishedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly list_executors_api_executors_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ExecutorListOut"];
+                };
+            };
+        };
+    };
+    readonly register_executor_api_executors_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["ExecutorRegister"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ExecutorRegisteredOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly executor_heartbeat_api_executors__executor_id__heartbeat_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly executor_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ExecutorStateChangeOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly delete_executor_api_executors__executor_id__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly executor_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["OkOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly patch_executor_api_executors__executor_id__patch: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly executor_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["ExecutorPatch"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ExecutorStateChangeOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly get_execution_settings_api_settings_execution_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ExecutionSettingsOut"];
+                };
+            };
+        };
+    };
+    readonly put_execution_settings_api_settings_execution_put: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["ExecutionSettingsBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ExecutionSettingsOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_schedules_api_automation_schedules_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["SchedulesOut"];
+                };
+            };
+        };
+    };
+    readonly automation_create_schedule_api_automation_schedules_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["ScheduleCreate"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ScheduleOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_delete_schedule_api_automation_schedules__rule_id__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly rule_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["RuleDeletedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_patch_schedule_api_automation_schedules__rule_id__patch: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly rule_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["SchedulePatch"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ScheduleOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_run_schedule_api_automation_schedules__rule_id__run_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly rule_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ScheduleRunOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_hooks_api_automation_hooks_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HooksOut"];
+                };
+            };
+        };
+    };
+    readonly automation_create_hook_api_automation_hooks_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["HookCreate"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HookOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_delete_hook_api_automation_hooks__rule_id__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly rule_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["RuleDeletedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_patch_hook_api_automation_hooks__rule_id__patch: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly rule_id: number;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["HookPatch"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HookOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_launches_api_automation_launches_get: {
+        readonly parameters: {
+            readonly query?: {
+                readonly rule_id?: number | null;
+                readonly kind?: string;
+                readonly decision?: string;
+                readonly limit?: number;
+                readonly cursor?: string;
+            };
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["LaunchesOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly automation_status_api_automation_status_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AutomationStatusOut"];
+                };
+            };
+        };
+    };
+    readonly automation_get_settings_api_automation_settings_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AutomationSettingsOut"];
+                };
+            };
+        };
+    };
+    readonly automation_put_settings_api_automation_settings_put: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["AutomationSettingsBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["AutomationSettingsOut"];
                 };
             };
             /** @description Validation Error */

@@ -511,9 +511,21 @@ const CORPUS_REPORTS = {
 
 const CORPUS_HISTORY = {
   events: [
-    { ts: "2026-09-19T21:12:19+00:00", title: "task.report", detail: "final, агент: zcode" },
-    { ts: "2026-09-19T21:12:12+00:00", title: "task.report", detail: "intermediate, агент: zcode" },
-    { ts: "2026-09-19T21:11:58+00:00", title: "task.moved", detail: "in-progress → in-progress" },
+    {
+      ts: "2026-09-19T21:12:19+00:00",
+      title: "task.report",
+      detail: "final, агент: zcode",
+    },
+    {
+      ts: "2026-09-19T21:12:12+00:00",
+      title: "task.report",
+      detail: "intermediate, агент: zcode",
+    },
+    {
+      ts: "2026-09-19T21:11:58+00:00",
+      title: "task.moved",
+      detail: "in-progress → in-progress",
+    },
     { ts: "2026-09-19T21:11:52+00:00", title: "task.updated", detail: "поля: summary" },
   ],
   memories: [
@@ -601,12 +613,15 @@ const CORPUS_BOARD_TASK = {
   status: "in-progress",
   priority: "normal",
   archived_from: "",
+  validating_since: "",
 };
 
 describe("BoardAdapter Ф2 task reads (recorded corpus)", () => {
   it("reports: GET /tasks/{id}/reports passes the corpus through", async () => {
     const fetchMock = respondingFetch(CORPUS_REPORTS);
-    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
 
     const reports = await adapter.reports("TB-1");
 
@@ -618,7 +633,9 @@ describe("BoardAdapter Ф2 task reads (recorded corpus)", () => {
 
   it("history: GET /tasks/{id}/history — events desc + memory checkpoints", async () => {
     const fetchMock = respondingFetch(CORPUS_HISTORY);
-    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
 
     const history = await adapter.history("TB-1");
 
@@ -629,7 +646,9 @@ describe("BoardAdapter Ф2 task reads (recorded corpus)", () => {
 
   it("taskMemories: GET /tasks/{id}/memories — cards + sources + unresolved", async () => {
     const fetchMock = respondingFetch(CORPUS_TASK_MEMORIES);
-    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
 
     const links = await adapter.taskMemories("T6");
 
@@ -640,7 +659,9 @@ describe("BoardAdapter Ф2 task reads (recorded corpus)", () => {
 
   it("archive: GET /archive with the full filter set + pagination", async () => {
     const fetchMock = respondingFetch(CORPUS_ARCHIVE);
-    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
 
     const page = await adapter.archive({
       q: "регистрац",
@@ -668,15 +689,15 @@ describe("BoardAdapter Ф2 task reads (recorded corpus)", () => {
       tasks: [CORPUS_BOARD_TASK],
       counts: { open: 0, "in-progress": 1 },
     });
-    const adapter = new BoardAdapter({ fetchImpl: fetchMock as unknown as typeof fetch });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
 
     const task = await adapter.taskById("T6");
     expect(task.id).toBe("T6");
     expect(task.priority).toBe("normal");
 
-    const error = (await adapter
-      .taskById("NOPE")
-      .catch((e: unknown) => e)) as ApiError;
+    const error = (await adapter.taskById("NOPE").catch((e: unknown) => e)) as ApiError;
     expect(error).toBeInstanceOf(ApiError);
     expect(error.status).toBe(404);
   });

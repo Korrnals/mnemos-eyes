@@ -58,16 +58,19 @@ describe("domain map", () => {
     expect(activeDomain("/agents")?.to).toBeUndefined(); // still a slot
   });
 
-  it("gives the task domain its Ф2 sections (list / inbox / archive)", () => {
+  it("gives the task domain its Ф2–Ф3 sections (kanban / list / inbox / archive)", () => {
     const tasks = NAV_DOMAINS.find((d) => d.to === "/tasks");
     expect(tasks?.soonKey).toBeUndefined();
     expect(tasks?.sections?.map((s) => s.to)).toEqual([
       "/tasks",
+      "/tasks/list",
       "/tasks/inbox",
       "/tasks/archive",
     ]);
     // The inbox section carries the live counter wiring.
-    expect(tasks?.sections?.find((s) => s.to === "/tasks/inbox")?.counter).toBe("inbox");
+    expect(tasks?.sections?.find((s) => s.to === "/tasks/inbox")?.counter).toBe(
+      "inbox",
+    );
   });
 });
 
@@ -109,8 +112,12 @@ describe("breadcrumbs (last crumb is not a link)", () => {
     ]);
   });
 
-  it("trails the Ф2 task pages (list / inbox / archive)", () => {
+  it("trails the Ф2–Ф3 task pages (board / list / inbox / archive)", () => {
     expect(crumbsFor("/tasks")).toEqual([
+      { to: "/tasks", key: "nav.tasks" },
+      { key: "nav.taskBoard" },
+    ]);
+    expect(crumbsFor("/tasks/list")).toEqual([
       { to: "/tasks", key: "nav.tasks" },
       { key: "nav.taskList" },
     ]);

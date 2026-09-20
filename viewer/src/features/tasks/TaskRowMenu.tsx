@@ -9,14 +9,17 @@ import {
 import { Button } from "@/components/ui/button";
 import type { BoardTask } from "@/gateway/boardTypes";
 import { useT } from "@/i18n";
-import { TASK_COLUMNS, statusLabelKey } from "./taskStatus";
+import { TASK_COLUMNS, columnLabelKey } from "./taskStatus";
 import { EditTaskDialog } from "./EditTaskDialog";
 import { useTaskMutations } from "./useTaskMutations";
 
 /**
- * Row action menu (Ф3): «Изменить» / «Переместить…» / «Архивировать».
- * This is the list-page alternative to kanban DnD (WF-1 precondition — DnD
- * is NOT in this wave): moving is an explicit action with a column submenu.
+ * Row/card action menu (Ф3): «Изменить» / «Переместить…» / «Архивировать».
+ * This is the CANONICAL keyboard move path (ARCHCOM-3 verdict §3 — the
+ * pointer kanban DnD exists since CV-4, but keyboard sorting goes through
+ * this explicit 7-column submenu; a dnd-kit KeyboardSensor is a later
+ * enhancement). Without a ui token the move still leads to the login window
+ * through the standard token gate (runAuthorized).
  *
  * A11y: the ⋯ trigger is a plain labelled button (`aria-haspopup="menu"`,
  * `aria-expanded`); the popup is a `role="menu"` of real buttons — Tab/
@@ -184,7 +187,7 @@ export function TaskRowMenu({ task }: { task: BoardTask }) {
                     moveTask(task, col);
                   }}
                 >
-                  {t(statusLabelKey(col))}
+                  {t(columnLabelKey(col))}
                 </MenuButton>
               ))}
             </>

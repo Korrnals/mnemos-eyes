@@ -29,6 +29,7 @@ const TASK: BoardTask = {
   status: "open",
   priority: "normal",
   archived_from: "",
+  validating_since: "",
 };
 
 /** Recording fetch stub — resolves JSON, captures method/url/headers/body. */

@@ -68,16 +68,22 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
       { to: "/memory/tags", key: "nav.tags", icon: Tag, end: true },
     ],
   },
-  // Task domain (Ф2, ADR 0011): the reading surfaces are live; the kanban
-  // view (/tasks/board, DnD) is a Ф3 deliverable and stays an unregistered
-  // slot — empty slots are not rendered (concept §2.1 principle).
+  // Task domain (Ф2–Ф3, ADR 0011): the kanban is view №1 at /tasks (CV-4),
+  // the dense list moved to /tasks/list (concept §2 — both projections live).
   {
     to: "/tasks",
     key: "nav.tasks",
     icon: KanbanSquare,
     sections: [
-      { to: "/tasks", key: "nav.taskList", icon: ListTodo, end: true },
-      { to: "/tasks/inbox", key: "nav.taskInbox", icon: Inbox, end: true, counter: "inbox" },
+      { to: "/tasks", key: "nav.taskBoard", icon: KanbanSquare, end: true },
+      { to: "/tasks/list", key: "nav.taskList", icon: ListTodo, end: true },
+      {
+        to: "/tasks/inbox",
+        key: "nav.taskInbox",
+        icon: Inbox,
+        end: true,
+        counter: "inbox",
+      },
       { to: "/tasks/archive", key: "nav.taskArchive", icon: Archive, end: true },
     ],
   },
@@ -150,6 +156,8 @@ export function crumbsFor(pathname: string): Crumb[] {
     case "/system/traces":
       return [SYSTEM_CRUMB, { key: "nav.traces" }];
     case "/tasks":
+      return [TASKS_CRUMB, { key: "nav.taskBoard" }];
+    case "/tasks/list":
       return [TASKS_CRUMB, { key: "nav.taskList" }];
     case "/tasks/inbox":
       return [TASKS_CRUMB, { key: "nav.taskInbox" }];
