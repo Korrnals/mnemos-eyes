@@ -758,9 +758,10 @@ class AssignmentPoller:
     def _dry_run_decisions(self, queued: list[dict[str, Any]]) -> None:
         """--once smoke mode: log what WOULD happen per queued assignment,
         honouring the max_concurrent cap (AB-FU-1). No claim, no launch, no
-        report, no audit — dry-run never mutates board or local state (a
-        spawned child outliving the process would strand the claim token
-        with no one to complete it)."""
+        report, no audit — no task-level mutations (a spawned child
+        outliving the process would strand the claim token with no one to
+        complete it); the queue poll itself still ticks executor presence
+        (piggyback, see BoardClient.list_assignments)."""
         would_run = len(self._children)   # always 0 here, kept explicit
         for a in queued:
             if not isinstance(a.get("id"), int):
@@ -1178,7 +1179,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true",
                         help="single cycle in DRY-RUN mode: log the launch "
                              "decision per queued assignment, then exit — "
-                             "no claims, no children, no board mutations")
+                             "no claims, no children (the queue poll itself "
+                             "still ticks executor presence)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
