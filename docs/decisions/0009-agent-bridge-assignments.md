@@ -206,6 +206,12 @@ server-side lease semantics beyond the expired state; mnemos as broker
 - Residual risk (dated, 2026-09-17): a compromised machine-token can still
   write reports/moves (existing surface) but cannot create assignments;
   report `agent` strings remain spoofable until T1–T3.
+- Residual risk (dated, 2026-09-20, Security review of ARCH-9): a
+  machine-token holder can keep an executor's presence "online" via the
+  auth-gated liveness piggyback (poll/heartbeat with a declared
+  executor_id) and can register pending executors (capped). Presence
+  becomes executor-token-sourced only after the L0 bootstrap retires;
+  registration notifications are deduped/capped.
 - Evolution A → B changes transport, not lifecycle semantics — no lock-in;
   the freeze exception stays narrow (trigger + badge only) with the ≤2
   registry budget as the anti-creep guard.
@@ -285,7 +291,14 @@ section spec: `docs/design/2026-09-19-agents-section-spec.md`.
    from the first day of the registry (spoofing gate, CWE-290).
 5. **Default executor = resolution rule, never auto-launch.**
    Chain: explicit pin → assignment specialist → task specialists →
-   project default → global default → visible-to-all. Computed server-side
+   project default → global default → auto-match → visible-to-all.
+   The auto-match tier (owner directive 2026-09-20) resolves to any live
+   approved+enabled local executor (deterministic min-id) and is
+   deliberately NOT caps-gated: a caps-matching executor already resolves
+   on the nomination tiers, and executor #1 (laptop-poller) carries no
+   owner-declared capabilities at bootstrap. It is an annotation only —
+   claim CAS and the poller's allowlist (A3) remain the sole launch gates;
+   consumers must treat `reason:"auto"` as advisory, never as enforcement. Computed server-side
    on every GET (stored nowhere — no staleness; defaults live in
    `board_meta` with a reserved scope field), emitted as a routing
    annotation `{resolved, reason}`. Only explicit pins are enforced at
