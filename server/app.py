@@ -2106,7 +2106,10 @@ async def create_task_report(task_id: str, body: ReportCreate,
     ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
     refusal: the report is still accepted)."""
     executor = None
-    if _bearer_is_class(request, "ui"):
+    if _bearer_is_class(request, "ui") or not _token_classes().get("machine"):
+        # ui bearer rides the ui leg; when the machine class is not
+        # configured at all the endpoint stays reachable through ui (a
+        # wrong-class bearer then gets 401, not a 503 disable)
         _guard_write(request, classes=("ui",))
     else:
         executor = _guard_machine_write(request)
@@ -3135,14 +3138,16 @@ def _token_classes() -> dict[str, str]:
     }
 
 
-def _guard_write(request: Request, *, classes: tuple[str, ...]) -> None:
+def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -> None:
     """Mutation guard (SEC-3 fail-closed; ADR 0009 A1 token classes).
 
     ``classes`` names the token classes allowed through this endpoint:
     ("ui",) for owner-UI mutations, ("machine",) for agent/poller
     endpoints, ("ui", "machine") where both sides legitimately write
-    (task reports). New assignment routes (owner track) annotate their
-    class in this single argument and nothing else changes.
+    (task reports). Default is the machine class — assignment-loop routes
+    (ARCH-9 track) may omit the argument; board-UI routes pass ("ui",).
+    New assignment routes annotate their class in this single argument
+    and nothing else changes.
 
     Semantics: when NO token of the requested classes is configured the
     endpoint is disabled — 503, fail-closed (the Helm chart provisions

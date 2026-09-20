@@ -290,10 +290,13 @@ def auth():
 
 
 @pytest.fixture()
-def ui_auth():
-    """Ui-class token headers (only meaningful together with
-    ``split_tokens``; in the transition env this value is unconfigured)."""
-    return {"Authorization": f"Bearer {UI_TOKEN}"}
+def ui_auth(app_module):
+    """Ui-class token headers — the CURRENTLY effective ui token (module
+    globals read live, so tests that enable ``split_tokens`` before the
+    request still get the right bearer; transition env falls back to the
+    board token, mirroring _token_classes())."""
+    effective = app_module.UI_WRITE_TOKEN or app_module.BOARD_WRITE_TOKEN
+    return {"Authorization": f"Bearer {effective}"}
 
 
 @pytest.fixture()
@@ -373,18 +376,28 @@ def fresh_reflect_limiter(app_module, monkeypatch):
 
 
 @pytest.fixture()
-def make_task(client, auth):
-    """Create a task via the API; deletes it again on teardown."""
+def make_task(client, app_module):
+    """Create a task via the API; deletes it again on teardown.
+
+    Task creation is a ui mutation (ADR 0009 A1); the bearer is resolved
+    per call from the module globals so tests that toggle the split
+    before creating still work; transition mode falls back to the board
+    token.
+    """
     created: list[str] = []
 
     def _make(**overrides) -> dict:
+        effective = app_module.UI_WRITE_TOKEN or app_module.BOARD_WRITE_TOKEN
+        headers = {"Authorization": f"Bearer {effective}"}
         payload = {"title": "qa task"} | overrides
-        r = client.post("/api/tasks", json=payload, headers=auth)
+        r = client.post("/api/tasks", json=payload, headers=headers)
         assert r.status_code == 201, r.text
         task = r.json()
         created.append(task["id"])
         return task
 
     yield _make
+    effective = app_module.UI_WRITE_TOKEN or app_module.BOARD_WRITE_TOKEN
+    headers = {"Authorization": f"Bearer {effective}"}
     for task_id in created:
-        client.delete(f"/api/tasks/{task_id}", headers=auth)
+        client.delete(f"/api/tasks/{task_id}", headers=headers)
