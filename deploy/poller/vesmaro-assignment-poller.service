@@ -17,6 +17,12 @@ ExecStart=/usr/bin/python3 /opt/mnemos-eyes/scripts/assignment_poller.py --confi
 Restart=always
 RestartSec=5
 
+# AB-FU-1: the audit log and launch artifacts (envelope/stdout/stderr)
+# carry assignment specs — agent-visible task content. mkstemp files are
+# 0600 already, but the append-created audit.jsonl would land 0644 under
+# the default umask; UMask=0077 makes it 0600.
+UMask=0077
+
 # The poller is an outbound-only loop (ADR 0009 §9): it opens no listening
 # port; a modest hardening set is still worth having.
 NoNewPrivileges=true

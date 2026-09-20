@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -35,6 +36,9 @@ import httpx
 import pytest
 
 from scripts.assignment_poller import (
+    FINISH_RETRIES,
+    KILL_GRACE_SECONDS,
+    MAX_CONCURRENT_DEFAULT,
     FALLBACK_FINAL_REPORT,
     SWEEP_FAIL_REASON,
     AllowlistEntry,
@@ -46,6 +50,7 @@ from scripts.assignment_poller import (
     ConfigError,
     PollerConfig,
     _fence,
+    _terminate,
     acquire_singleton_lock,
     main,
     render_envelope,
@@ -57,6 +62,11 @@ EXIT_OK_CMD = [sys.executable, "-c", "pass"]
 EXIT_1_CMD = [sys.executable, "-c",
               "import sys; print('boom', file=sys.stderr); sys.exit(1)"]
 SLEEP_CMD = [sys.executable, "-c", "import time; time.sleep(30)"]
+# Ignores SIGTERM: only the SIGKILL escalation can stop it (AB-FU-1).
+STUBBORN_CMD = [sys.executable, "-c",
+                "import signal, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "time.sleep(60)"]
 
 
 # ----------------------------------------------------------------- fakes
@@ -72,6 +82,11 @@ class FakeBoard:
         self.calls: list[tuple] = []
         self.heartbeat_conflict: set[int] = set()
         self.start_errors: set[int] = set()
+        # AB-FU-1 finish-retry doubles: persistent 5xx vs countdown hiccups.
+        self.complete_errors: set[int] = set()
+        self.complete_flaky: dict[int, int] = {}
+        self.fail_errors: set[int] = set()
+        self.fail_flaky: dict[int, int] = {}
 
     # -- helpers for test arrangement -------------------------------------
     def add_assignment(self, aid: int, *, task_id="t-1", specialist="gcw-tester",
@@ -145,6 +160,11 @@ class FakeBoard:
                  final_report: str = ""):
         self.calls.append(("complete", assignment_id, final_report))
         a = self.assignments[assignment_id]
+        if assignment_id in self.complete_errors \
+                or self.complete_flaky.get(assignment_id, 0) > 0:
+            if assignment_id in self.complete_flaky:
+                self.complete_flaky[assignment_id] -= 1
+            raise BoardError(500, "complete", "board down")
         if a["state"] != "running":
             raise BoardConflict(409, "complete", f"is {a['state']}")
         a["state"] = "done"
@@ -158,6 +178,11 @@ class FakeBoard:
         self.calls.append(("fail", assignment_id, reason,
                            claim_token, claimed_by))
         a = self.assignments[assignment_id]
+        if assignment_id in self.fail_errors \
+                or self.fail_flaky.get(assignment_id, 0) > 0:
+            if assignment_id in self.fail_flaky:
+                self.fail_flaky[assignment_id] -= 1
+            raise BoardError(500, "fail", "board down")
         token_ok = (claim_token
                     and self.tokens.get(assignment_id) == claim_token)
         by_ok = claimed_by and a["claimed_by"] == claimed_by
@@ -193,8 +218,10 @@ def make_config(tmp_path: Path, command: list[str], **overrides) -> PollerConfig
     return PollerConfig.from_dict(raw)
 
 
-def make_poller(config: PollerConfig, board: FakeBoard) -> AssignmentPoller:
-    return AssignmentPoller(config, board, AuditLog(config.audit_path))
+def make_poller(config: PollerConfig, board: FakeBoard, *,
+                kill_grace: float = KILL_GRACE_SECONDS) -> AssignmentPoller:
+    return AssignmentPoller(config, board, AuditLog(config.audit_path),
+                            kill_grace=kill_grace)
 
 
 def wait_for_reap(poller: AssignmentPoller, board: FakeBoard,
@@ -653,10 +680,19 @@ class TestHeartbeat:
         assert read_audit(cfg.audit_path)[-1]["outcome"] == "killed-409"
         assert not poller.active_assignment_ids
         assert not any(c[0] in ("complete", "fail") for c in board.calls)
-        # the child is really dead and was ours
+        # the child is really dead and was ours. Since AB-FU-1 the kill is
+        # asynchronous (background terminator), so death is awaited, not
+        # assumed the moment the audit record lands.
         killed = [a for a in read_audit(cfg.audit_path)
                   if a["outcome"] == "killed-409"][0]
         assert killed["pid"] == child_pid
+        deadline = time.monotonic() + KILL_GRACE_SECONDS + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                break
         with pytest.raises(ProcessLookupError):
             os.kill(child_pid, 0)
 
@@ -762,6 +798,297 @@ class TestRecoverySweep:
         finally:
             orphan.terminate()
             orphan.wait()
+
+
+# --------------------------------------------------- max_concurrent (AB-FU-1)
+class TestMaxConcurrent:
+    def test_config_validation(self):
+        base = {"board_url": "https://x", "executor_name": "p",
+                "allowlist": [{"harness": "z", "command": ["c"],
+                               "specialists": ["s"]}]}
+        assert PollerConfig.from_dict(base).max_concurrent \
+            == MAX_CONCURRENT_DEFAULT == 2
+        assert PollerConfig.from_dict({**base, "max_concurrent": 1}) \
+            .max_concurrent == 1
+        for bad in (0, -1, "2", 1.5, True):
+            with pytest.raises(ConfigError):
+                PollerConfig.from_dict({**base, "max_concurrent": bad})
+
+    def test_capacity_skips_tick_then_picks_up_later(self, tmp_path, caplog):
+        """AC1: over capacity the poll tick is skipped with a log line; the
+        assignment stays queued and is claimed once a slot frees."""
+        import logging
+        board = FakeBoard()
+        board.add_assignment(50)
+        board.add_assignment(51)
+        cfg = make_config(tmp_path, SLEEP_CMD, max_concurrent=1,
+                          heartbeat_interval=0.05)
+        poller = make_poller(cfg, board)
+        with caplog.at_level(logging.INFO, logger="assignment-poller"):
+            poller.poll_once()   # launches 50; 51 hits the cap mid-tick
+            poller.poll_once()   # full → whole tick skipped with a log
+        assert board.assignments[50]["state"] == "running"
+        assert board.assignments[51]["state"] == "queued"   # NOT refused
+        assert len([c for c in board.calls if c[0] == "claim"]) == 1
+        assert any("at capacity" in r.message for r in caplog.records)
+        # the slot frees (409 kill) → the queued assignment is picked up
+        board.heartbeat_conflict.add(50)
+        deadline = time.monotonic() + 5
+        while 50 in poller.active_assignment_ids \
+                and time.monotonic() < deadline:
+            poller.send_heartbeats()
+            time.sleep(0.01)
+        poller.poll_once()
+        assert board.assignments[51]["state"] == "running"
+        # teardown: kill 51 through the same 409 path
+        board.heartbeat_conflict.add(51)
+        deadline = time.monotonic() + 5
+        while poller.active_assignment_ids and time.monotonic() < deadline:
+            poller.send_heartbeats()
+            time.sleep(0.01)
+
+    def test_dry_run_respects_capacity(self, tmp_path, caplog):
+        """AC1: dry-run logs the would-launch decisions honouring the cap —
+        capacity is visible in --once smoke output, not only at runtime."""
+        import logging
+        board = FakeBoard()
+        for aid in (52, 53, 54):
+            board.add_assignment(aid)
+        cfg = make_config(tmp_path, EXIT_OK_CMD, max_concurrent=2)
+        poller = AssignmentPoller(cfg, board, AuditLog(cfg.audit_path),
+                                  dry_run=True)
+        with caplog.at_level(logging.INFO, logger="assignment-poller"):
+            poller.run(max_cycles=1)
+        messages = [r.message for r in caplog.records]
+        assert sum("would claim" in m for m in messages) == 2
+        assert sum("would stay queued: max_concurrent=2" in m
+                   for m in messages) == 1
+        assert {c[0] for c in board.calls} == {"list"}   # reads only
+        assert not poller.active_assignment_ids
+
+
+# ----------------------------------------------- async termination (AB-FU-1)
+class TestAsyncTermination:
+    def test_kill_does_not_block_other_heartbeats(self, tmp_path):
+        """AC2: a 409 kill of a SIGTERM-ignoring child must not stall the
+        supervision loop — the other child keeps getting heartbeats through
+        the whole grace window (the old inline _terminate froze them for
+        up to KILL_GRACE_SECONDS)."""
+        board = FakeBoard()
+        board.add_assignment(60)   # stubborn: ignores SIGTERM
+        board.add_assignment(61)   # same command; torn down by hand
+        cfg = make_config(tmp_path, STUBBORN_CMD, heartbeat_interval=0.05,
+                          max_concurrent=2)
+        poller = make_poller(cfg, board, kill_grace=3.0)
+        poller.poll_once()
+        proc61 = poller._children[61].proc          # teardown handle
+        time.sleep(0.5)          # let both children install SIG_IGN
+        stubborn_pid = next(a["pid"] for a in read_audit(cfg.audit_path)
+                            if a["assignment_id"] == 60
+                            and a["outcome"] == "launched")
+        board.heartbeat_conflict.add(60)
+        t0 = time.monotonic()
+        poller.send_heartbeats()   # hits the 409 kill — enqueue only
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, f"send_heartbeats blocked {elapsed:.2f}s"
+        assert 60 not in poller.active_assignment_ids
+        assert read_audit(cfg.audit_path)[-1]["outcome"] == "killed-409"
+        assert not any(c[0] in ("complete", "fail") for c in board.calls)
+        # heartbeats for 61 continue WHILE 60 is still inside its grace
+        ticks61 = 0
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(stubborn_pid, 0)
+            except ProcessLookupError:
+                break
+            poller.send_heartbeats()
+            ticks61 = len([c for c in board.calls
+                           if c[0] == "heartbeat" and c[1] == 61])
+            time.sleep(0.02)
+        assert ticks61 >= 2, "sibling heartbeats stalled during the grace"
+        # the stubborn child dies only via the SIGKILL escalation
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                os.kill(stubborn_pid, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                break
+        with pytest.raises(ProcessLookupError):
+            os.kill(stubborn_pid, 0)
+        # teardown 61
+        os.kill(proc61.pid, signal.SIGKILL)
+        proc61.wait(timeout=5)
+
+    def test_terminate_grace_escalates_and_reaps(self):
+        """AC2 unit: _terminate(grace) SIGTERMs, waits the grace, SIGKILLs
+        the stubborn process and reaps it (no zombie answering signal 0)."""
+        proc = subprocess.Popen(STUBBORN_CMD, start_new_session=True)
+        try:
+            time.sleep(0.5)               # handler installed
+            _terminate(proc, grace=0.5)
+            assert proc.wait(timeout=5) == -signal.SIGKILL   # reaped corpse
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(proc.pid, 0)
+                    time.sleep(0.05)
+                except ProcessLookupError:
+                    break
+            with pytest.raises(ProcessLookupError):
+                os.kill(proc.pid, 0)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    def test_terminate_already_dead_is_noop(self):
+        proc = subprocess.Popen(EXIT_OK_CMD, start_new_session=True)
+        proc.wait(timeout=5)
+        _terminate(proc, grace=0.1)   # must not raise on a dead child
+        assert proc.poll() == 0
+
+
+# ------------------------------------------------ audit full scan (AB-FU-1)
+class TestAuditFullScan:
+    def test_last_pid_survives_long_tail(self, tmp_path):
+        """AC3: the pid lookup is a FULL scan — a live child whose launch
+        record fell out of any fixed tail window is still found."""
+        audit = AuditLog(tmp_path / "audit.jsonl")
+        audit.append(assignment_id=70, specialist="s", spec_hash="h",
+                     pid=4242, outcome="launched")
+        for i in range(500):   # pushes the launch beyond the old tail-400
+            audit.append(assignment_id=10_000 + i, specialist="s",
+                         spec_hash="h", pid=60_000 + i, outcome="launched")
+        assert audit.last_pid_for(70) == 4242
+        assert audit.last_pid_for(10_499) == 60_499
+
+    def test_last_record_for_assignment_wins(self, tmp_path):
+        audit = AuditLog(tmp_path / "audit.jsonl")
+        audit.append(assignment_id=71, specialist="s", spec_hash="h",
+                     pid=1111, outcome="launched")
+        audit.append(assignment_id=71, specialist="s", spec_hash="h",
+                     pid=None, outcome="sweep-failed")
+        assert audit.last_pid_for(71) is None
+        audit.append(assignment_id=71, specialist="s", spec_hash="h",
+                     pid=2222, outcome="launched")
+        assert audit.last_pid_for(71) == 2222
+
+    def test_missing_or_corrupt_lines(self, tmp_path):
+        audit = AuditLog(tmp_path / "audit.jsonl")
+        assert audit.last_pid_for(1) is None              # no file at all
+        audit.path.write_text("not json\n", encoding="utf-8")
+        assert audit.last_pid_for(1) is None              # corrupt line
+
+
+# ------------------------------------------------- finish retries (AB-FU-1)
+class TestFinishRetries:
+    def test_complete_5xx_persistent_ends_unreported(self, tmp_path, caplog):
+        """AC4: the board 5xx-ing every complete → exactly FINISH_RETRIES
+        attempts, then the child is dropped with outcome 'unreported'
+        (CRITICAL log); the board state stays running — sweep will own it."""
+        import logging
+        board = FakeBoard()
+        board.add_assignment(80, task_id="t-u")
+        board.complete_errors.add(80)
+        cfg = make_config(tmp_path, EXIT_OK_CMD)
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        with caplog.at_level(logging.CRITICAL, logger="assignment-poller"):
+            wait_for_reap(poller, board)
+        attempts = [c for c in board.calls if c[0] == "complete"]
+        assert len(attempts) == FINISH_RETRIES
+        assert board.assignments[80]["state"] == "running"   # never told
+        assert read_audit(cfg.audit_path)[-1]["outcome"] == "unreported"
+        assert any("was not told" in r.message for r in caplog.records)
+
+    def test_complete_5xx_transient_retries_through(self, tmp_path):
+        """AC4: two hiccups then success — the exit is reported on the
+        third attempt, assignment reaches done (a finished run is not
+        silently lost to transient board errors)."""
+        board = FakeBoard()
+        board.add_assignment(81, task_id="t-v")
+        board.complete_flaky[81] = 2
+        cfg = make_config(tmp_path, EXIT_OK_CMD)
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        wait_for_reap(poller, board)
+        attempts = [c for c in board.calls if c[0] == "complete"]
+        assert len(attempts) == 3
+        assert board.assignments[81]["state"] == "done"
+        assert read_audit(cfg.audit_path)[-1]["outcome"] == "complete"
+
+    def test_fail_5xx_persistent_ends_unreported(self, tmp_path):
+        board = FakeBoard()
+        board.add_assignment(82)
+        board.fail_errors.add(82)
+        cfg = make_config(tmp_path, EXIT_1_CMD)
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        wait_for_reap(poller, board)
+        attempts = [c for c in board.calls if c[0] == "fail"]
+        assert len(attempts) == FINISH_RETRIES
+        assert board.assignments[82]["state"] == "running"
+        assert read_audit(cfg.audit_path)[-1]["outcome"] == "unreported"
+
+
+# --------------------------------------------------- launch errors (AB-FU-1)
+class TestLaunchErrors:
+    def test_spawn_oserror_fails_assignment_with_reason(self, tmp_path):
+        """AC4: Popen OSError (missing binary) → assignment FAILed with the
+        reason, audit launch-error with pid=None, no child supervised."""
+        board = FakeBoard()
+        board.add_assignment(83)
+        cfg = make_config(tmp_path, ["/nonexistent/harness-binary"])
+        poller = make_poller(cfg, board)
+        poller.poll_once()                       # must not raise
+        fail = next(c for c in board.calls if c[0] == "fail")
+        assert fail[1] == 83
+        assert fail[2].startswith("launch failed:")
+        assert "nonexistent" in fail[2]
+        assert fail[3] == board.tokens[83]       # claim_token auth
+        assert board.assignments[83]["state"] == "failed"
+        assert not poller.active_assignment_ids
+        audit = read_audit(cfg.audit_path)
+        assert audit[-1]["outcome"] == "launch-error"
+        assert audit[-1]["pid"] is None
+
+    def test_brokenpipe_on_stdin_write_is_survived(self, tmp_path,
+                                                   monkeypatch):
+        """AC4: BrokenPipe while feeding the envelope to a child that died
+        instantly is swallowed — the exit code mapping still completes the
+        assignment (deterministic injection: stdin proxy raises)."""
+        broken = {"hit": False}
+
+        class _BrokenStdin:
+            def __init__(self, real):
+                self._real = real
+
+            def write(self, data):
+                broken["hit"] = True
+                raise BrokenPipeError("child closed stdin before reading")
+
+            def close(self):
+                if self._real is not None:
+                    self._real.close()
+
+        class StdinBreakerPopen(subprocess.Popen):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                real = self.stdin
+                self.stdin = _BrokenStdin(real)   # type: ignore[assignment]
+
+        monkeypatch.setattr(subprocess, "Popen", StdinBreakerPopen)
+        board = FakeBoard()
+        board.add_assignment(84)
+        cfg = make_config(tmp_path, EXIT_OK_CMD)   # stdin delivery
+        poller = make_poller(cfg, board)
+        poller.poll_once()                          # must not raise
+        assert broken["hit"]                        # path really exercised
+        wait_for_reap(poller, board)
+        assert board.assignments[84]["state"] == "done"
+        assert read_audit(cfg.audit_path)[-1]["outcome"] == "complete"
 
 
 # ---------------------------------------------------------------- BoardClient
