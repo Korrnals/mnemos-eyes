@@ -42,6 +42,7 @@ from .store import (
     AssignmentError,
     AssignmentNotFoundError,
     AssignmentTokenError,
+    REAP_QUEUED_AFTER_S,
     REPORT_KINDS,
     Store,
     TASK_STATUSES,
@@ -191,6 +192,74 @@ async def _profile_cache_refresher() -> None:
             pass
 
 
+# ------------------------------------ assignment reaper (ARCH-7, phase 3)
+# ADR 0009 §10: in-process wall-clock reaper for stuck assignments.
+# claimed without a start > 10 min, or running without a heartbeat
+# > 30 min → expired (task → blocked) + notification + SSE
+# assignment.expired (ui-contract §11). The same tick notices stagnant
+# queued assignments (> 30 min, notification only — cancelling stays the
+# owner's call). Deadlines live in store.py (REAP_* constants).
+_REAPER_INTERVAL_S = 60.0
+_REAPER_START_STAGGER_S = 30.0   # never tick in lockstep with the loops above
+_reaper_log = logging.getLogger("vesmaro.reaper")
+
+
+def _assignment_reaper_tick() -> dict[str, int]:
+    """One synchronous reaper pass — no sleeps, directly testable.
+
+    Expiry reuses finish_assignment(outcome='expired'): terminal state +
+    in-progress → blocked column mapping + audit event, identical to the
+    API paths (the 409 a poller then gets on heartbeat is the kill
+    signal). Races with a concurrent API transition (complete/fail/
+    cancel/delete) surface as AssignmentError and skip the row; the next
+    tick re-scans from stored state.
+    """
+    expired = stagnation_notified = 0
+    for row in store.stale_assignments():
+        try:
+            a, task, moved_from, _moved_to = store.finish_assignment(
+                row["id"], "expired", note=row["reap_reason"])
+        except AssignmentError as exc:
+            _reaper_log.info("reaper skipped assignment id=%s: %s",
+                             row["id"], exc)
+            continue
+        if moved_from and task is not None:
+            _broadcast({"kind": "task.moved", "task": task})
+        _notify_and_broadcast(
+            "work", f"{a['task_id']}: назначение истекло (reaper)",
+            row["reap_reason"], a["task_id"],
+            {"kind": "assignment.expired",
+             "assignment": _assignment_public(a), "task_id": a["task_id"]})
+        _reaper_log.info("reaper expired assignment id=%s task=%s reason=%s",
+                         a["id"], a["task_id"], row["reap_reason"])
+        expired += 1
+    for row in store.stagnant_queued_assignments():
+        message = (f"assignment #{row['id']} в queued дольше "
+                   f"{int(REAP_QUEUED_AFTER_S // 60)} мин — poller не забирает")
+        if store.notification_exists(row["task_id"], message):
+            continue
+        _notify_and_broadcast(
+            "work", f"{row['task_id']}: назначение зависло в очереди",
+            message, row["task_id"])
+        _reaper_log.info("reaper stagnation notice assignment id=%s task=%s",
+                         row["id"], row["task_id"])
+        stagnation_notified += 1
+    return {"expired": expired, "stagnation_notified": stagnation_notified}
+
+
+async def _assignment_reaper() -> None:
+    """Background loop (pattern: _profile_cache_refresher). A tick failure
+    is logged with the traceback and never kills the loop (АРХКОМ-5: the
+    except-pass anti-pattern stays out)."""
+    await asyncio.sleep(_REAPER_START_STAGGER_S)
+    while True:
+        try:
+            _assignment_reaper_tick()
+        except Exception:
+            _reaper_log.exception("assignment reaper tick failed")
+        await asyncio.sleep(_REAPER_INTERVAL_S)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # One-shot reports backfill (BE-7 wave) — strictly opt-in via env so a
@@ -206,9 +275,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # AGG-1: inbox scan starts right after boot (non-blocking) and repeats
     # every 5 min inside the task; errors are absorbed in the loop.
     inbox_task = asyncio.create_task(inbox_background_refresher(registry, store))
+    # ARCH-7 (ADR 0009 §10): assignment reaper — starts staggered (~30 s)
+    # so it never ticks in lockstep with the two loops above.
+    reaper_task = asyncio.create_task(_assignment_reaper())
     yield
     task.cancel()
     inbox_task.cancel()
+    reaper_task.cancel()
 
 
 COLUMN_RU = {
