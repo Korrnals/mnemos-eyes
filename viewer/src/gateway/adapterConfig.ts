@@ -73,11 +73,14 @@ export function adapterEndpointLabel(): string {
 }
 
 /**
- * Router mount path for the SPA (ADR 0011: the app lives at `/app`). Derived
- * from the Vite base so dev ("/") and production ("/app/") stay in sync with
- * a single knob; `undefined` lets React Router use its default root mount.
+ * Router mount path for the SPA. Phase 4 serves the app at the root `/`
+ * (the legacy board lives at /board), while the asset base stays `/app/`
+ * — so the basename must follow WHERE THE PAGE IS OPENED, not the build
+ * base: at `/` (or any non-/app path) React Router mounts at the root;
+ * under `/app` (direct legacy links before the 302) it keeps the prefix.
  */
 export function routerBasename(baseUrl: string): string | undefined {
-  const trimmed = baseUrl.replace(/\/+$/, "");
-  return trimmed === "" ? undefined : trimmed;
+  void baseUrl; // kept for signature stability; runtime location wins
+  if (typeof window === "undefined") return undefined;
+  return window.location.pathname.startsWith("/app") ? "/app" : undefined;
 }
