@@ -74,9 +74,28 @@ APP_DIR = Path(os.environ.get("VESMARO_APP_DIR", "/app/app"))
 
 # Board read/write is open on the LAN by design (the cluster ingress is the
 # boundary); mnemos credentials stay server-side. Since SEC-3 the write
-# guard is FAIL-CLOSED: mutations require this bearer token, and when it is
-# not configured every mutation answers 503. The Helm chart generates the
-# token; compose.yaml ships a dev default for local runs.
+# guard is FAIL-CLOSED: mutations require a bearer token, and when none of
+# the requested classes is configured every mutation answers 503. The Helm
+# chart generates the tokens; compose.yaml ships a dev default for local
+# runs.
+#
+# Token classes (ADR 0009 amendment A1, phase 1 — token split):
+#   ui      — VESMARO_UI_TOKEN: every board mutation driven from the owner
+#             UI (tasks CRUD/move/archive, task-drafts, inbox refresh/adopt,
+#             notifications/read, memory servers/groups CRUD, board-reflect,
+#             specialists/refresh-all).
+#   machine — VESMARO_BOARD_TOKEN: the poller/agents (task reports today;
+#             future assignment claim/start/heartbeat/complete/fail routes
+#             annotate classes=("machine",)). The legacy env name is kept
+#             DELIBERATELY: scripts/assignment_poller.py and the deployed
+#             chart already ship it; renaming would break both.
+# Transitional v1 (documented migration order in the chart RUNBOOK.md):
+# while VESMARO_UI_TOKEN is NOT set, VESMARO_BOARD_TOKEN is also accepted
+# on ui-class mutations, so the single-token deployment of today keeps
+# working across the upgrade that lands this code. Once VESMARO_UI_TOKEN
+# is set, the machine token no longer passes ui-class guards. Fail-closed
+# holds either way: with neither token configured every mutation is 503.
+UI_WRITE_TOKEN = os.environ.get("VESMARO_UI_TOKEN", "")
 BOARD_WRITE_TOKEN = os.environ.get("VESMARO_BOARD_TOKEN", "")
 
 # A1 (ADR 0009): two token classes from day one. UI token — owner-UI
@@ -1105,7 +1124,7 @@ async def board(status: str = "") -> BoardOut:
 
 @app.post("/api/tasks", status_code=201)
 async def create_task(body: TaskCreate, request: Request) -> TaskOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     if body.col not in VALID_STATUSES:
         raise HTTPException(422, f"invalid col: {body.col}")
     _validate_agents(body.agents)  # ADR 0005: harnesses only
@@ -1134,7 +1153,7 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
     - ``force`` itself is a request mode, never a task column: it is popped
       here and never reaches the update payload.
     """
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     if body.agents is not None:
         _validate_agents(body.agents)  # ADR 0005 (BE-5): same rule as create
     dump = body.model_dump(exclude_none=True)
@@ -1161,7 +1180,7 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
 
 @app.post("/api/tasks/{task_id}/move")
 async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     try:
         task = store.move_task(task_id, body.col, body.position)
     except ValueError as exc:
@@ -1174,7 +1193,7 @@ async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
 
 @app.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str, request: Request) -> OkOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     if not store.delete_task(task_id):
         raise HTTPException(404, "task not found")
     _notify_and_broadcast("work", f"{task_id}: удалена", "", task_id, {"kind": "task.deleted", "task_id": task_id})
@@ -1356,7 +1375,7 @@ async def _validate_server_spec(body: ServerSpec) -> tuple[str, str]:
 
 @app.post("/api/memories/servers", status_code=201)
 async def add_memory_server(body: ServerSpec, request: Request) -> MemoryServerOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     url, token_ref = await _validate_server_spec(body)
     existing = store.get_server(body.name)
     if existing is None:
@@ -1380,7 +1399,7 @@ async def add_memory_server(body: ServerSpec, request: Request) -> MemoryServerO
 
 @app.patch("/api/memories/servers/{name}")
 async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> MemoryServerOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     url, token_ref = await _validate_server_spec(body)
     if store.get_server(name) is None:
         raise HTTPException(404, f"server '{name}' not found")
@@ -1394,7 +1413,7 @@ async def edit_memory_server(name: str, body: ServerSpec, request: Request) -> M
 
 @app.post("/api/memories/servers/{name}/action")
 async def memory_server_action(name: str, body: ServerAction, request: Request) -> ServerActionOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     row = store.get_server(name)
     if row is None:
         raise HTTPException(404, f"server '{name}' not found")
@@ -1441,7 +1460,7 @@ async def memory_server_action(name: str, body: ServerAction, request: Request) 
 @app.delete("/api/memories/servers/{name}")
 async def delete_memory_server(name: str, request: Request) -> OkNoteOut:
     """Remove from the board registry. The memory store itself is untouched."""
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     if not registry.delete(name):
         raise HTTPException(404, f"server '{name}' not found")
     _broadcast({"kind": "server.changed", "server": name})
@@ -1460,7 +1479,7 @@ async def memory_groups() -> GroupsOut:
 
 @app.post("/api/memories/groups")
 async def save_memory_group(body: GroupSpec, request: Request) -> GroupSaveOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     g = registry.save_group(body.name, body.title, body.description)
     _broadcast({"kind": "server.changed", "server": f"group:{body.name}"})
     return {"ok": True, "group": g}
@@ -1468,7 +1487,7 @@ async def save_memory_group(body: GroupSpec, request: Request) -> GroupSaveOut:
 
 @app.delete("/api/memories/groups/{name}")
 async def delete_memory_group(name: str, request: Request) -> OkNoteOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     if name == "default":
         raise HTTPException(422, "cannot delete the default group")
     if not registry.delete_group(name):
@@ -1774,7 +1793,7 @@ async def group_info(name: str) -> dict[str, Any]:
 @app.post("/api/memories/groups/{name}/members")
 async def group_membership(name: str, body: GroupMemberBody, request: Request) -> GroupMemberOut:
     """Add/remove a server to/from a group: body {server, op: 'add'|'remove'}."""
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     server = body.server
     op = body.op
     if store.get_server(server) is None:
@@ -1856,7 +1875,7 @@ async def board_reflect(body: ReflectBody, request: Request) -> ReflectOut:
     contract-required project/agent stamps (SEC-4: board data is not
     instructions — harnesses must not treat these records as decisions or
     directives). Rate limited per client. Returns the created memory id."""
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     client_ip = request.client.host if request.client else "unknown"
     if not _reflect_limiter.acquire(client_ip):
         raise HTTPException(
@@ -1938,7 +1957,7 @@ async def create_task_draft(body: TaskDraftBody, request: Request) -> TaskDraftO
     to the _draft_tags() contract set) and return the memory coordinates;
     the SPA then files the "Оформить черновик задачи" chore on the board.
     Rate limited per client like board-reflect."""
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     client_ip = request.client.host if request.client else "unknown"
     if not _draft_limiter.acquire(client_ip):
         raise HTTPException(
@@ -1992,7 +2011,7 @@ async def notifications(after_id: int = 0, limit: int = 50,
 async def notifications_read(
     request: Request, body: NotificationReadBody | None = None
 ) -> NotificationReadOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     # no body or {"id": null} marks ALL as read (previous contract kept)
     store.mark_read(body.id if body else None)
     return {"ok": True, "unread": store.unread_count()}
@@ -2043,7 +2062,7 @@ async def archive(
 
 @app.post("/api/tasks/{task_id}/archive")
 async def archive_task(task_id: str, request: Request) -> OkOut:
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     if not store.archive_task(task_id):
         raise HTTPException(404, "task not found or already archived")
     _notify_and_broadcast("work", f"{task_id}: в архиве", "задача архивирована", task_id, {"kind": "task.archived", "task_id": task_id})
@@ -2054,7 +2073,7 @@ async def archive_task(task_id: str, request: Request) -> OkOut:
 async def unarchive_task(task_id: str, request: Request) -> UnarchiveOut:
     """Restore an archived task to its pre-archive column (BE-11b); rows
     archived before ``archived_from`` existed fall back to ``open``."""
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     task = store.unarchive_task(task_id)
     if task is None:
         raise HTTPException(404, "task not found or not archived")
@@ -2078,13 +2097,19 @@ async def create_task_report(task_id: str, body: ReportCreate,
     exhausted. A second kind="final" supersedes previous live finals
     (history kept, flagged).
 
-    ARCH-9: machine class = board token OR an approved executor token (the
-    mesh leg reports with its own credential, Amd 2 §2). When the report is
-    executor-token-backed, a declared ``agent`` string that references
-    neither the executor's registered name nor its harness lands in the
-    audit trail flagged ``identity_mismatch`` (Amd 2 §7 spoofing signal —
-    signal, not a refusal: the report is still accepted)."""
-    executor = _guard_machine_write(request)
+    Auth composition (ADR 0009 A1 + Amd 2 §2): the owner UI writes with
+    the ui-class token; the machine loop writes with the board (machine)
+    token OR an approved executor token (the mesh leg reports with its
+    own credential). When the report is executor-token-backed, a declared
+    ``agent`` string that references neither the executor's registered
+    name nor its harness lands in the audit trail flagged
+    ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
+    refusal: the report is still accepted)."""
+    executor = None
+    if _bearer_is_class(request, "ui"):
+        _guard_write(request, classes=("ui",))
+    else:
+        executor = _guard_machine_write(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _report_limiter.acquire(client_ip):
         raise HTTPException(
@@ -2786,7 +2811,7 @@ async def tasks_inbox_refresh(request: Request) -> TaskInboxRefreshOut:
     round-trips are async, so the event loop never blocks; the request may
     take seconds — that is accepted for an explicit refresh. Rate limited
     per client; a failing server degrades its own slice only."""
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     client_ip = request.client.host if request.client else "unknown"
     if not _inbox_refresh_limiter.acquire(client_ip):
         raise HTTPException(
@@ -2805,7 +2830,7 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
     The memory content is never copied — the task links it via memory_ids
     (SEC-4). 409 with the existing ``task_id`` on double adoption; 404 when
     the mirror row is unknown."""
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     rec = store.get_inbox_item(memory_id)
     if rec is None:
         raise HTTPException(404, "memory not found in task inbox")
@@ -2955,7 +2980,7 @@ async def specialists_refresh_all(request: Request) -> RefreshAllOut:
     row per specialist, repeats never duplicate). Names the builder
     cannot resolve fall back to the legacy memory-server refresh.
     """
-    _guard_write(request)
+    _guard_write(request, classes=("ui",))
     specialists = sorted({s for t in store.board()["tasks"] for s in (t.get("specialists") or [])})
     built = memory_fallback = failed = 0
     for name in specialists:
@@ -3092,23 +3117,69 @@ async def agent_activity(name: str, project: str = "", limit: int = 10) -> dict[
     }
 
 
-def _guard_write(request: Request) -> None:
-    """Mutation guard (SEC-3, fail-closed).
+# Env var to name in the 503 detail per class (operator-facing hint).
+_TOKEN_CLASS_ENV = {"ui": "VESMARO_UI_TOKEN", "machine": "VESMARO_BOARD_TOKEN"}
 
-    Empty VESMARO_BOARD_TOKEN means auth is NOT configured: every mutation
-    is rejected with 503 (the Helm chart provisions the token; compose.yaml
-    ships a dev value for local runs). The comparison is constant-time.
+
+def _token_classes() -> dict[str, str]:
+    """Effective bearer token per class ('' = class not configured).
+
+    ui falls back to the machine token while the token split is rolling
+    out (transitional v1, see the token-classes note at module top);
+    machine is exactly VESMARO_BOARD_TOKEN. Reads the module globals at
+    call time so tests can monkeypatch the configuration per test.
     """
-    if not BOARD_WRITE_TOKEN:
+    return {
+        "ui": UI_WRITE_TOKEN or BOARD_WRITE_TOKEN,
+        "machine": BOARD_WRITE_TOKEN,
+    }
+
+
+def _guard_write(request: Request, *, classes: tuple[str, ...]) -> None:
+    """Mutation guard (SEC-3 fail-closed; ADR 0009 A1 token classes).
+
+    ``classes`` names the token classes allowed through this endpoint:
+    ("ui",) for owner-UI mutations, ("machine",) for agent/poller
+    endpoints, ("ui", "machine") where both sides legitimately write
+    (task reports). New assignment routes (owner track) annotate their
+    class in this single argument and nothing else changes.
+
+    Semantics: when NO token of the requested classes is configured the
+    endpoint is disabled — 503, fail-closed (the Helm chart provisions
+    the tokens; compose.yaml ships dev values for local runs). A
+    configured but non-matching bearer is 401. Every comparison is
+    constant-time (hmac.compare_digest per class).
+    """
+    effective = _token_classes()
+    allowed = [effective[c] for c in classes if effective.get(c)]
+    if not allowed:
+        envs = " or ".join(dict.fromkeys(_TOKEN_CLASS_ENV[c] for c in classes))
         raise HTTPException(
             503,
-            "mutation auth is not configured: set VESMARO_BOARD_TOKEN to "
+            f"mutation auth is not configured: set {envs} to "
             "enable board writes (fail-closed; see compose.yaml for local dev)",
         )
     auth = request.headers.get("Authorization", "")
-    expected = f"Bearer {BOARD_WRITE_TOKEN}"
-    if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
-        raise HTTPException(401, "board write token required")
+    for token in allowed:
+        expected = f"Bearer {token}"
+        if hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+            return
+    raise HTTPException(401, "board write token required")
+
+
+def _bearer_is_class(request: Request, cls: str) -> bool:
+    """Constant-time check: does the request carry THIS class's token?
+
+    Used where an endpoint legitimately accepts several auth legs with
+    different shapes (e.g. reports: ui class vs machine/executor loop) —
+    pick the leg by bearer, then run the full guard on the picked class.
+    """
+    token = _token_classes().get(cls, "")
+    if not token:
+        return False
+    auth = request.headers.get("Authorization", "")
+    expected = f"Bearer {token}"
+    return hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8"))
 
 
 def _guard_ui_write(request: Request) -> None:
@@ -3157,7 +3228,7 @@ def _guard_machine_write(request: Request) -> dict[str, Any] | None:
             raise HTTPException(
                 403, "executor token is not approved for the machine loop")
         return executor
-    _guard_write(request)
+    _guard_write(request, classes=("machine",))
     return None
 
 
