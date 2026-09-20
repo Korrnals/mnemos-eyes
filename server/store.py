@@ -144,6 +144,19 @@ class ExecutorStateError(ExecutorError):
     re-registration is the path (kill-switch semantics, Amd 2 §5)."""
 
 
+class ExecutorQuotaError(ExecutorError):
+    """Open-pending registry quota exhausted (HTTP 429 upstream — a
+    resource guard, same class as rate limits, not a conflict)."""
+
+
+# F5 (security review PR #18): a machine-token holder can mint pending
+# registrations without a total cap (the 10/60s/IP limiter bounds pace,
+# not volume). Cap the OPEN pending backlog; approving/revoking/deleting
+# frees quota. Constant, not config — it is an abuse ceiling, not a
+# deployment knob.
+EXECUTOR_PENDING_CAP = 20
+
+
 def presence_from_last_seen(last_seen: str) -> str:
     """Computed presence (Amd 2 §6): ``online`` when last_seen is younger
     than PRESENCE_ONLINE_S, ``stale`` up to PRESENCE_STALE_S, ``offline``
@@ -1086,6 +1099,19 @@ class Store:
         return a
 
     @staticmethod
+    def _executor_transport(db: sqlite3.Connection, executor_id: str) -> str:
+        """Transport tag for assignment audit events (Amd 2 §7: executor_id
+        + transport ride together). Empty for an empty id or an executor
+        deleted from the registry (attribution strings outlive rows —
+        DELETE deliberately keeps assignments untouched)."""
+        if not executor_id:
+            return ""
+        row = db.execute(
+            "SELECT transport FROM executors WHERE id=?",
+            (executor_id,)).fetchone()
+        return row["transport"] if row else ""
+
+    @staticmethod
     def _claim_token_matches(stored: str | None, token: str | None) -> bool:
         """Constant-time claim-token comparison (correctness boundary)."""
         if not stored or not token:
@@ -1282,6 +1308,10 @@ class Store:
                 "assignment_id": assignment_id,
                 "claimed_by": claimed_by.strip()[:120],
                 "executor_id": effective_executor[:120],
+                # Amd 2 §7 (PR #18 F6b): executor identity rides with its
+                # transport on assignment events
+                "transport": self._executor_transport(
+                    db, effective_executor[:120]),
             })
             # Task column move, same transaction, only from 'open': the ADR
             # mapping is claim → open→in-progress (WF-1 §4.2 — an agent may
@@ -1394,14 +1424,26 @@ class Store:
     def finish_assignment(self, assignment_id: int, outcome: str,
                           note: str = "", *, token: str | None = None,
                           claimed_by: str | None = None,
+                          token_executor_id: str | None = None,
+                          allow_claimed_by_fallback: bool = False,
                           ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None, str | None]:
         """Terminal transition + task column mapping.
 
-        Token policy (correctness boundary, not security):
+        Token policy (correctness boundary + ARCH-9 identity gates):
         - complete: claim_token required, must match;
-        - fail: claim_token OR a claimed_by identity match (the poller's
-          recovery sweep fails its own claimed|running records after a
-          restart, when tokens are gone);
+        - fail (security review PR #18, F1): the claimed_by string is
+          SELF-ASSERTED and openly readable via GET /api/assignments —
+          an approved executor must not be able to fail a foreign
+          assignment by declaring the victim's name. Accepted:
+          (a) a matching claim_token; OR
+          (b) the token-BACKED executor identity equals the assignment's
+              claimed_by_executor (``token_executor_id`` from the route —
+              the mesh-leg recovery path: the executor lost its
+              claim_token but still holds its secret); OR
+          (c) a claimed_by string match — ONLY for the board-token class
+              (``allow_claimed_by_fallback``; the laptop poller's
+              recovery sweep authenticates with the board token, which
+              is board-class trust, and has no executor secret);
         - cancel: no claim token — the owner's UI token is the auth (route);
         - expired: in-process reaper (phase 3), no token by construction.
 
@@ -1425,10 +1467,14 @@ class Store:
                 raise AssignmentTokenError("claim_token mismatch")
             if outcome == "fail" and not (
                     self._claim_token_matches(row["claim_token"], token)
-                    or (claimed_by and row["claimed_by"] == claimed_by.strip())):
+                    or (token_executor_id
+                        and token_executor_id == row["claimed_by_executor"])
+                    or (allow_claimed_by_fallback and claimed_by
+                        and row["claimed_by"] == claimed_by.strip())):
                 raise AssignmentTokenError(
-                    "claim_token or claimed_by match required to fail "
-                    "an assignment")
+                    "claim_token, token-backed executor identity, or "
+                    "board-class claimed_by match required to fail an "
+                    "assignment")
             if row["state"] not in allowed_states:
                 raise AssignmentConflictError(
                     f"assignment {assignment_id} is {row['state']}; "
@@ -1446,6 +1492,10 @@ class Store:
             self._log(db, f"assignment.{target}", row["task_id"], {
                 "assignment_id": assignment_id, "outcome": outcome,
                 "by": (claimed_by or row["claimed_by"] or "")[:120],
+                "executor_id": row["claimed_by_executor"][:120],
+                # Amd 2 §7 (PR #18 F6b)
+                "transport": self._executor_transport(
+                    db, row["claimed_by_executor"]),
             })
             # Sibling guard: the column mapping belongs to the task's LAST
             # active assignment. The ≤1 create-side invariant keeps this a
@@ -1595,6 +1645,17 @@ class Store:
             return [dict(r) for r in db.execute(
                 "SELECT * FROM executors ORDER BY name").fetchall()]
 
+    def pending_executors_by_host(self, host: str) -> int:
+        """Open pending registrations for one host (PR #18 F5): the owner
+        notification fires for the FIRST pending registration per host —
+        later ones from the same host are audit-only (spam guard). The
+        audit event (executor.registered) is always written."""
+        with self._lock, self._conn() as db:
+            return db.execute(
+                "SELECT COUNT(*) AS n FROM executors "
+                "WHERE state='pending' AND host=?",
+                (host,)).fetchone()["n"]
+
     def register_executor(self, name: str, harness: str, host: str = "",
                           transport: str = "local-poll",
                           version: str = "") -> tuple[dict[str, Any], str]:
@@ -1608,7 +1669,10 @@ class Store:
         Raises:
             ValueError — empty name / unknown harness / unknown transport
                          (HTTP 422 upstream);
-            ExecutorConflictError — name already registered (409).
+            ExecutorConflictError — name already registered (409);
+            ExecutorQuotaError — open-pending backlog at EXECUTOR_PENDING_CAP
+                         (429; PR #18 F5 — pace limits bound requests, not
+                         total volume; approve/revoke/delete frees quota).
         """
         name = name.strip()[:120]
         if not name:
@@ -1622,6 +1686,14 @@ class Store:
         secret_hash = hashlib.sha256(secret.encode("utf-8")).hexdigest()
         now = _now()
         with self._lock, self._conn() as db:
+            pending = db.execute(
+                "SELECT COUNT(*) AS n FROM executors WHERE state='pending'"
+            ).fetchone()["n"]
+            if pending >= EXECUTOR_PENDING_CAP:
+                raise ExecutorQuotaError(
+                    f"open pending executor registrations are capped at "
+                    f"{EXECUTOR_PENDING_CAP} — approve, revoke or delete "
+                    "existing ones before registering more")
             if db.execute("SELECT 1 FROM executors WHERE name=?",
                           (name,)).fetchone():
                 raise ExecutorConflictError(

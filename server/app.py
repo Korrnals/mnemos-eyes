@@ -47,6 +47,7 @@ from .store import (
     ExecutorConflictError,
     ExecutorError,
     ExecutorNotFoundError,
+    ExecutorQuotaError,
     ExecutorStateError,
     PRESENCE_ONLINE_S,
     PRESENCE_STALE_S,
@@ -2362,8 +2363,11 @@ async def complete_assignment(assignment_id: int,
     in-progress → resolved (acceptance resolved → done stays with the
     owner). ARCH-9: machine class = board token OR an approved executor
     token (claim_token stays the correctness boundary; the executor loop
-    keeps one credential end-to-end, Amd 2 §2)."""
-    _guard_machine_write(request)
+    keeps one credential end-to-end, Amd 2 §2). PR #18 F3: the final
+    report's declared agent string (the claim identity) runs through the
+    same identity_mismatch check as intermediate reports — from the
+    token-BACKED executor identity, not the self-assertion."""
+    executor = _guard_machine_write(request)
     _assignment_rate_limit(request, ui=False)
     final = body.final_report.strip()
     report: dict[str, Any] | None = None
@@ -2374,7 +2378,9 @@ async def complete_assignment(assignment_id: int,
             try:
                 added = store.add_report(
                     a["task_id"], final, "final",
-                    agent=(a.get("claimed_by") or ""))
+                    agent=(a.get("claimed_by") or ""),
+                    identity_mismatch=_report_identity_mismatch(
+                        executor, a.get("claimed_by") or ""))
             except Exception:
                 # The terminal transition is already committed; a report
                 # failure must not turn a done assignment into a client 500
@@ -2400,18 +2406,23 @@ async def complete_assignment(assignment_id: int,
 @app.post("/api/assignments/{assignment_id}/fail")
 async def fail_assignment(assignment_id: int, body: AssignmentFailBody,
                           request: Request) -> AssignmentFinishedOut:
-    """Fail an execution attempt (machine class). Auth: claim_token OR a
-    claimed_by identity match — the poller's recovery sweep fails its own
-    claimed|running records after a restart, when tokens are gone. Task
-    maps in-progress → blocked. ARCH-9: board token OR approved executor
-    token (Amd 2 §2)."""
-    _guard_machine_write(request)
+    """Fail an execution attempt (machine class). Auth (PR #18 F1 — the
+    claimed_by string is self-asserted and openly readable, so it is no
+    longer a standalone credential for executor tokens): a matching
+    claim_token; OR the token-BACKED executor identity equal to the
+    assignment's claimed_by_executor (mesh-leg recovery: the secret
+    outlives the claim_token); OR a claimed_by string match — board-token
+    class only (the laptop poller's recovery sweep, board-class trust).
+    Task maps in-progress → blocked."""
+    executor = _guard_machine_write(request)
     _assignment_rate_limit(request, ui=False)
     try:
         a, task, moved_from, moved_to = store.finish_assignment(
             assignment_id, "fail", note=body.reason,
             token=body.claim_token or None,
-            claimed_by=body.claimed_by.strip() or None)
+            claimed_by=body.claimed_by.strip() or None,
+            token_executor_id=(executor or {}).get("id"),
+            allow_claimed_by_fallback=executor is None)
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
@@ -2476,9 +2487,11 @@ _assignment_heartbeat_limiter = RateLimiter(
 
 def _executor_http(exc: ExecutorError) -> HTTPException:
     """Map store executor-registry errors onto HTTP: 404 unknown id /
-    409 duplicate name or illegal state transition."""
+    409 duplicate name or illegal state transition / 429 pending quota."""
     if isinstance(exc, ExecutorNotFoundError):
         return HTTPException(404, str(exc))
+    if isinstance(exc, ExecutorQuotaError):
+        return HTTPException(429, str(exc))
     if isinstance(exc, (ExecutorConflictError, ExecutorStateError)):
         return HTTPException(409, str(exc))
     return HTTPException(409, str(exc))  # defensive: unknown subclass → 409
@@ -2495,7 +2508,12 @@ async def register_executor(body: ExecutorRegister,
     the plaintext appears exactly once, in this response (claim_token
     pattern, long-lived). Capabilities are owner-declared via PATCH, never
     accepted at registration. 422 unknown harness/transport; 409 duplicate
-    name; rate 10/60 s per client."""
+    name; 429 rate 10/60 s per client AND a total cap on OPEN pending
+    registrations (PR #18 F5: pace limits bound requests, not volume —
+    approving/revoking/deleting frees quota). The owner NOTIFICATION fires
+    for the first open pending registration per host; later ones from the
+    same host are audit + SSE only (spam guard — the audit event is
+    always written)."""
     _guard_write(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _executor_register_limiter.acquire(client_ip):
@@ -2514,12 +2532,16 @@ async def register_executor(body: ExecutorRegister,
         raise HTTPException(422, str(exc)) from exc
     except ExecutorError as exc:
         raise _executor_http(exc) from exc
-    _notify_and_broadcast(
-        "system", f"Исполнитель {row['name']} зарегистрирован",
-        "ожидает подтверждения владельца", None,
-        {"kind": "executor.registered", "executor": _executor_public(row),
-         "prev_state": None, "state": row["state"]},
-    )
+    event = {"kind": "executor.registered",
+             "executor": _executor_public(row),
+             "prev_state": None, "state": row["state"]}
+    if store.pending_executors_by_host(row.get("host") or "") <= 1:
+        _notify_and_broadcast(
+            "system", f"Исполнитель {row['name']} зарегистрирован",
+            "ожидает подтверждения владельца", None, event,
+        )
+    else:
+        _broadcast(event)
     return {"ok": True, "executor": _executor_public(row),
             "executor_secret": secret}
 
@@ -3139,22 +3161,37 @@ def _guard_machine_write(request: Request) -> dict[str, Any] | None:
     return None
 
 
+def _identity_tokens(value: str) -> set[str]:
+    """Casefolded whole-token set of a self-asserted identity string
+    ('Laptop-Poller_1' → {'laptop', 'poller', '1'}). PR #18 F3: substring
+    matching is spoofable in both directions ('pi' hides inside
+    'copilot', a decorated 'evil-laptop-poller' hides 'laptop-poller');
+    only alphanumeric-run boundaries count."""
+    return {t for t in re.split(r"[^0-9a-z]+", (value or "").casefold()) if t}
+
+
 def _report_identity_mismatch(executor: dict[str, Any] | None,
                               agent: str) -> bool:
     """Amd 2 §7 spoofing signal: does the declared ``agent`` string
-    disagree with the token-backed executor? Cheap containment heuristic:
-    the string is consistent when it is empty (no self-assertion to
-    contradict) or references the executor's registered name or its
-    harness id; anything else is a mismatch. Only computable on
+    disagree with the token-backed executor? Consistent = the declared
+    whole-token set COVERS the executor's registered name tokens or its
+    harness tokens (casefolded); anything less is a mismatch. Empty
+    declaration = nothing to contradict = consistent. Only computable on
     executor-token requests — a board-token report carries no token-backed
-    identity to disagree with (flag stays False there)."""
+    identity to disagree with (flag stays False there). Signal, not a
+    gate: the report is still accepted; residual window — a decorated
+    string that fully contains the real name as whole tokens still
+    passes (contiguity is not enforced; the hard gate is claim)."""
     if not executor:
         return False
-    declared = (agent or "").strip()
+    declared = _identity_tokens(agent or "")
     if not declared:
         return False
-    return (executor["name"] not in declared
-            and executor["harness"] not in declared)
+    name_tokens = _identity_tokens(executor["name"])
+    harness_tokens = _identity_tokens(executor["harness"])
+    covers = ((name_tokens and name_tokens <= declared)
+              or (harness_tokens and harness_tokens <= declared))
+    return not covers
 
 
 # ------------------------------------------------------------------------ SSE

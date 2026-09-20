@@ -937,3 +937,244 @@ class TestIdentityMismatch:
               if e["kind"] == "task.report"
               and e["task_id"] == task["id"]][-1]
         assert "identity_mismatch" not in ev["payload"]
+
+
+class TestSecurityReviewPR18:
+    """PR #18 security-review fixes: F1 (fail identity gates, blocker),
+    F3 (token-boundary identity_mismatch + final report), F5 (pending
+    quota + notification spam guard), F6b (transport on assignment
+    audit events)."""
+
+    # ------------------------------------------------------------- F1
+    def test_f1_foreign_executor_cannot_fail_by_declared_name(
+            self, client, auth, make_task):
+        """BLOCKER regression: claimed_by is self-asserted and openly
+        readable — an approved executor must not fail a foreign claimed
+        assignment by declaring the victim's name (no claim_token, wrong
+        token identity → 403)."""
+        task = make_task(title="f1-k1")
+        victim, victim_secret = _make_executor(client, auth, "f1-k1-victim")
+        aid = client.post("/api/assignments", headers=auth, json={
+            "task_id": task["id"], "specialist": "gcw-tech-lead"}
+            ).json()["assignment"]["id"]
+        claimed = client.post(
+            f"/api/assignments/{aid}/claim", headers=_ex_headers(victim_secret),
+            json={"claimed_by": "victim-poller"}).json()
+        assert claimed["assignment"]["claimed_by"] == "victim-poller"
+
+        attacker, attacker_secret = _make_executor(client, auth, "f1-k1-attacker")
+        r = client.post(f"/api/assignments/{aid}/fail",
+                        headers=_ex_headers(attacker_secret),
+                        json={"reason": "hostile",
+                              "claimed_by": "victim-poller"})
+        assert r.status_code == 403, r.text
+        # the assignment is intact
+        item = next(i for i in client.get("/api/assignments").json()["items"]
+                    if i["id"] == aid)
+        assert item["state"] == "claimed"
+        assert victim["id"] != attacker["id"]
+
+    def test_f1_board_class_claimed_by_recovery_still_works(
+            self, client, auth, make_task):
+        """Recovery leg: the board-token poller sweep fails its own
+        claimed records by claimed_by match after a restart (claim_token
+        gone) — board-class trust keeps the string fallback."""
+        task = make_task(title="f1-k2")
+        aid = client.post("/api/assignments", headers=auth, json={
+            "task_id": task["id"], "specialist": "gcw-tech-lead"}
+            ).json()["assignment"]["id"]
+        client.post(f"/api/assignments/{aid}/claim", headers=auth,
+                    json={"claimed_by": "laptop-poller"})
+        r = client.post(f"/api/assignments/{aid}/fail", headers=auth,
+                        json={"reason": "recovery sweep: no live process",
+                              "claimed_by": "laptop-poller"})
+        assert r.status_code == 200, r.text
+        assert r.json()["assignment"]["state"] == "failed"
+
+    def test_f1_own_executor_token_recovery_leg(
+            self, client, auth, make_task):
+        """Mesh-leg recovery: the claiming executor lost its claim_token
+        but still holds its secret — token identity == claimed_by_executor
+        authorizes the fail."""
+        task = make_task(title="f1-k3")
+        ex, ex_secret = _make_executor(client, auth, "f1-k3-x")
+        aid = client.post("/api/assignments", headers=auth, json={
+            "task_id": task["id"], "specialist": "gcw-tech-lead"}
+            ).json()["assignment"]["id"]
+        client.post(f"/api/assignments/{aid}/claim",
+                    headers=_ex_headers(ex_secret),
+                    json={"claimed_by": "mesh-poller"})
+        r = client.post(f"/api/assignments/{aid}/fail",
+                        headers=_ex_headers(ex_secret),
+                        json={"reason": "executor restart, token lost"})
+        assert r.status_code == 200, r.text
+        assert r.json()["assignment"]["state"] == "failed"
+
+    def test_f1_correct_claim_token_still_fails(
+            self, client, auth, make_task):
+        """(a) survives: a matching claim_token fails regardless of class."""
+        task = make_task(title="f1-k4")
+        aid = client.post("/api/assignments", headers=auth, json={
+            "task_id": task["id"], "specialist": "gcw-tech-lead"}
+            ).json()["assignment"]["id"]
+        claimed = client.post(f"/api/assignments/{aid}/claim", headers=auth,
+                              json={"claimed_by": "p"}).json()
+        r = client.post(f"/api/assignments/{aid}/fail", headers=auth,
+                        json={"reason": "boom",
+                              "claim_token": claimed["claim_token"]})
+        assert r.status_code == 200, r.text
+
+    # ------------------------------------------------------------- F3
+    def test_f3_token_boundary_and_casefold(self, client, auth, make_task,
+                                            app_module):
+        task = make_task(title="f3-k1")
+        # harness 'pi': substring 'pi' inside 'copilot' must NOT count
+        ex, ex_secret = _register(client, auth, "f3-k1-x", harness="pi")
+        _approve(client, auth, ex["id"])
+        r = client.post(f"/api/tasks/{task['id']}/reports",
+                        headers=_ex_headers(ex_secret),
+                        json={"kind": "intermediate", "body": "b",
+                              "agent": "copilot"})
+        assert r.status_code == 201
+        ev = [e for e in app_module.store.events(limit=1000)
+              if e["kind"] == "task.report"
+              and e["task_id"] == task["id"]][-1]
+        assert ev["payload"]["identity_mismatch"] is True
+        # casefold: the executor name in any case covers the declaration
+        task2 = make_task(title="f3-k1b")
+        r = client.post(f"/api/tasks/{task2['id']}/reports",
+                        headers=_ex_headers(ex_secret),
+                        json={"kind": "intermediate", "body": "b",
+                              "agent": "F3-K1-X session"})
+        assert r.status_code == 201
+        ev = [e for e in app_module.store.events(limit=1000)
+              if e["kind"] == "task.report"
+              and e["task_id"] == task2["id"]][-1]
+        assert "identity_mismatch" not in ev["payload"]
+
+    def test_f3_final_report_in_complete_checked(self, client, auth,
+                                                 make_task, app_module):
+        task = make_task(title="f3-k2")
+        ex, ex_secret = _make_executor(client, auth, "f3-k2-x")
+        aid = client.post("/api/assignments", headers=auth, json={
+            "task_id": task["id"], "specialist": "gcw-tech-lead"}
+            ).json()["assignment"]["id"]
+        claimed = client.post(f"/api/assignments/{aid}/claim",
+                              headers=_ex_headers(ex_secret),
+                              json={"claimed_by": "not-the-executor-name"}
+                              ).json()
+        client.post(f"/api/assignments/{aid}/start",
+                    headers=_ex_headers(ex_secret),
+                    json={"claim_token": claimed["claim_token"]})
+        r = client.post(f"/api/assignments/{aid}/complete",
+                        headers=_ex_headers(ex_secret),
+                        json={"claim_token": claimed["claim_token"],
+                              "final_report": "done"})
+        assert r.status_code == 200, r.text
+        ev = [e for e in app_module.store.events(limit=1000)
+              if e["kind"] == "task.report"
+              and e["task_id"] == task["id"]][-1]
+        assert ev["payload"]["kind"] == "final"
+        assert ev["payload"]["identity_mismatch"] is True
+
+    def test_f3_final_report_consistent_not_flagged(self, client, auth,
+                                                    make_task, app_module):
+        task = make_task(title="f3-k3")
+        ex, ex_secret = _make_executor(client, auth, "f3-k3-x")
+        aid = client.post("/api/assignments", headers=auth, json={
+            "task_id": task["id"], "specialist": "gcw-tech-lead"}
+            ).json()["assignment"]["id"]
+        claimed = client.post(f"/api/assignments/{aid}/claim",
+                              headers=_ex_headers(ex_secret),
+                              json={"claimed_by": "f3-k3-x"}).json()
+        client.post(f"/api/assignments/{aid}/start",
+                    headers=_ex_headers(ex_secret),
+                    json={"claim_token": claimed["claim_token"]})
+        r = client.post(f"/api/assignments/{aid}/complete",
+                        headers=_ex_headers(ex_secret),
+                        json={"claim_token": claimed["claim_token"],
+                              "final_report": "done"})
+        assert r.status_code == 200
+        ev = [e for e in app_module.store.events(limit=1000)
+              if e["kind"] == "task.report"
+              and e["task_id"] == task["id"]][-1]
+        assert "identity_mismatch" not in ev["payload"]
+
+    # ------------------------------------------------------------- F5
+    def test_f5_pending_cap(self, client, auth, app_module, monkeypatch):
+        from server.store import EXECUTOR_PENDING_CAP
+        # pace limiter must not shadow the quota in this test
+        monkeypatch.setattr(
+            app_module, "_executor_register_limiter",
+            RateLimiter(limit=1000, window=60.0))
+        made = []
+        for i in range(EXECUTOR_PENDING_CAP):
+            r = client.post("/api/executors", headers=auth,
+                            json={"name": f"f5-cap-{i}", "harness": "zcode"})
+            assert r.status_code == 201, r.text
+            made.append(r.json()["executor"]["id"])
+        r = client.post("/api/executors", headers=auth,
+                        json={"name": "f5-cap-over", "harness": "zcode"})
+        assert r.status_code == 429
+        assert "capped" in r.json()["detail"]
+        # approving one frees quota
+        _approve(client, auth, made[0])
+        r = client.post("/api/executors", headers=auth,
+                        json={"name": "f5-cap-free", "harness": "zcode"})
+        assert r.status_code == 201, r.text
+
+    def test_f5_notification_first_pending_per_host(self, client, auth):
+        def _register_with_host(name: str, host: str):
+            r = client.post("/api/executors", headers=auth,
+                            json={"name": name, "harness": "zcode",
+                                  "host": host})
+            assert r.status_code == 201, r.text
+            return r.json()["executor"]
+
+        # notifications persist across the session client — count only
+        # the ones this test mints
+        before = client.get("/api/notifications", params={"limit": 1}
+                            ).json()["items"]
+        after_id = before[0]["id"] if before else 0
+        _register_with_host("f5-n1", "host-a")
+        _register_with_host("f5-n2", "host-a")
+        _register_with_host("f5-n3", "host-a")
+        _register_with_host("f5-n4", "host-b")
+        notes = client.get("/api/notifications",
+                           params={"after_id": after_id, "limit": 100}
+                           ).json()["items"]
+        registered = [n for n in notes
+                      if "зарегистрирован" in n["title"]]
+        names = {n["title"].split()[1] for n in registered}
+        # one notification per host (first pending only), audit always
+        assert names == {"f5-n1", "f5-n4"}, names
+
+    # ------------------------------------------------------------ F6b
+    def test_f6b_transport_in_assignment_audit(self, client, auth, make_task,
+                                               app_module):
+        task = make_task(title="f6b-m1")
+        ex, ex_secret = _make_executor(client, auth, "f6b-m1-x",
+                                       transport="mesh-r4")
+        aid = client.post("/api/assignments", headers=auth, json={
+            "task_id": task["id"], "specialist": "gcw-tech-lead"}
+            ).json()["assignment"]["id"]
+        claimed = client.post(f"/api/assignments/{aid}/claim",
+                              headers=_ex_headers(ex_secret),
+                              json={"claimed_by": "mesh-poller"}).json()
+        ev = [e for e in app_module.store.events(limit=1000)
+              if e["kind"] == "assignment.claimed"
+              and e["payload"]["assignment_id"] == aid][-1]
+        assert ev["payload"]["executor_id"] == ex["id"]
+        assert ev["payload"]["transport"] == "mesh-r4"   # Amd 2 §7
+        client.post(f"/api/assignments/{aid}/start",
+                    headers=_ex_headers(ex_secret),
+                    json={"claim_token": claimed["claim_token"]})
+        client.post(f"/api/assignments/{aid}/fail",
+                    headers=_ex_headers(ex_secret),
+                    json={"reason": "done", "claim_token":
+                          claimed["claim_token"]})
+        ev = [e for e in app_module.store.events(limit=1000)
+              if e["kind"] == "assignment.failed"
+              and e["payload"]["assignment_id"] == aid][-1]
+        assert ev["payload"]["executor_id"] == ex["id"]
+        assert ev["payload"]["transport"] == "mesh-r4"
