@@ -463,3 +463,31 @@ class TestScanBoundaries:
         assert not store.notification_exists("t-2", "msg")
         store.notify("work", "title", "msg", None)
         assert store.notification_exists(None, "msg")
+
+
+def test_expire_guard_never_kills_live_assignment(client, auth, make_task, app_module):
+    """Review P2: a heartbeat landing in the scan→UPDATE window must not
+    let finish_assignment('expired') reap a live assignment; ditto for
+    empty-string (hand-migrated) timestamps — undatable, never reaped."""
+    store = app_module.store
+    task = make_task(title="expire-guard")
+    aid = _create(client, auth, task["id"]).json()["assignment"]["id"]
+    claim = _claim(client, auth, aid)
+    client.post(f"/api/assignments/{aid}/start",
+                json={"claim_token": claim["claim_token"]}, headers=auth)
+    client.post(f"/api/assignments/{aid}/heartbeat",
+                json={}, headers=auth)  # fresh liveness, right now
+    import pytest
+    from server.store import AssignmentConflictError
+    with pytest.raises(AssignmentConflictError):
+        store.finish_assignment(aid, "expired")
+    with store._lock, store._conn() as db:  # P3: undatable rows never reaped
+        db.execute("UPDATE task_assignments SET claimed_at='', heartbeat_at='' "
+                   "WHERE id=?", (aid,))
+    assert store.stale_assignments() == []
+    with pytest.raises(AssignmentConflictError):
+        store.finish_assignment(aid, "expired")
+    # still running — nothing terminal happened through the guarded path
+    assert client.get("/api/assignments",
+                      params={"task_id": task["id"]}).json()["items"][0][
+                          "state"] == "running"

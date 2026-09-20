@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS server_log (
     detail     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_col ON tasks (col, position);
+CREATE INDEX IF NOT EXISTS idx_notifications_task ON notifications (task_id);
 CREATE INDEX IF NOT EXISTS idx_events_id ON events (id);
 CREATE INDEX IF NOT EXISTS idx_server_log ON server_log (server, id);
 CREATE TABLE IF NOT EXISTS task_reports (
@@ -1257,6 +1258,12 @@ class Store:
                 raise AssignmentConflictError(
                     f"assignment {assignment_id} is {row['state']}; "
                     f"'{outcome}' requires {' or '.join(allowed_states)}")
+            if outcome == "expired" and not self._is_stale_for_reap(row):
+                # The scan snapshot is stale: liveness moved inside the
+                # scan→UPDATE window. Never expire a live assignment.
+                raise AssignmentConflictError(
+                    f"assignment {assignment_id} is no longer stale "
+                    "(liveness updated after the reaper scan)")
             db.execute(
                 "UPDATE task_assignments SET state=?, finished_at=?, "
                 "note=COALESCE(NULLIF(?,''), note) WHERE id=?",
@@ -1302,6 +1309,24 @@ class Store:
     # Wall-clock on STORED timestamps — restart-safe: rows that went stale
     # during downtime are caught by the first tick after boot.
 
+    @staticmethod
+    def _is_stale_for_reap(row: Any) -> bool:
+        """Deadline recheck inside the expire transaction (review P2):
+        a heartbeat landing between the reaper scan and this UPDATE must
+        not let a live assignment expire. Empty-string timestamps count as
+        undatable (review P3) — never reaped."""
+        def cutoff(seconds: float) -> str:
+            return (datetime.now(timezone.utc) - timedelta(seconds=seconds)
+                    ).isoformat(timespec="seconds")
+        if row["state"] == "claimed":
+            ts = row["claimed_at"] or ""
+            return bool(ts) and ts < cutoff(REAP_CLAIM_AFTER_S)
+        if row["state"] == "running":
+            ts = (row["heartbeat_at"] or row["started_at"]
+                  or row["claimed_at"] or "")
+            return bool(ts) and ts < cutoff(REAP_HEARTBEAT_AFTER_S)
+        return False
+
     def stale_assignments(self) -> list[dict[str, Any]]:
         """Active assignments past their deadlines (ADR 0009 §10).
 
@@ -1323,11 +1348,16 @@ class Store:
             rows = db.execute(
                 """SELECT * FROM task_assignments
                    WHERE (state='claimed'
-                          AND claimed_at IS NOT NULL AND claimed_at < ?)
+                          AND NULLIF(claimed_at, '') IS NOT NULL
+                          AND claimed_at < ?)
                       OR (state='running'
-                          AND COALESCE(heartbeat_at, started_at, claimed_at)
+                          AND COALESCE(NULLIF(heartbeat_at, ''),
+                                       NULLIF(started_at, ''),
+                                       NULLIF(claimed_at, ''))
                               IS NOT NULL
-                          AND COALESCE(heartbeat_at, started_at, claimed_at)
+                          AND COALESCE(NULLIF(heartbeat_at, ''),
+                                       NULLIF(started_at, ''),
+                                       NULLIF(claimed_at, ''))
                               < ?)
                    ORDER BY id ASC""",
                 (cutoff(REAP_CLAIM_AFTER_S), cutoff(REAP_HEARTBEAT_AFTER_S)),
