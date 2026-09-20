@@ -20,7 +20,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +77,12 @@ TERMINAL_TASK_STATUSES = frozenset({"resolved", "done", "withdrawn"})
 # FULL spec (not the truncated copy), so the audit trail identifies the
 # exact content version the owner nominated.
 SPEC_SNAPSHOT_CAP = 16384
+# ADR 0009 §10 (phase 3 reaper): wall-clock deadlines. claimed without a
+# start for > 10 min, or running without a heartbeat for > 30 min → expired.
+# Stagnation (queued, nobody claims) is notification-only after 30 min.
+REAP_CLAIM_AFTER_S = 600.0
+REAP_HEARTBEAT_AFTER_S = 1800.0
+REAP_QUEUED_AFTER_S = 1800.0
 
 
 class AssignmentError(Exception):
@@ -176,6 +182,7 @@ CREATE TABLE IF NOT EXISTS server_log (
     detail     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_col ON tasks (col, position);
+CREATE INDEX IF NOT EXISTS idx_notifications_task ON notifications (task_id);
 CREATE INDEX IF NOT EXISTS idx_events_id ON events (id);
 CREATE INDEX IF NOT EXISTS idx_server_log ON server_log (server, id);
 CREATE TABLE IF NOT EXISTS task_reports (
@@ -1251,6 +1258,12 @@ class Store:
                 raise AssignmentConflictError(
                     f"assignment {assignment_id} is {row['state']}; "
                     f"'{outcome}' requires {' or '.join(allowed_states)}")
+            if outcome == "expired" and not self._is_stale_for_reap(row):
+                # The scan snapshot is stale: liveness moved inside the
+                # scan→UPDATE window. Never expire a live assignment.
+                raise AssignmentConflictError(
+                    f"assignment {assignment_id} is no longer stale "
+                    "(liveness updated after the reaper scan)")
             db.execute(
                 "UPDATE task_assignments SET state=?, finished_at=?, "
                 "note=COALESCE(NULLIF(?,''), note) WHERE id=?",
@@ -1287,6 +1300,108 @@ class Store:
             task = self._task_in_txn(db, row["task_id"])
             assignment = self._assignment(db, assignment_id)
         return assignment, task, moved_from, moved_to
+
+    # ------------------------------------------- reaper scan (phase 3)
+    # ADR 0009 §10: wall-clock staleness candidates for the in-process
+    # reaper loop (app.py lifespan). Read-only scan; the terminal transition
+    # itself goes through finish_assignment(outcome='expired'), so the audit
+    # trail and the task-column mapping stay identical to the API paths.
+    # Wall-clock on STORED timestamps — restart-safe: rows that went stale
+    # during downtime are caught by the first tick after boot.
+
+    @staticmethod
+    def _is_stale_for_reap(row: Any) -> bool:
+        """Deadline recheck inside the expire transaction (review P2):
+        a heartbeat landing between the reaper scan and this UPDATE must
+        not let a live assignment expire. Empty-string timestamps count as
+        undatable (review P3) — never reaped."""
+        def cutoff(seconds: float) -> str:
+            return (datetime.now(timezone.utc) - timedelta(seconds=seconds)
+                    ).isoformat(timespec="seconds")
+        if row["state"] == "claimed":
+            ts = row["claimed_at"] or ""
+            return bool(ts) and ts < cutoff(REAP_CLAIM_AFTER_S)
+        if row["state"] == "running":
+            ts = (row["heartbeat_at"] or row["started_at"]
+                  or row["claimed_at"] or "")
+            return bool(ts) and ts < cutoff(REAP_HEARTBEAT_AFTER_S)
+        return False
+
+    def stale_assignments(self) -> list[dict[str, Any]]:
+        """Active assignments past their deadlines (ADR 0009 §10).
+
+        - ``claimed`` with no start for > REAP_CLAIM_AFTER_S;
+        - ``running`` with no heartbeat for > REAP_HEARTBEAT_AFTER_S
+          (liveness baseline is heartbeat_at — set at start; started_at /
+          claimed_at are COALESCE fallbacks for hand-migrated rows).
+
+        Each row comes back with a ``reap_reason`` field (finish note +
+        notification message). An undatable row (NULL timestamps) is never
+        reaped — the reaper must not destroy what it cannot date.
+        """
+        def cutoff(seconds: float) -> str:
+            return (datetime.now(timezone.utc) - timedelta(seconds=seconds)
+                    ).isoformat(timespec="seconds")
+
+        rows: list[Any]
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                """SELECT * FROM task_assignments
+                   WHERE (state='claimed'
+                          AND NULLIF(claimed_at, '') IS NOT NULL
+                          AND claimed_at < ?)
+                      OR (state='running'
+                          AND COALESCE(NULLIF(heartbeat_at, ''),
+                                       NULLIF(started_at, ''),
+                                       NULLIF(claimed_at, ''))
+                              IS NOT NULL
+                          AND COALESCE(NULLIF(heartbeat_at, ''),
+                                       NULLIF(started_at, ''),
+                                       NULLIF(claimed_at, ''))
+                              < ?)
+                   ORDER BY id ASC""",
+                (cutoff(REAP_CLAIM_AFTER_S), cutoff(REAP_HEARTBEAT_AFTER_S)),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            a = dict(r)
+            claimed = a["state"] == "claimed"
+            deadline_s = REAP_CLAIM_AFTER_S if claimed else REAP_HEARTBEAT_AFTER_S
+            a["reap_reason"] = (
+                f"reaper: {a['state']} без "
+                f"{'start' if claimed else 'heartbeat'} "
+                f"> {int(deadline_s // 60)} мин")
+            out.append(a)
+        return out
+
+    def stagnant_queued_assignments(self) -> list[dict[str, Any]]:
+        """``queued`` assignments older than REAP_QUEUED_AFTER_S — a dead
+        poller must be diagnosable, not silent (ADR 0009 §4). Notification
+        only: the state stays queued; cancelling stays the owner's call."""
+        cut = (datetime.now(timezone.utc)
+               - timedelta(seconds=REAP_QUEUED_AFTER_S)
+               ).isoformat(timespec="seconds")
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                """SELECT * FROM task_assignments
+                   WHERE state='queued' AND created_at < ?
+                   ORDER BY id ASC""",
+                (cut,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def notification_exists(self, task_id: str | None, message: str) -> bool:
+        """Exact (task_id, message) match — the reaper's dedup for
+        stagnation notices: one notification per assignment, not one per
+        tick. The message embeds the assignment id, so a re-taken task
+        gets a fresh notice for its new assignment. Notifications are
+        never pruned, so the guard survives restarts."""
+        with self._lock, self._conn() as db:
+            return db.execute(
+                "SELECT 1 FROM notifications "
+                "WHERE task_id IS ? AND message=? LIMIT 1",
+                (task_id, message),
+            ).fetchone() is not None
 
     # ------------------------------------------------- reports backfill
     BACKFILL_META_KEY = "reports_backfill"
