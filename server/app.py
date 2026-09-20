@@ -558,7 +558,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.10.2", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.11.0", lifespan=lifespan)
 
 # --------------------------------------------------- security headers (Ф0a)
 # АРХКОМ-3 decision 13 / security verdict §5.2: on EVERY response — CSP,
