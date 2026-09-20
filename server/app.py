@@ -23,8 +23,12 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import mnemos_client
@@ -75,6 +79,28 @@ STATIC_DIR = Path(os.environ.get("VESMARO_WEB", Path(__file__).resolve().parents
 # routes then answer 404 with an explanatory detail and the board at /
 # keeps working.
 APP_DIR = Path(os.environ.get("VESMARO_APP_DIR", "/app/app"))
+
+
+# Phase 4 (ADR 0011) root-UI switch: which frontend owns "/".
+#   board (default) — today's layout: / is the frozen board (VESMARO_WEB),
+#                     /app is the React viewer (VESMARO_APP_DIR);
+#   app             — flipped layout: / is the viewer (history fallback),
+#                     /board keeps serving the frozen board, /app 302s to /.
+# The flip is driven by the Helm chart (values key rootApp -> env
+# VESMARO_ROOT_APP) and is a pure routing change — no data, no image
+# rebuild. Unknown/empty values FAIL SAFE to "board": a typo must neither
+# take the pod down nor silently flip the root UI.
+def _normalize_root_app(raw: str | None) -> str:
+    value = (raw or "").strip().lower()
+    return value if value in ("board", "app") else "board"
+
+
+ROOT_APP = _normalize_root_app(os.environ.get("VESMARO_ROOT_APP"))
+_raw_root_app = (os.environ.get("VESMARO_ROOT_APP") or "").strip()
+if _raw_root_app and _raw_root_app.lower() not in ("board", "app"):
+    logging.getLogger("vesmaro.rootapp").warning(
+        "VESMARO_ROOT_APP=%r is not 'board' or 'app' — failing safe to "
+        "'board' (the frozen board stays at /)", _raw_root_app)
 
 # Board read/write is open on the LAN by design (the cluster ingress is the
 # boundary); mnemos credentials stay server-side. Since SEC-3 the write
@@ -4073,50 +4099,111 @@ def _sse(event: dict[str, Any]) -> bytes:
 
 
 # ----------------------------------------------------------------- static SPA
-@app.get("/", include_in_schema=False)
-async def index() -> FileResponse:
+# Root UI ownership (ADR 0011 Ф4, env VESMARO_ROOT_APP -> ROOT_APP above):
+# handlers branch on the module global at REQUEST time (the same contract
+# as APP_DIR/STATIC_DIR monkeypatching in tests). Routes are registered
+# BEFORE the root catch-all below, so /api/* and these explicit paths
+# always win.
+
+
+def _board_index_response() -> FileResponse:
     return FileResponse(
         STATIC_DIR / "index.html",
         headers={"Cache-Control": "no-cache"},  # entry point always fresh
     )
 
 
+def _board_file_response(path: str) -> FileResponse | None:
+    """A real file under VESMARO_WEB, or None when there is none (missing,
+    a directory, or a traversal attempt — security verdict §5.4 applies
+    to the board tree exactly as it does to VESMARO_APP_DIR)."""
+    root = STATIC_DIR.resolve()
+    candidate = (root / path).resolve()
+    if candidate != root and root not in candidate.parents:
+        return None
+    if not candidate.is_file():
+        return None
+    return FileResponse(candidate)
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    if ROOT_APP == "app":
+        return _app_index_response()
+    return _board_index_response()
+
+
+# ------------------------------------------------------ /board (Ф4 flip only)
+# The frozen board after the flip (root=app). It is a SPA without a client
+# router, so /board serving its index.html IS the whole history story; the
+# board's index.html references its assets with absolute root paths
+# (/styles/..., /js/...), which the root catch-all below keeps serving —
+# no URL rewrite is needed for the board to work under /board.
+@app.get("/board", include_in_schema=False)
+@app.get("/board/", include_in_schema=False)
+async def board_index() -> FileResponse:
+    if ROOT_APP != "app":
+        # Parity with the pre-Ф4 world: /board does not exist in board mode.
+        raise HTTPException(404)
+    return _board_index_response()
+
+
+@app.get("/board/{path:path}", include_in_schema=False)
+async def board_asset(path: str) -> FileResponse:
+    if ROOT_APP != "app":
+        raise HTTPException(404)
+    response = _board_file_response(path)
+    if response is None:
+        raise HTTPException(404, f"no such board asset: /board/{path}")
+    return response
+
+
 # ---------------------------------------------------------------- /app (Ф0a)
 # React viewer dist (ADR 0011 Ф0a): history-API routing needs a fallback —
-# every /app path that is not a real file resolves to index.html. Routes
-# are registered BEFORE the StaticFiles mount so they win over the board's
-# own html=True handler. Path joining is traversal-safe (security verdict
-# §5.4): the resolved candidate must stay inside APP_DIR.
+# every /app path that is not a real file resolves to index.html. Path
+# joining is traversal-safe (security verdict §5.4): the resolved
+# candidate must stay inside APP_DIR. Under the Ф4 flip (root=app) the
+# viewer owns / instead: bare /app then 302s to / and non-file /app/...
+# paths 302 to their prefix-stripped location, so pre-switch bookmarks
+# keep working.
 def _app_index_response() -> FileResponse:
     index = APP_DIR / "index.html"
     if not index.is_file():
         # An image built without the Node stage is a legitimate state —
-        # say so instead of leaking a bare 404.
+        # say so instead of leaking a bare 404. Point at wherever the
+        # board lives under the CURRENT root mode.
+        board_home = "/board" if ROOT_APP == "app" else "/"
         raise HTTPException(
             404,
             "viewer app is not deployed (VESMARO_APP_DIR has no index.html); "
-            "the board UI stays at /",
+            f"the board UI stays at {board_home}",
         )
     return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/app", include_in_schema=False)
 @app.get("/app/", include_in_schema=False)
-async def app_index() -> FileResponse:
-    """SPA entries: both /app and /app/ serve the viewer's index.html."""
+async def app_index():
+    """SPA entries: /app and /app/ serve the viewer's index.html; after the
+    Ф4 flip they redirect to the new root so old bookmarks survive."""
+    if ROOT_APP == "app":
+        return RedirectResponse("/", status_code=302)
     return _app_index_response()
 
 
 @app.get("/app/{path:path}", include_in_schema=False)
-async def app_spa(path: str) -> FileResponse:
+async def app_spa(path: str):
     """Catch-all under /app: real files are served (vite emits them under
-    assets/ with content-hashed names → immutable), anything else falls
-    back to index.html for the client router."""
+    assets/ with content-hashed names → immutable — the production vite
+    base is /app/, so these file URLs stay valid in BOTH root modes),
+    anything else falls back to index.html for the client router; after
+    the flip non-file paths redirect prefix-stripped."""
     if not (APP_DIR / "index.html").is_file():
+        board_home = "/board" if ROOT_APP == "app" else "/"
         raise HTTPException(
             404,
             "viewer app is not deployed (VESMARO_APP_DIR has no index.html); "
-            "the board UI stays at /",
+            f"the board UI stays at {board_home}",
         )
     root = APP_DIR.resolve()
     candidate = (root / path).resolve()
@@ -4129,7 +4216,27 @@ async def app_spa(path: str) -> FileResponse:
                  if rel.parts and rel.parts[0] == "assets"
                  else "no-cache")
         return FileResponse(candidate, headers={"Cache-Control": cache})
+    if ROOT_APP == "app":
+        # A client route: its canonical home since the flip is the same
+        # path without the /app prefix (/app/tasks/42 -> /tasks/42).
+        return RedirectResponse(f"/{path}", status_code=302)
     return _app_index_response()
 
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="web")
+# ----------------------------------------------------------- root catch-all
+# Replaces the pre-Ф4 StaticFiles mount at "/". Board files live at
+# absolute root paths (/styles/..., /js/..., /fonts/...), so they are
+# served here in BOTH modes; in board mode everything else 404s (the old
+# mount's contract — the one visible delta: a bare directory path now
+# 404s directly instead of a 307 to a trailing slash; nothing links to
+# directories); in app mode unknown paths fall back to the viewer index —
+# history-API routing for deep links like /tasks/42 at the root.
+@app.get("/{path:path}", include_in_schema=False)
+async def root_catch_all(path: str) -> FileResponse:
+    board_file = _board_file_response(path)
+    if board_file is not None:
+        return board_file
+    if ROOT_APP == "app":
+        # A viewer client route (or a stale board asset URL): fresh shell.
+        return _app_index_response()
+    raise HTTPException(404)

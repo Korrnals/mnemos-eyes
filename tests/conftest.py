@@ -70,7 +70,7 @@ os.environ["VESMARO_MEMORY_CONFIG"] = str(DATA_DIR / "memories.yaml")  # absent
 os.environ["VESMARO_BOARD_TOKEN"] = BOARD_TOKEN
 os.environ.pop("VESMARO_UI_TOKEN", None)
 for _var in ("VESMARO_ALLOWED_MEMORY_HOSTS", "VESMARO_MEMORY_SERVERS",
-             "MNEMOS_URL", "VESMARO_WEB"):
+             "MNEMOS_URL", "VESMARO_WEB", "VESMARO_ROOT_APP"):
     os.environ.pop(_var, None)
 
 # Pre-seed the legacy plain: row BEFORE server.app is imported anywhere, so
