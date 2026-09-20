@@ -57,7 +57,7 @@ uiToken:
   # value, or fetch the generated one right after rollout).
   # Generation semantics mirror boardToken: randAlphaNum(48) on first
   # enable, lookup-stable across upgrades, kept on uninstall.
-  enabled: false
+  enabled: true
   existingSecret: ""
   existingSecretKey: VESMARO_UI_TOKEN
 
