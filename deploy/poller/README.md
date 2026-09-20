@@ -170,3 +170,15 @@ launch-error | start-failed | unreported`.
   перезапускаются повторным назначением.
 - mesh-транспорт (Amendment 2 §2) — задел: `board_url` это просто base URL,
   код не различает прямой HTTPS и локальный mesh-эндпоинт.
+
+## zcode launcher (verified live, 2026-09-20)
+
+The zcode desktop app bundles a headless CLI (`resources/glm/zcode.cjs`,
+`-p/--prompt` one-shot, exit code). `zcode-headless.sh` wraps it:
+envelope on stdin, `ELECTRON_RUN_AS_NODE=1` (no GUI, no singleton clash),
+provider configs injected via env with a version-glob (survives app
+upgrades). Allowlist entry: the wrapper path, no placeholders — the
+envelope's DISPATCH block routes to the right gcw specialist.
+Smoke: assignment → claim → headless agent → final report → task resolved
+(~75 s, `laptop-zcode-1` / ex-… attribution). T2 retro clock starts at
+first production enablement.
