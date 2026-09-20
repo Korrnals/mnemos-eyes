@@ -446,9 +446,19 @@ class BoardClient:
         return body[key]
 
     # -- assignments -----------------------------------------------------
-    def list_assignments(self, state: str) -> list[dict[str, Any]]:
+    def list_assignments(self, state: str, *,
+                         executor_id: str = "") -> list[dict[str, Any]]:
+        # ARCH-9 presence piggyback: ``executor_id`` is NOT a list filter —
+        # the server returns every assignment of ``state`` regardless — but
+        # a poll authenticated as that executor (or with the machine token)
+        # ticks its last_seen, so the idle queue poll doubles as the
+        # executor's presence heartbeat (AB-FU-3: without it the registry
+        # read "offline" between assignments while the poller was polling).
+        params = {"state": state}
+        if executor_id:
+            params["executor_id"] = executor_id
         items = self._field(
-            self._request("GET", "/api/assignments", params={"state": state}),
+            self._request("GET", "/api/assignments", params=params),
             "items", "/api/assignments")
         return [i for i in items if isinstance(i, dict)]
 
@@ -700,7 +710,10 @@ class AssignmentPoller:
     # -- poll / launch (A2 + A3) -------------------------------------------
     def poll_once(self) -> None:
         try:
-            queued = self.board.list_assignments("queued")
+            # idle presence tick rides this poll (see BoardClient.
+            # list_assignments) — every queue read announces the executor
+            queued = self.board.list_assignments(
+                "queued", executor_id=self.config.executor_id)
         except BoardError as exc:
             log.error("poll: %s", exc)
             return

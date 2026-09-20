@@ -120,8 +120,8 @@ class FakeBoard:
         return rep
 
     # -- BoardClient surface ------------------------------------------------
-    def list_assignments(self, state: str):
-        self.calls.append(("list", state))
+    def list_assignments(self, state, executor_id=""):
+        self.calls.append(("list", state, executor_id))
         return [self._public(a) for a in self.assignments.values()
                 if a["state"] == state]
 
@@ -296,6 +296,24 @@ class TestEnvelope:
         assert "VESMARO_BOARD_TOKEN" in env           # env var NAME only
         client.close()
 
+    def test_list_assignments_presence_piggyback_param(self):
+        # AB-FU-3: the idle poll carries executor_id — presence piggyback on
+        # the server, never a list filter (the response set is unchanged).
+        seen: dict[str, str] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            seen["url"] = str(req.url)
+            return httpx.Response(200, json={"ok": True, "items": []})
+
+        transport = httpx.MockTransport(handler)
+        client = BoardClient("https://board.test", "t", transport=transport)
+        client.list_assignments("queued", executor_id="ex-presence-1")
+        assert "state=queued" in seen["url"]
+        assert "executor_id=ex-presence-1" in seen["url"]
+        client.list_assignments("queued")             # legacy call shape intact
+        assert "executor_id" not in seen["url"]       # …and stays optional
+        client.close()
+
     def test_snapshot_not_live_spec(self):
         # A2: the renderer sees only the claim response. The "live" spec on
         # the task (VERSION 2) must not appear; the frozen snapshot must.
@@ -344,6 +362,32 @@ class TestAllowlist:
         poller.poll_once()
         assert board.assignments[1]["state"] == "queued"    # stays queued
         assert not any(c[0] == "claim" for c in board.calls)
+
+    def test_idle_poll_announces_executor_presence(self, tmp_path):
+        # AB-FU-3: every queue poll carries the configured executor_id so
+        # the registry presence clock ticks while the poller is idle.
+        board = FakeBoard()
+        cfg = make_config(tmp_path, EXIT_OK_CMD, executor_id="ex-presence-1")
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        assert ("list", "queued", "ex-presence-1") in board.calls
+
+    def test_poll_without_executor_id_omits_piggyback(self, tmp_path):
+        # A poller with no registered executor id keeps the plain call —
+        # presence piggyback must not become a hard requirement.
+        board = FakeBoard()
+        cfg = make_config(tmp_path, EXIT_OK_CMD)
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        assert ("list", "queued", "") in board.calls
+
+    def test_refusal_report_deduped(self, tmp_path):
+        board = FakeBoard()
+        board.add_assignment(1, specialist="gcw-stranger")
+        cfg = make_config(tmp_path, EXIT_OK_CMD)
+        poller = make_poller(cfg, board)
+        poller.poll_once()
+        poller.poll_once()
         # exactly ONE refusal report (deduped within the process lifetime)
         refusals = [c for c in board.calls if c[0] == "post_report"]
         assert len(refusals) == 1
