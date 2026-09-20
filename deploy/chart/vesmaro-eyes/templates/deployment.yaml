@@ -1,3 +1,9 @@
+{{- /* ADR 0011 Ф4 root-UI switch: reject typos at render time so a bad
+     --set rootApp=... can never land (the server also fails safe to
+     board on unknown values, this gate just makes it loud and early). */}}
+{{- if not (has (default "board" .Values.rootApp) (list "board" "app")) }}
+{{- fail (printf "rootApp must be 'board' or 'app', got %q (ADR 0011 Ф4)" .Values.rootApp) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -76,6 +82,11 @@ spec:
             {{- end }}
             - name: VESMARO_ALLOWED_MEMORY_HOSTS
               value: {{ required "memoryHostsAllowlist is required" .Values.memoryHostsAllowlist | quote }}
+            {{- /* ADR 0011 Ф4: which UI owns "/" (RUNBOOK.md §9). board is
+                 the default; the flip is one helm upgrade --set rootApp=app
+                 and rolls back the same way — no image rebuild. */}}
+            - name: VESMARO_ROOT_APP
+              value: {{ default "board" .Values.rootApp | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
