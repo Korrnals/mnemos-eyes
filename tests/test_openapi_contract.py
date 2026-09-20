@@ -44,6 +44,10 @@ class TestSchemasPresent:
         "TaskInboxItem", "TaskInboxOut", "TaskInboxRefreshOut",
         # Ф0b: merged memory listing + aggregated tags (BoardAdapter)
         "MemoryListItem", "MemoryListOut", "TagCountOut", "TagListOut",
+        # ARCH-9 (ADR 0009 Amd 2): executor registry + execution settings
+        "ExecutorOut", "ExecutorListOut", "ExecutorRegister",
+        "ExecutorRegisteredOut", "ExecutorPatch", "ExecutorStateChangeOut",
+        "ExecutionSettingsOut", "ExecutionSettingsBody",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -211,3 +215,55 @@ class TestKeyRoutesReferenceSchemas:
         assert "claim_token" not in out.get("properties", {})
         claimed = _components(spec)["AssignmentClaimedOut"]
         assert {"assignment", "claim_token"} <= set(claimed.get("properties", {}))
+
+    def test_executors(self, spec):
+        """ARCH-9 (ADR 0009 Amd 2): the executor-registry routes must
+        reference the registry models — the freeze-frame portable contract.
+        ExecutorOut carries computed presence but NEVER secret material;
+        the plaintext executor_secret rides only in ExecutorRegisteredOut
+        (shown once, claim_token pattern)."""
+        for name in ("ExecutorOut", "ExecutorListOut", "ExecutorRegister",
+                     "ExecutorRegisteredOut", "ExecutorPatch",
+                     "ExecutorStateChangeOut"):
+            assert name in _components(spec)
+        assert _ref_name(_response_schema(
+            spec, "/api/executors", "get")) == "ExecutorListOut"
+        post = spec["paths"]["/api/executors"]["post"]
+        assert _ref_name(post["requestBody"]["content"]
+                         ["application/json"]["schema"]) == "ExecutorRegister"
+        assert _ref_name(_response_schema(
+            spec, "/api/executors", "post", "201")) == "ExecutorRegisteredOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/executors/{executor_id}", "patch")) \
+            == "ExecutorStateChangeOut"
+        assert _ref_name(_response_schema(
+            spec, "/api/executors/{executor_id}/heartbeat", "post")) \
+            == "ExecutorStateChangeOut"
+        out = _components(spec)["ExecutorOut"]
+        must_have = {"id", "name", "harness", "host", "transport",
+                     "capabilities", "version", "enabled", "state",
+                     "last_seen", "presence", "registered_at", "updated_at"}
+        assert must_have <= set(out.get("properties", {}))
+        # secret hygiene: neither the hash nor the plaintext is a public field
+        assert not ({"secret", "secret_hash", "executor_secret"}
+                    & set(out.get("properties", {})))
+        registered = _components(spec)["ExecutorRegisteredOut"]
+        assert {"executor", "executor_secret"} <= set(
+            registered.get("properties", {}))
+        listing = _components(spec)["ExecutorListOut"]
+        assert {"ok", "count", "items", "meta"} <= set(
+            listing.get("properties", {}))
+        # AssignmentOut grew the ARCH-9 additive fields (Amd 2 §5/§9)
+        assignment = _components(spec)["AssignmentOut"]
+        assert {"topics", "routing"} <= set(assignment.get("properties", {}))
+
+    def test_execution_settings(self, spec):
+        """ARCH-9: default-executor settings route pair (Amd 2 §5)."""
+        assert _ref_name(_response_schema(
+            spec, "/api/settings/execution", "get")) == "ExecutionSettingsOut"
+        put = spec["paths"]["/api/settings/execution"]["put"]
+        assert _ref_name(put["requestBody"]["content"]
+                         ["application/json"]["schema"]) \
+            == "ExecutionSettingsBody"
+        assert _ref_name(_response_schema(
+            spec, "/api/settings/execution", "put")) == "ExecutionSettingsOut"

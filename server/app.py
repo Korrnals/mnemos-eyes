@@ -43,12 +43,20 @@ from .store import (
     AssignmentNotFoundError,
     AssignmentTokenError,
     REAP_QUEUED_AFTER_S,
+    EXECUTOR_TRANSPORTS,
+    ExecutorConflictError,
+    ExecutorError,
+    ExecutorNotFoundError,
+    ExecutorStateError,
+    PRESENCE_ONLINE_S,
+    PRESENCE_STALE_S,
     REPORT_KINDS,
     Store,
     TASK_STATUSES,
     TaskLockedError,
     TaskNotAssignableError,
     VALID_STATUSES,
+    presence_from_last_seen,
 )
 from .task_inbox import _hits_of as _listing_hits_of
 from .task_inbox import background_refresher as inbox_background_refresher
@@ -258,6 +266,160 @@ async def _assignment_reaper() -> None:
         except Exception:
             _reaper_log.exception("assignment reaper tick failed")
         await asyncio.sleep(_REAPER_INTERVAL_S)
+# ------------------------------------------- executors (ARCH-9, ADR 0009 Amd 2)
+# Third entity registry: presence computed on read, transitions detected
+# by a background sweeper that NEVER mutates executor rows (two-clock
+# discipline — assignment clocks belong to the ARCH-7 reaper, presence
+# clocks to this block; they never collapse).
+
+_PRESENCE_SWEEP_INTERVAL_S = 60.0
+# Last-EMITTED presence per executor id — the diff baseline for SSE
+# transition events. Deliberately in-process memory, NOT board_meta or a
+# table: the authoritative presence is always recomputed from last_seen,
+# SSE has no persistence (at-most-once; clients re-fetch GET after any
+# reconnect), and persisting a derived value would turn the sweeper into
+# a DB writer — exactly what Amd 2 §3 forbids. Restart semantics: the
+# first sweep after boot seeds the baseline silently (no offline storm);
+# later transitions emit executor.online / executor.offline.
+_presence_emitted: dict[str, str] = {}
+
+
+def _executor_public(e: dict[str, Any]) -> dict[str, Any]:
+    """Public executor shape: secret_hash NEVER leaves the store;
+    presence is computed from the last_seen TTL (never stored)."""
+    try:
+        caps = json.loads(e.get("capabilities") or "[]")
+    except (TypeError, ValueError):
+        caps = []
+    return {
+        "id": e["id"],
+        "name": e["name"],
+        "harness": e["harness"],
+        "host": e.get("host", ""),
+        "transport": e.get("transport", "local-poll"),
+        "capabilities": [c for c in caps if isinstance(c, str)],
+        "version": e.get("version", ""),
+        "enabled": bool(e.get("enabled")),
+        "state": e.get("state", "pending"),
+        "last_seen": e.get("last_seen", ""),
+        "presence": presence_from_last_seen(e.get("last_seen", "")),
+        "registered_at": e.get("registered_at", ""),
+        "updated_at": e.get("updated_at", ""),
+    }
+
+
+def _presence_sweep_once() -> list[dict[str, Any]]:
+    """One presence sweep: compute every executor's presence from last_seen
+    and broadcast executor.online / executor.offline on TRANSITION only
+    (stale is a silent hysteresis corridor — no event kind for it).
+    Reads only; never mutates a row. Returns the emitted events (tests)."""
+    emitted: list[dict[str, Any]] = []
+    current: dict[str, str] = {}
+    for e in store.list_executors():
+        state = presence_from_last_seen(e["last_seen"])
+        current[e["id"]] = state
+        prev = _presence_emitted.get(e["id"])
+        if prev is not None and prev != state and state in ("online", "offline"):
+            event = {
+                "kind": f"executor.{state}",
+                "executor": _executor_public(e),
+                "prev_state": prev,
+                "state": state,
+                "last_seen_at": e["last_seen"],
+            }
+            _broadcast(event)
+            emitted.append(event)
+    _presence_emitted.clear()
+    _presence_emitted.update(current)
+    return emitted
+
+
+async def _presence_sweeper() -> None:
+    """Background presence-transition detector (ARCH-9): every 60 s call
+    _presence_sweep_once. Per-heartbeat events are forbidden (§11) —
+    clients render ages from GET + a local 1 Hz ticker; SSE is only the
+    change notification."""
+    while True:
+        await asyncio.sleep(_PRESENCE_SWEEP_INTERVAL_S)
+        try:
+            _presence_sweep_once()
+        except Exception:  # noqa — background loop must never die
+            pass
+
+
+# Routing resolution chain (Amd 2 §5), computed per GET — stored nowhere
+# (no staleness). Tiers: explicit pin → assignment.specialist capability
+# match → task.specialists match → project default → global default →
+# auto best-match → unmatched. Only the EXPLICIT pin is enforced at claim;
+# everything else is a visibility/annotation filter — CAS stays the single
+# arbiter. ``best'' = presence rank then id (deterministic, no preference
+# theater). Nomination tiers (specialist / task-specialists) are
+# presence-agnostic — a competent-but-offline executor is still the route
+# (АРХКОМ-4: no silent substitution); the auto tier is the live-worker
+# fallback (online + local-poll — remote executors are dispatch-ineligible
+# until R4).
+_PRESENCE_RANK = {"online": 0, "stale": 1, "offline": 2}
+
+
+def _executor_capabilities(e: dict[str, Any]) -> set[str]:
+    try:
+        caps = json.loads(e.get("capabilities") or "[]")
+    except (TypeError, ValueError):
+        return set()
+    return {c for c in caps if isinstance(c, str)}
+
+
+def _routing_annotation(a: dict[str, Any], task: dict[str, Any] | None,
+                        executors: list[dict[str, Any]],
+                        project_default: str, global_default: str) -> dict[str, Any]:
+    """{resolved, reason} for one assignment (GET /api/assignments items).
+    ``resolved=None`` with reason 'unmatched' means visible-to-all."""
+    pin = (a.get("executor_id") or "").strip()
+    if pin:
+        return {"resolved": pin, "reason": "explicit"}
+    eligible = [e for e in executors
+                if e.get("state") == "approved" and e.get("enabled")]
+
+    def best(cands: list[dict[str, Any]]) -> dict[str, Any]:
+        return min(cands, key=lambda e: (
+            _PRESENCE_RANK[presence_from_last_seen(e["last_seen"])], e["id"]))
+
+    specialist = (a.get("specialist") or "").strip()
+    task_specialists = [s.strip() for s in ((task or {}).get("specialists") or [])
+                        if isinstance(s, str) and s.strip()]
+    if specialist:
+        cands = [e for e in eligible if specialist in _executor_capabilities(e)]
+        if cands:
+            return {"resolved": best(cands)["id"], "reason": "specialist"}
+    for s in task_specialists:
+        cands = [e for e in eligible if s in _executor_capabilities(e)]
+        if cands:
+            return {"resolved": best(cands)["id"], "reason": "task-specialists"}
+    # Defaults: resolved even when the target is offline (the owner chose
+    # it; silently substituting another executor is forbidden). Ineligible
+    # (revoked/disabled/gone) defaults fall through to the next tier.
+    eligible_ids = {e["id"] for e in eligible}
+    if project_default and project_default in eligible_ids:
+        return {"resolved": project_default, "reason": "project-default"}
+    if global_default and global_default in eligible_ids:
+        return {"resolved": global_default, "reason": "global-default"}
+    # Auto tier = live local worker, caps-free. Design note (AC6
+    # resolution): gating auto on caps∩wanted would make the tier
+    # structurally unreachable — any executor satisfying that predicate
+    # would already have resolved the presence-agnostic nomination tiers
+    # above, so the chain could never reach reason 'auto'. Capability
+    # coverage therefore stays the nomination predicate; auto is the
+    # generic live-worker fallback ("someone approved, enabled, online and
+    # local can take it"). This also matches the L0 bootstrap: executor
+    # #1 (laptop-poller) carries no owner-declared capabilities, and a
+    # caps-gated auto could never point at it. Deterministic pick: lowest
+    # id among the online local-poll candidates.
+    auto = [e for e in eligible
+            if e.get("transport") == "local-poll"
+            and presence_from_last_seen(e["last_seen"]) == "online"]
+    if auto:
+        return {"resolved": best(auto)["id"], "reason": "auto"}
+    return {"resolved": None, "reason": "unmatched"}
 
 
 @asynccontextmanager
@@ -278,10 +440,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # ARCH-7 (ADR 0009 §10): assignment reaper — starts staggered (~30 s)
     # so it never ticks in lockstep with the two loops above.
     reaper_task = asyncio.create_task(_assignment_reaper())
+    # ---- ARCH-9: presence sweeper (separate block, staggered from reaper).
+    presence_task = asyncio.create_task(_presence_sweeper())
     yield
     task.cancel()
     inbox_task.cancel()
     reaper_task.cancel()
+    presence_task.cancel()
 
 
 COLUMN_RU = {
@@ -670,6 +835,12 @@ class AssignmentOut(_ApiModel):
     started_at: str | None = None
     heartbeat_at: str | None = None
     finished_at: str | None = None
+    # ARCH-9 (Amd 2 §9): denormalized project/domain tags (metadata tier —
+    # what mesh subscription filters read without joining through mnemos).
+    topics: list[str] = []
+    # ARCH-9 (Amd 2 §5): GET-only routing annotation {resolved, reason};
+    # absent from SSE payloads (computed per read, never stored).
+    routing: dict[str, Any] | None = None
     # spec_snapshot is deliberately NOT a declared field: it must be absent
     # from every serialized assignment except the claim response, where it
     # rides as an extra key (extra="allow") for the machine consumer.
@@ -741,6 +912,77 @@ class AssignmentFinishedOut(_ApiModel):
     task: TaskOut | None = None
     moved: list[str] = []              # [from, to] when the task column moved
     report: ReportOut | None = None    # final report written by complete
+
+
+# Executor registry contract (ARCH-9, ADR 0009 Amendment 2). The public
+# Executor shape never carries secret material — the plaintext
+# executor_secret exists exactly once, in the register response.
+class ExecutorOut(_ApiModel):
+    id: str
+    name: str
+    harness: str
+    host: str = ""
+    transport: str = "local-poll"
+    capabilities: list[str] = []
+    version: str = ""
+    enabled: bool = False
+    state: str = "pending"             # pending | approved | revoked
+    last_seen: str = ""
+    presence: str = "offline"          # online | stale | offline (computed)
+    registered_at: str = ""
+    updated_at: str = ""
+
+
+class ExecutorListOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[ExecutorOut]
+    meta: dict[str, Any]               # presence thresholds — clients read, never hardcode
+
+
+class ExecutorRegister(BaseModel):
+    """L0 bootstrap registration (machine token). Capabilities are NOT
+    accepted here — they are owner-declared via PATCH (Amd 2 §4)."""
+    name: str = Field(min_length=1, max_length=120)
+    harness: str = Field(min_length=1, max_length=60)
+    host: str = Field(default="", max_length=200)
+    transport: str = "local-poll"      # local-poll | mesh-r4
+    version: str = Field(default="", max_length=60)
+
+
+class ExecutorRegisteredOut(_ApiModel):
+    ok: bool
+    executor: ExecutorOut
+    executor_secret: str               # shown EXACTLY once — never again
+
+
+class ExecutorPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    state: str | None = None           # approved | revoked (pending is not patchable)
+    capabilities: list[str] | None = None
+    enabled: bool | None = None
+
+
+class ExecutorStateChangeOut(_ApiModel):
+    ok: bool
+    executor: ExecutorOut
+
+
+class ExecutionSettingsOut(_ApiModel):
+    ok: bool
+    default_executor: str = ""
+    fallback_executor: str = ""
+    scope: str = ""
+
+
+class ExecutionSettingsBody(BaseModel):
+    """Default/fallback executor settings (Amd 2 §5). ``scope`` reserves
+    project-level defaults: '' (global, default) or 'project:<slug>'. The
+    fallback is a global-scope UI-preview value (no silent substitution);
+    it does not participate in the GET routing chain."""
+    default_executor: str = Field(default="", max_length=120)
+    fallback_executor: str = Field(default="", max_length=120)
+    scope: str = Field(default="", max_length=120)
 
 
 # BE-7: task history timeline for the task modal — board audit events plus
@@ -1833,8 +2075,15 @@ async def create_task_report(task_id: str, body: ReportCreate,
     """Append an agent report to a task. 404 on unknown task; 422 on an
     unknown kind or an empty body; 429 when the per-client rate limit is
     exhausted. A second kind="final" supersedes previous live finals
-    (history kept, flagged)."""
-    _guard_write(request)
+    (history kept, flagged).
+
+    ARCH-9: machine class = board token OR an approved executor token (the
+    mesh leg reports with its own credential, Amd 2 §2). When the report is
+    executor-token-backed, a declared ``agent`` string that references
+    neither the executor's registered name nor its harness lands in the
+    audit trail flagged ``identity_mismatch`` (Amd 2 §7 spoofing signal —
+    signal, not a refusal: the report is still accepted)."""
+    executor = _guard_machine_write(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _report_limiter.acquire(client_ip):
         raise HTTPException(
@@ -1847,7 +2096,9 @@ async def create_task_report(task_id: str, body: ReportCreate,
     if not body.body.strip():
         raise HTTPException(422, "report body is empty")
     try:
-        added = store.add_report(task_id, body.body, body.kind, body.agent)
+        added = store.add_report(
+            task_id, body.body, body.kind, body.agent,
+            identity_mismatch=_report_identity_mismatch(executor, body.agent))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if added is None:
@@ -1924,16 +2175,68 @@ def _assignment_rate_limit(request: Request, ui: bool) -> None:
         )
 
 
+def _touch_presence_if_authenticated(request: Request, executor_id: str) -> None:
+    """Presence piggyback for GET /api/assignments?executor_id=... — the
+    poll announces itself and its clock ticks. Auth-gated: only the
+    executor's OWN token or the machine token may tick presence (an open
+    endpoint must not let arbitrary readers fake liveness — presence feeds
+    the auto-pick routing tier). Unauthenticated reads stay legal, they
+    just don't tick."""
+    executor = _authenticate_executor(request)
+    if executor is not None:
+        if executor["id"] == executor_id and executor["state"] != "revoked":
+            store.touch_executor_last_seen(executor_id)
+        return
+    auth = request.headers.get("Authorization", "")
+    if BOARD_WRITE_TOKEN and hmac.compare_digest(
+            auth.encode("utf-8"),
+            f"Bearer {BOARD_WRITE_TOKEN}".encode("utf-8")):
+        store.touch_executor_last_seen(executor_id)
+
+
 @app.get("/api/assignments")
-async def list_assignments(state: str = "", task_id: str = "") -> AssignmentsOut:
+async def list_assignments(request: Request, state: str = "",
+                           task_id: str = "", executor_id: str = "") -> AssignmentsOut:
     """Assignment queue projection (ADR 0009). OPEN read (no bearer), same
     boundary as GET /api/board: the cluster ingress is the auth boundary.
     ``state`` must be a dictionary value (422); ``task_id`` is an exact
     filter. Items never carry claim_token or spec_snapshot — the SSE
-    dictionary §11 keeps them out for the same reason."""
+    dictionary §11 keeps them out for the same reason.
+
+    ARCH-9 additions:
+    - ``?executor_id=`` presence piggyback: a poller announcing itself
+      ticks that executor's last_seen — but only when authenticated as
+      that executor (its token) or with the machine token.
+    - every item carries ``routing`` {resolved, reason} — the resolution
+      chain (Amd 2 §5) computed per GET, stored nowhere: explicit pin →
+      assignment specialist → task specialists → project default →
+      global default → auto best-match (online + local-poll) →
+      unmatched (visible to all). Only the explicit pin is enforced at
+      claim; the annotation is a visibility hint, CAS stays the arbiter.
+    - ``topics``: denormalized project/domain tags (metadata tier)."""
     if state and state not in ASSIGNMENT_STATES:
         raise HTTPException(422, f"invalid state: {state}")
+    executor_id = executor_id.strip()
+    if executor_id:
+        _touch_presence_if_authenticated(request, executor_id)
     items = store.assignments(state=state or None, task_id=task_id or None)
+    executors = store.list_executors()
+    global_default = (store.get_meta("default_executor") or "").strip()
+    task_cache: dict[str, dict[str, Any] | None] = {}
+    project_defaults: dict[str, str] = {}
+    for i in items:
+        tid = i["task_id"]
+        if tid not in task_cache:
+            task_cache[tid] = store.task(tid)
+        task = task_cache[tid]
+        project = (task or {}).get("project") or ""
+        if project and project not in project_defaults:
+            project_defaults[project] = (
+                store.get_meta(f"default_executor:project:{project}")
+                or "").strip()
+        i["routing"] = _routing_annotation(
+            i, task, executors, project_defaults.get(project, ""),
+            global_default)
     public = [_assignment_public(i) for i in items]
     return {"ok": True, "count": len(public), "items": public}
 
@@ -1972,17 +2275,27 @@ async def create_assignment(body: AssignmentCreate,
 @app.post("/api/assignments/{assignment_id}/claim")
 async def claim_assignment(assignment_id: int, body: AssignmentClaimBody,
                            request: Request) -> AssignmentClaimedOut:
-    """Atomic claim (A4): machine-token class. CAS on state='queued'; the
-    task column moves open → in-progress in the same transaction. The
-    response carries the claim_token (correctness boundary: a stale poller
-    cannot finish a re-claimed assignment) and the spec_snapshot (A2: the
-    poller executes the snapshot, never the live spec). 409 when another
-    poller got there first."""
-    _guard_write(request)
+    """Atomic claim (A4): machine-token class — the board token OR an
+    approved executor token (ARCH-9: on the mesh leg the executor token
+    is the credential; a mesh node must not hold board-class secrets).
+    CAS on state='queued'; the task column moves open → in-progress in
+    the same transaction. The response carries the claim_token
+    (correctness boundary: a stale poller cannot finish a re-claimed
+    assignment) and the spec_snapshot (A2: the poller executes the
+    snapshot, never the live spec). 409 when another poller got there
+    first.
+
+    ARCH-9 explicit-pin enforcement (Amd 2 §5, in the store transaction):
+    an assignment pinned via executor_id claims ONLY with the pinned
+    executor's token — a plain machine claim is 409, another executor's
+    token is 403 (spoofing gate, CWE-290). A claim with an executor token
+    records claimed_by_executor from the token identity (authoritative)."""
+    executor = _guard_machine_write(request)
     _assignment_rate_limit(request, ui=False)
     try:
         a, token, task, moved = store.claim_assignment(
-            assignment_id, body.claimed_by, executor_id=body.executor_id)
+            assignment_id, body.claimed_by, executor_id=body.executor_id,
+            token_executor_id=(executor or {}).get("id"))
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved and task is not None:
@@ -1998,7 +2311,7 @@ async def claim_assignment(assignment_id: int, body: AssignmentClaimBody,
 async def start_assignment(assignment_id: int, body: AssignmentTokenBody,
                            request: Request) -> AssignmentStateOut:
     """claimed → running (machine class + claim_token)."""
-    _guard_write(request)
+    _guard_machine_write(request)
     _assignment_rate_limit(request, ui=False)
     try:
         a = store.start_assignment(assignment_id, body.claim_token)
@@ -2016,9 +2329,20 @@ async def heartbeat_assignment(assignment_id: int,
                                request: Request) -> AssignmentStateOut:
     """Executor liveness tick (machine class + claim_token). 409 unless
     running — on an expired assignment that 409 doubles as the kill signal
-    to the poller (ADR 0009 §10). Deliberately NO SSE: heartbeats are noise."""
-    _guard_write(request)
-    _assignment_rate_limit(request, ui=False)
+    to the poller (ADR 0009 §10). Deliberately NO SSE: heartbeats are
+    noise. PR #13 review P3b: own rate budget (60/60 s) — heartbeat
+    traffic never touches the shared machine 30/60 s budget. ARCH-9: the
+    tick also refreshes the claiming executor's presence clock
+    (claimed_by_executor piggyback, store-side)."""
+    _guard_machine_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _assignment_heartbeat_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"assignment heartbeat rate limit exceeded "
+            f"({_ASSIGNMENT_HEARTBEAT_RATE_LIMIT} per "
+            f"{_ASSIGNMENT_HEARTBEAT_RATE_WINDOW:.0f}s per client)",
+        )
     try:
         a = store.heartbeat_assignment(assignment_id, body.claim_token,
                                        note=body.note)
@@ -2036,8 +2360,10 @@ async def complete_assignment(assignment_id: int,
     agent = the declared claim identity) right after the terminal
     transition — a 409/403 leaves no half-written report behind. Task maps
     in-progress → resolved (acceptance resolved → done stays with the
-    owner)."""
-    _guard_write(request)
+    owner). ARCH-9: machine class = board token OR an approved executor
+    token (claim_token stays the correctness boundary; the executor loop
+    keeps one credential end-to-end, Amd 2 §2)."""
+    _guard_machine_write(request)
     _assignment_rate_limit(request, ui=False)
     final = body.final_report.strip()
     report: dict[str, Any] | None = None
@@ -2077,8 +2403,9 @@ async def fail_assignment(assignment_id: int, body: AssignmentFailBody,
     """Fail an execution attempt (machine class). Auth: claim_token OR a
     claimed_by identity match — the poller's recovery sweep fails its own
     claimed|running records after a restart, when tokens are gone. Task
-    maps in-progress → blocked."""
-    _guard_write(request)
+    maps in-progress → blocked. ARCH-9: board token OR approved executor
+    token (Amd 2 §2)."""
+    _guard_machine_write(request)
     _assignment_rate_limit(request, ui=False)
     try:
         a, task, moved_from, moved_to = store.finish_assignment(
@@ -2122,6 +2449,278 @@ async def cancel_assignment(assignment_id: int, body: AssignmentCancelBody,
     )
     return {"ok": True, "assignment": _assignment_public(a), "task": task,
             "moved": [moved_from, moved_to] if moved_from else []}
+
+
+# -------------------------------------------- executor registry (ARCH-9)
+# Rate budgets follow the house pattern: registration is a machine-class
+# bootstrap mutation (10/60 s, same budget family as task-drafts); the
+# presence heartbeat carries its OWN budget (PR #13 review P3b: heartbeat
+# traffic must never starve or be starved by the shared machine 30/60 s
+# bucket — one tick per executor per minute, so 60/60 s is generous).
+_EXECUTOR_REGISTER_RATE_LIMIT = 10     # requests per client ...
+_EXECUTOR_REGISTER_RATE_WINDOW = 60.0  # ... per sliding window (seconds)
+_executor_register_limiter = RateLimiter(
+    limit=_EXECUTOR_REGISTER_RATE_LIMIT, window=_EXECUTOR_REGISTER_RATE_WINDOW)
+_EXECUTOR_HEARTBEAT_RATE_LIMIT = 60    # presence ticks per client ...
+_EXECUTOR_HEARTBEAT_RATE_WINDOW = 60.0
+_executor_heartbeat_limiter = RateLimiter(
+    limit=_EXECUTOR_HEARTBEAT_RATE_LIMIT, window=_EXECUTOR_HEARTBEAT_RATE_WINDOW)
+# Assignment-heartbeat budget (P3b): separate from BOTH the machine budget
+# and the executor presence budget above.
+_ASSIGNMENT_HEARTBEAT_RATE_LIMIT = 60
+_ASSIGNMENT_HEARTBEAT_RATE_WINDOW = 60.0
+_assignment_heartbeat_limiter = RateLimiter(
+    limit=_ASSIGNMENT_HEARTBEAT_RATE_LIMIT,
+    window=_ASSIGNMENT_HEARTBEAT_RATE_WINDOW)
+
+
+def _executor_http(exc: ExecutorError) -> HTTPException:
+    """Map store executor-registry errors onto HTTP: 404 unknown id /
+    409 duplicate name or illegal state transition."""
+    if isinstance(exc, ExecutorNotFoundError):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, (ExecutorConflictError, ExecutorStateError)):
+        return HTTPException(409, str(exc))
+    return HTTPException(409, str(exc))  # defensive: unknown subclass → 409
+
+
+@app.post("/api/executors", status_code=201)
+async def register_executor(body: ExecutorRegister,
+                            request: Request) -> ExecutorRegisteredOut:
+    """Register an executor (ARCH-9, ladder L0 — Amd 2 §4).
+
+    MACHINE-token bootstrap: registration via the board token creates a
+    PENDING record; the owner approves via ui-token PATCH. The board mints
+    ``executor_secret`` (token_hex(24)) and stores ONLY its sha256 hash —
+    the plaintext appears exactly once, in this response (claim_token
+    pattern, long-lived). Capabilities are owner-declared via PATCH, never
+    accepted at registration. 422 unknown harness/transport; 409 duplicate
+    name; rate 10/60 s per client."""
+    _guard_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _executor_register_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"executor registration rate limit exceeded "
+            f"({_EXECUTOR_REGISTER_RATE_LIMIT} per "
+            f"{_EXECUTOR_REGISTER_RATE_WINDOW:.0f}s per client)",
+        )
+    if body.transport not in EXECUTOR_TRANSPORTS:
+        raise HTTPException(422, f"invalid transport: {body.transport}")
+    try:
+        row, secret = store.register_executor(
+            body.name, body.harness, body.host, body.transport, body.version)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except ExecutorError as exc:
+        raise _executor_http(exc) from exc
+    _notify_and_broadcast(
+        "system", f"Исполнитель {row['name']} зарегистрирован",
+        "ожидает подтверждения владельца", None,
+        {"kind": "executor.registered", "executor": _executor_public(row),
+         "prev_state": None, "state": row["state"]},
+    )
+    return {"ok": True, "executor": _executor_public(row),
+            "executor_secret": secret}
+
+
+@app.get("/api/executors")
+async def list_executors() -> ExecutorListOut:
+    """Executor registry projection — OPEN read (same boundary as
+    GET /api/board; the cluster ingress is the auth boundary).
+
+    ``presence`` is COMPUTED from last_seen per the two-clock discipline:
+    online = last tick ≤ 120 s ago, stale = ≤ 600 s, offline = beyond
+    (never-heartbeated included). These are server-owned constants and
+    travel in ``meta`` — clients must read them, never hardcode. The
+    sweeper interval is exposed the same way. secret_hash never leaves
+    the store."""
+    rows = store.list_executors()
+    return {
+        "ok": True,
+        "count": len(rows),
+        "items": [_executor_public(r) for r in rows],
+        "meta": {
+            "presence": {
+                "online_max_age_s": int(PRESENCE_ONLINE_S),
+                "stale_max_age_s": int(PRESENCE_STALE_S),
+            },
+            "sweeper_interval_s": int(_PRESENCE_SWEEP_INTERVAL_S),
+        },
+    }
+
+
+@app.post("/api/executors/{executor_id}/heartbeat")
+async def executor_heartbeat(executor_id: str,
+                             request: Request) -> ExecutorStateChangeOut:
+    """Executor presence tick (idle poller liveness; assignment heartbeats
+    piggyback separately in the assignment routes). EXECUTOR-token class:
+    the URL id must equal the token-backed executor — a mismatch is 403
+    (identity error), which also means an unknown id never 404s here.
+    Pending executors MAY tick (the owner sees liveness before approving);
+    revoked may not (kill-switch — presence must decay to offline). Own
+    rate budget 60/60 s. NO SSE: per-heartbeat events are forbidden (§11)
+    — clients render age from GET + a local 1 Hz ticker."""
+    executor = _authenticate_executor(request)
+    if executor is None:
+        raise HTTPException(401, "executor token required")
+    if executor["id"] != executor_id:
+        raise HTTPException(
+            403, "heartbeat executor does not match the token identity")
+    if executor["state"] == "revoked":
+        raise HTTPException(403, "executor is revoked")
+    client_ip = request.client.host if request.client else "unknown"
+    if not _executor_heartbeat_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"executor heartbeat rate limit exceeded "
+            f"({_EXECUTOR_HEARTBEAT_RATE_LIMIT} per "
+            f"{_EXECUTOR_HEARTBEAT_RATE_WINDOW:.0f}s per client)",
+        )
+    store.touch_executor_last_seen(executor_id)
+    fresh = store.get_executor(executor_id)
+    return {"ok": True, "executor": _executor_public(fresh or executor)}
+
+
+@app.patch("/api/executors/{executor_id}")
+async def patch_executor(executor_id: str, body: ExecutorPatch,
+                         request: Request) -> ExecutorStateChangeOut:
+    """Owner PATCH (ui-token): approve (state=approved), revoke
+    (state=revoked — terminal kill-switch; re-register to revive), rename,
+    owner-declared capabilities, enabled (routing kill-switch). Audit
+    old→new lands in the board events (executor.approved / revoked /
+    updated); SSE carries executor.updated with the registry
+    prev_state→state. Idempotent: a no-op PATCH emits nothing."""
+    _guard_ui_write(request)
+    try:
+        row, changes = store.update_executor(
+            executor_id, body.model_dump(exclude_none=True), actor="owner")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except ExecutorError as exc:
+        raise _executor_http(exc) from exc
+    if changes:
+        prev_state = changes.get("state", [row["state"]])[0]
+        _broadcast({"kind": "executor.updated",
+                    "executor": _executor_public(row),
+                    "prev_state": prev_state, "state": row["state"]})
+    return {"ok": True, "executor": _executor_public(row)}
+
+
+@app.delete("/api/executors/{executor_id}")
+async def delete_executor(executor_id: str, request: Request) -> OkOut:
+    """Remove a registry record (ui-token). Active assignments are NOT
+    touched: executor pins and claimed_by_executor attribution strings
+    stay verbatim — the assignment lifecycle is independent of the
+    registry (two-clock discipline, Amd 2 §3)."""
+    _guard_ui_write(request)
+    row = store.delete_executor(executor_id)
+    if row is None:
+        raise HTTPException(404, f"executor {executor_id} not found")
+    _presence_emitted.pop(row["id"], None)
+    _notify_and_broadcast(
+        "system", f"Исполнитель {row['name']} удалён", "", None,
+        {"kind": "executor.deleted", "executor": _executor_public(row),
+         "prev_state": row["state"], "state": row["state"]},
+    )
+    return {"ok": True}
+
+
+# ------------------------------------- execution settings (ARCH-9, Amd 2 §5)
+_PROJECT_SCOPE_RE = re.compile(r"^project:[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def _execution_settings_keys(scope: str) -> tuple[str, str]:
+    """scope → (board_meta default key, fallback key). Global scope keeps
+    the fallback; project scope reserves defaults only (one global default
+    + one fallback per the АРХКОМ-4 resolution). Raises 422 on garbage."""
+    scope = scope.strip()
+    if not scope:
+        return "default_executor", "default_executor_fallback"
+    if not _PROJECT_SCOPE_RE.match(scope):
+        raise HTTPException(
+            422, f"invalid scope: {scope!r} (use '' for global or "
+                 "'project:<slug>')")
+    return f"default_executor:{scope}", ""
+
+
+def _validate_default_executor(executor_id: str) -> None:
+    """Amd 2 §5 gates: a default must exist, be approved, enabled, have a
+    LIVE heartbeat (presence online at set time) and travel local-poll —
+    remote executors are dispatch-ineligible until R4."""
+    row = store.get_executor(executor_id)
+    if row is None:
+        raise HTTPException(422, f"unknown executor: {executor_id}")
+    if row["state"] != "approved":
+        raise HTTPException(
+            422, f"executor {executor_id} is {row['state']} — a default "
+                 "must be approved")
+    if not row["enabled"]:
+        raise HTTPException(
+            422, f"executor {executor_id} is disabled — a default must be "
+                 "enabled")
+    if presence_from_last_seen(row["last_seen"]) != "online":
+        raise HTTPException(
+            422, f"executor {executor_id} has no live heartbeat — a "
+                 "default requires current presence (online)")
+    if row["transport"] != "local-poll":
+        raise HTTPException(
+            422, f"executor {executor_id} is {row['transport']} — remote "
+                 "executors are ineligible as defaults until R4")
+
+
+@app.get("/api/settings/execution")
+async def get_execution_settings() -> ExecutionSettingsOut:
+    """Read the default-executor resolution settings (OPEN read — ids
+    only, no secrets; the chain itself is computed per GET on
+    /api/assignments)."""
+    return {
+        "ok": True,
+        "default_executor": store.get_meta("default_executor") or "",
+        "fallback_executor": store.get_meta("default_executor_fallback") or "",
+        "scope": "",
+    }
+
+
+@app.put("/api/settings/execution")
+async def put_execution_settings(body: ExecutionSettingsBody,
+                                 request: Request) -> ExecutionSettingsOut:
+    """Set the default / fallback executor (UI-token only — Amd 2 §5
+    gates, see _validate_default_executor). Empty string clears a slot.
+    Audit: default.changed old→new per field (actor = the ui-token class).
+    ``scope`` reserves project defaults (board_meta
+    ``default_executor:project:<slug>``); the fallback is global-scope
+    only. The fallback does NOT join the GET routing chain — it is the
+    UI's no-silent-substitution preview value; dispatch stays explicit."""
+    _guard_ui_write(request)
+    default_key, fallback_key = _execution_settings_keys(body.scope)
+    if body.fallback_executor and not fallback_key:
+        raise HTTPException(
+            422, "fallback executor is global-scope only")
+    if body.default_executor:
+        _validate_default_executor(body.default_executor)
+    if body.fallback_executor:
+        _validate_default_executor(body.fallback_executor)
+    old_default = store.get_meta(default_key) or ""
+    old_fallback = (store.get_meta(fallback_key) or "") if fallback_key else ""
+    changes: dict[str, list[str]] = {}
+    if body.default_executor != old_default:
+        changes["default_executor"] = [old_default, body.default_executor]
+    if fallback_key and body.fallback_executor != old_fallback:
+        changes["fallback_executor"] = [old_fallback, body.fallback_executor]
+    if changes:
+        store.set_meta(default_key, body.default_executor)
+        if fallback_key:
+            store.set_meta(fallback_key, body.fallback_executor)
+        store.log_board_event("default.changed", {
+            "actor": "owner", "scope": body.scope.strip(),
+            "changes": changes})
+    return {
+        "ok": True,
+        "default_executor": body.default_executor,
+        "fallback_executor": body.fallback_executor,
+        "scope": body.scope.strip(),
+    }
 
 
 # --------------------------------------------------------- task inbox (AGG-1)
@@ -2509,6 +3108,53 @@ def _guard_ui_write(request: Request) -> None:
     expected = f"Bearer {UI_WRITE_TOKEN}"
     if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(401, "ui write token required")
+
+
+def _authenticate_executor(request: Request) -> dict[str, Any] | None:
+    """Executor-token class (ARCH-9, L0): ``Bearer <executor_secret>``
+    matched by sha256 digest, constant-time per stored hash. Returns the
+    raw executor row (state included — callers apply class policy) or
+    None when the bearer is not an executor secret. Never raises."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    return store.authenticate_executor(auth[len("Bearer "):].strip())
+
+
+def _guard_machine_write(request: Request) -> dict[str, Any] | None:
+    """Machine-class mutation guard (ADR 0009 A1 + Amd 2 §2): accepts the
+    board (machine) token OR an APPROVED executor token — on the mesh leg
+    the executor token is mandatory and a node must not hold board-class
+    credentials. Returns the token-backed executor row (None = board-token
+    class). Pending executor tokens are refused (the registry is the
+    identity gate — unapproved is not yet a work identity); revoked are
+    the kill-switch. Constant-time comparisons on both legs."""
+    executor = _authenticate_executor(request)
+    if executor is not None:
+        if executor["state"] != "approved":
+            raise HTTPException(
+                403, "executor token is not approved for the machine loop")
+        return executor
+    _guard_write(request)
+    return None
+
+
+def _report_identity_mismatch(executor: dict[str, Any] | None,
+                              agent: str) -> bool:
+    """Amd 2 §7 spoofing signal: does the declared ``agent`` string
+    disagree with the token-backed executor? Cheap containment heuristic:
+    the string is consistent when it is empty (no self-assertion to
+    contradict) or references the executor's registered name or its
+    harness id; anything else is a mismatch. Only computable on
+    executor-token requests — a board-token report carries no token-backed
+    identity to disagree with (flag stays False there)."""
+    if not executor:
+        return False
+    declared = (agent or "").strip()
+    if not declared:
+        return False
+    return (executor["name"] not in declared
+            and executor["harness"] not in declared)
 
 
 # ------------------------------------------------------------------------ SSE
