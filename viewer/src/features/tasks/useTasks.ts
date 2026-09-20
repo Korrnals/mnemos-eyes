@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { ArchiveParams, BoardSummary } from "@/gateway/boardTypes";
 import type { InboxParams } from "@/gateway/BoardAdapter";
 import { isTaskSource } from "@/gateway/capabilities";
@@ -161,29 +161,89 @@ export function useTaskInbox(params: InboxParams = {}) {
  * report count, so this derives what the CLIENT knows: the count key fed by
  * SSE `report` events and by visited detail pages (the effect below syncs
  * it from the loaded ReportsOut). Tasks with no known count render no badge
- * — unknown is not zero. One cache subscription drives every badge.
+ * — unknown is not zero.
+ *
+ * Freeze fix (prod feedback: /tasks ↔ / cycles froze the DOM while
+ * pushState kept working). The old implementation `setTick`ed on EVERY
+ * query-cache event. That is a self-sustaining loop: every re-render of a
+ * sibling `useQuery` with an inline `queryFn` sends
+ * `observerOptionsUpdated` back into the cache (unstable options ⇒
+ * `QueryObserver.setOptions` notifies), so event → tick → render → event →
+ * … never settles — one probe component measured 3994 cache events /
+ * 3995 renders in 400 ms, starving the scheduler until paint and router
+ * transitions stopped committing (gate: TasksLayout.freeze.test.tsx).
+ *
+ * The contract now: derive during render (the DOM-free renderToString
+ * harness keeps its badge coverage), and let a subscription re-render ONLY
+ * when a `tasks.reports.*` key changes AND the derived counts actually
+ * differ — the equality guard makes the event → render cycle impossible by
+ * construction, while SSE count bumps still update the badges.
  */
 export function useReportCounts(taskIds: readonly string[]): Record<string, number> {
   const queryClient = useQueryClient();
-  const [tick, setTick] = useState(0);
+  const [revision, setRevision] = useState(0);
+  const counts = useMemo(() => {
+    void revision; // the subscription below only bumps this to invalidate
+    return deriveReportCounts(queryClient, taskIds);
+  }, [queryClient, taskIds, revision]);
+
+  // Last RENDERED counts, read by the subscription outside render. Updated
+  // in an effect (ref writes during render are forbidden by the compiler
+  // rules) — useRef(counts) keeps it correct before the first effect runs.
+  const lastCountsRef = useRef(counts);
   useEffect(() => {
-    // Re-derive on any cache write (SSE patches, detail loads, invalidations).
-    return queryClient.getQueryCache().subscribe(() => setTick((value) => value + 1));
-  }, [queryClient]);
-  return useMemo(() => {
-    void tick; // the subscription only exists to invalidate this memo
-    const counts: Record<string, number> = {};
-    for (const taskId of taskIds) {
-      const known = queryClient.getQueryData<number>(keys.tasks.reports.count(taskId));
-      if (typeof known === "number" && known > 0) counts[taskId] = known;
-      else {
-        const reports = queryClient.getQueryData(keys.tasks.reports.detail(taskId));
-        const fromDetail = (reports as { count?: number } | undefined)?.count;
-        if (typeof fromDetail === "number" && fromDetail > 0) counts[taskId] = fromDetail;
-      }
+    lastCountsRef.current = counts;
+  }, [counts]);
+
+  useEffect(() => {
+    return queryClient.getQueryCache().subscribe((event) => {
+      // Only report keys can change the derived counts. Ignoring the rest
+      // (board patches, observer churn on other queries) removes the loop
+      // fuel; the value guard below removes the last spark.
+      if (!isReportsCacheKey(event.query.queryKey)) return;
+      const next = deriveReportCounts(queryClient, taskIds);
+      if (sameReportCounts(lastCountsRef.current, next)) return; // no-op write
+      setRevision((value) => value + 1);
+    });
+  }, [queryClient, taskIds]);
+
+  return counts;
+}
+
+/** Cache-key filter: everything under `tasks.reports.*` (count + detail). */
+function isReportsCacheKey(queryKey: readonly unknown[]): boolean {
+  return (
+    queryKey[0] === keys.tasks.reports.all[0] &&
+    queryKey[1] === keys.tasks.reports.all[1]
+  );
+}
+
+/** The derivation the old memo did: count key first, visited detail second. */
+function deriveReportCounts(
+  queryClient: QueryClient,
+  taskIds: readonly string[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const taskId of taskIds) {
+    const known = queryClient.getQueryData<number>(keys.tasks.reports.count(taskId));
+    if (typeof known === "number" && known > 0) counts[taskId] = known;
+    else {
+      const reports = queryClient.getQueryData(keys.tasks.reports.detail(taskId));
+      const fromDetail = (reports as { count?: number } | undefined)?.count;
+      if (typeof fromDetail === "number" && fromDetail > 0) counts[taskId] = fromDetail;
     }
-    return counts;
-  }, [queryClient, taskIds, tick]);
+  }
+  return counts;
+}
+
+/** Referential-stability check for the snapshot (small flat number map). */
+function sameReportCounts(
+  a: Record<string, number>,
+  b: Record<string, number>,
+): boolean {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
 }
 
 /** Sync the count key from a loaded reports page (detail page effect). */
