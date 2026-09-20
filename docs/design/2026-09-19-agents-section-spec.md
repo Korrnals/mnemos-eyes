@@ -182,8 +182,12 @@ unverified-строк — доверительный театр. Запреты 
    GET-ответе (вычисляется, не хранится); `executor_id` (explicit-таргет).
 4. Настройка дефолта: `GET/PUT /api/settings/execution` (default + fallback;
    поле scope — резерв под per-project).
-5. Фильтры списка: `GET /api/assignments?state=&executor=&task=&specialist=`;
-   таймстемпы всех фаз отдавать как есть.
+5. Фильтры списка (правка 2026-09-21 по факту контракта сервера):
+   `GET /api/assignments?state=&task_id=` — точные фильтры сервера;
+   `executor_id=` — presence-piggyback при опросе исполнителем, НЕ фильтр
+   списка; серверного фильтра `specialist=` нет — отбор по специалисту UI
+   делает клиентски по items; `by=` фильтрует источник запуска
+   (manual/automation). Таймстемпы всех фаз отдавать как есть.
 6. Пороги reaper (10/30 мин) — в документации или meta-эндпоинте: UI-отсчёты
    не хардкодят.
 7. Единообразное поле `actor` (declared identity) во всех событиях исполнения
