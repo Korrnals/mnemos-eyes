@@ -38,7 +38,12 @@ export const ru = {
   "nav.session": "Сессия",
   "nav.collapse": "Свернуть панель",
   "nav.expand": "Развернуть панель",
-  "nav.footerReadOnly": "L1 · только чтение",
+  // Session-aware mode line (fix/login-feedback): the sidebar footer and the
+  // overview badge state the app's CURRENT contract — read-only without a
+  // ui token, control with one — instead of the static «L1 · только чтение»
+  // that kept lying after login.
+  "nav.modeReadOnly": "только чтение",
+  "nav.modeActive": "сессия активна",
   "shell.skipToContent": "Перейти к содержимому",
   "shell.viewFell": "Этот вид упал в колодец",
   "shell.tryAgain": "Попробовать снова",
@@ -298,6 +303,12 @@ export const ru = {
   "login.signIn": "Войти",
   "login.signOut": "Выйти",
   "login.signOutAria": "Убрать ui-токен из этой вкладки",
+  // Login feedback toasts (fix/login-feedback): confirm the stored token,
+  // shout about the server-side 401 (alongside the inline window line).
+  "login.toastSignedIn": "Вход выполнен — доступно управление",
+  "login.toastRejected": "Токен отклонён",
+  "login.toastRejectedDetail":
+    "Сервер вернул 401 — окно входа открыто, вставьте актуальное значение.",
 
   // --- tasks (Ф2 reads + Ф3 mutations) --------------------------------------------
   "tasks.title": "Задачи",

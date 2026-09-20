@@ -13,6 +13,7 @@ import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import { UiTokenSlot } from "@/features/ui-token/UiTokenSlot";
 import { LoginDialog } from "@/features/ui-token/LoginDialog";
+import { Sidebar } from "@/layout/Sidebar";
 import { I18nProvider } from "@/i18n";
 import { keys } from "@/lib/queryKeys";
 import { clearUiToken } from "@/gateway/uiToken";
@@ -241,6 +242,9 @@ describe("login flow regression (owner repro)", () => {
     // 5. The queued create re-ran WITH the fresh bearer token…
     expect(mutationCalls).toHaveLength(1);
     expect(mutationCalls[0]?.auth).toBe("Bearer ui-secret-1");
+    // …the login itself is CONFIRMED (fix/login-feedback): the success toast
+    // lands beside the create toast — the window no longer closes silently.
+    expect(container.textContent).toContain("Signed in — control available");
     // …the task is on the board, the dialogs are closed…
     expect(container.textContent).toContain("Repro task");
     expect(document.querySelector("textarea")).toBeNull();
@@ -258,7 +262,9 @@ describe("login flow regression (owner repro)", () => {
   it("manual «Sign in» opens the same window with NO contextual line; login stores the token, no mutation fires", { timeout: 20000 }, async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-    const fetchImpl = vi.fn(async () => jsonResponse(boardPayload));
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(boardPayload),
+    );
     const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -270,7 +276,7 @@ describe("login flow regression (owner repro)", () => {
 
     const container = document.createElement("div");
     document.body.appendChild(container);
-    const root = createRoot(container);
+    const root: Root = createRoot(container);
     mountedRoots.push(root);
     await act(async () => {
       root.render(
@@ -281,8 +287,13 @@ describe("login flow regression (owner repro)", () => {
                 <UiTokenProvider>
                   <MemoryRouter initialEntries={["/tasks"]}>
                     <TaskListPage />
+                    {/* The session-aware footer (fix/login-feedback): the
+                     * reactive flip is asserted below, no reload involved. */}
+                    <Sidebar collapsed={false} onToggle={() => undefined} />
                     {/* The TopBar sign-in entry (board mode). */}
                     <UiTokenSlot />
+                    {/* The visible toast region (same placement as Shell). */}
+                    <ToastViewport />
                   </MemoryRouter>
                 </UiTokenProvider>
               </ToastProvider>
@@ -292,12 +303,14 @@ describe("login flow regression (owner repro)", () => {
       );
     });
 
-    // No token yet: no window, the accent «Sign in» is in the bar.
+    // No token yet: no window, the accent «Sign in» is in the bar, and the
+    // footer states the read-only contract.
     expect(document.getElementById("login-token-value")).toBeNull();
     const signIn = Array.from(container.querySelectorAll("button")).find((button) =>
       button.textContent?.trim() === "Sign in",
     );
     expect(signIn).toBeDefined();
+    expect(container.textContent).toContain("read-only");
 
     // Click «Sign in»: the window opens WITHOUT the queued-action line.
     await act(async () => {
@@ -327,7 +340,107 @@ describe("login flow regression (owner repro)", () => {
         (button) => button.textContent?.trim() === "Sign out",
       ),
     ).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(1); // only the prefetch
+    // fix/login-feedback: the login is CONFIRMED by a toast, and the footer
+    // flips to the active-session line in the SAME render — no reload.
+    expect(container.textContent).toContain("Signed in — control available");
+    expect(container.textContent).toContain("session active");
+    expect(container.textContent).not.toContain("read-only");
+    // Reads may fly (board/inbox queries); a manual login must fire no POST.
+    const posts = fetchImpl.mock.calls.filter(
+      ([, init]) => (init?.method ?? "GET") === "POST",
+    );
+    expect(posts).toHaveLength(0);
+  });
+
+  it("a server-rejected token (401 on the retried action) reopens the window AND pushes the error toast", { timeout: 20000 }, async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+    // Every POST answers 401 — even with the freshly pasted bearer, so the
+    // queued create's retry is REJECTED and the gate reopens the window.
+    const mutationCalls: { auth: string | null }[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/tasks") && (init?.method ?? "GET") === "POST") {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        const auth = headers.Authorization ?? null;
+        mutationCalls.push({ auth });
+        return jsonResponse({ error: "unauthorized" }, 401);
+      }
+      return jsonResponse(boardPayload);
+    });
+    const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await queryClient.prefetchQuery({
+      queryKey: keys.tasks.board(),
+      queryFn: () => gateway.board(),
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <I18nProvider initialLang="en">
+          <GatewayContext.Provider value={gateway}>
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <UiTokenProvider>
+                  <MemoryRouter initialEntries={["/tasks"]}>
+                    <TaskListPage />
+                    <ToastViewport />
+                  </MemoryRouter>
+                </UiTokenProvider>
+              </ToastProvider>
+            </QueryClientProvider>
+          </GatewayContext.Provider>
+        </I18nProvider>,
+      );
+    });
+
+    // Create without a token → the login window (required).
+    const createButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Task",
+    );
+    await act(async () => {
+      createButton?.click();
+    });
+    const textarea = document.querySelector("textarea");
+    await act(async () => {
+      setInputValue(textarea as HTMLTextAreaElement, "Doomed task");
+    });
+    await act(async () => {
+      buttonByText(document.body, "Create task")?.click();
+    });
+    let tokenInput = document.getElementById("login-token-value") as HTMLInputElement | null;
+    expect(tokenInput).not.toBeNull();
+
+    // Paste a token the server will refuse: the retry 401s → the window
+    // REOPENS with the inline rejection line…
+    await act(async () => {
+      setInputValue(tokenInput as HTMLInputElement, "ui-bad-token");
+      (tokenInput?.closest("form") as HTMLFormElement | null)?.requestSubmit();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(mutationCalls).toEqual([{ auth: "Bearer ui-bad-token" }]);
+    tokenInput = document.getElementById("login-token-value") as HTMLInputElement | null;
+    expect(tokenInput).not.toBeNull();
+    expect(document.querySelector('[data-testid="login-dialog"]')).not.toBeNull();
+    // Scoped to the dialog: the error toast card also carries role="alert"
+    // and lives in an earlier document node than the Radix portal.
+    const alert = document.querySelector('[data-testid="login-dialog"] [role="alert"]');
+    expect(alert?.textContent).toContain("The server rejected the token (401)");
+    // …AND the rejection is announced as an error toast (fix/login-feedback),
+    // beside the inline message — not instead of it.
+    expect(container.textContent).toContain("Token rejected");
+    expect(container.textContent).toContain("The server answered 401");
+    // The stored toast fired too (the value did land in the tab); the error
+    // toast + reopened window carry the server verdict.
+    expect(container.textContent).toContain("Signed in — control available");
   });
 
   it("the rejected (401) window shows the inline error and the queued line, and the token field is masked", { timeout: 20000 }, async () => {

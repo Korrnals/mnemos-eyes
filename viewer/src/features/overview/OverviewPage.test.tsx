@@ -15,7 +15,7 @@ import { I18nProvider } from "@/i18n";
  * cards and the fresh-pulse strip render from real prefetched data; with a
  * gateway that lacks the board-native capabilities (mnemos HttpAdapter) the
  * blocks do not render at all — no fake widgets, no dead sections. The quick
- * links and the L1 read-only badge are always honest.
+ * links and the session mode line are always honest.
  */
 async function renderOverview(
   gateway: InstanceType<typeof MockAdapter> | InstanceType<typeof HttpAdapter>,
@@ -67,11 +67,14 @@ describe("OverviewPage (mock gateway — capable)", () => {
     expect(html).toContain("mock-store");
   });
 
-  it("always offers the three quick links and the read-only badge", async () => {
+  it("always offers the three quick links and the session mode line", async () => {
     const html = await renderOverview(new MockAdapter({ latency: false }));
     expect(html).toContain('href="/memory/search"');
     expect(html).toContain('href="/memory/tags"');
-    expect(html).toContain("L1 read-only");
+    // Mock adapter: control is available (no auth wall) — the ACTIVE mode
+    // line, never the read-only one (fix/login-feedback).
+    expect(html).toContain("session active");
+    expect(html).not.toContain("read-only");
   });
 });
 
@@ -81,5 +84,8 @@ describe("OverviewPage (mnemos gateway — capabilities absent)", () => {
     expect(html).not.toContain("Stores");
     expect(html).not.toContain("Fresh pulse");
     expect(html).toContain('href="/memory/search"'); // quick links stay
+    // The mnemos adapter has no mutation surface — the read-only mode line
+    // is the honest contract there, even with an mnk_ session (L1 reads).
+    expect(html).toContain("read-only");
   });
 });

@@ -9,6 +9,7 @@ import type { BoardHealthServer } from "@/gateway/boardTypes";
 import { useGateway } from "@/gateway/GatewayContext";
 import { usePulse, useBoardHealth } from "@/hooks/usePulse";
 import { PulseFeed } from "@/features/memory-pulse/PulseFeed";
+import { useSessionControl } from "@/features/ui-token/useSessionControl";
 import { useT } from "@/i18n";
 
 /**
@@ -16,12 +17,13 @@ import { useT } from "@/i18n";
  * the domain summary. Anti-dashification rules apply: no counters for the
  * sake of counters, and a block with nothing to say does not render —
  * store/pulse sections appear only when the gateway speaks those views
- * (board / mock adapters) and only when they have content. The L1 read-only
- * badge states the app's contract plainly.
+ * (board / mock adapters) and only when they have content. The session-aware
+ * mode line states the app's current contract plainly (read-only / active).
  */
 export function OverviewPage() {
   const t = useT();
   const gateway = useGateway();
+  const sessionControl = useSessionControl();
   const pulseCapable = isPulseSource(gateway);
   const healthCapable = isBoardHealthSource(gateway);
   // Top of the recency feed — the "what just happened" strip (limit 5).
@@ -131,8 +133,11 @@ export function OverviewPage() {
         </section>
       ) : null}
 
+      {/* Session-aware mode line (fix/login-feedback) — same derivation as
+       * the sidebar footer: states the live contract instead of the static
+       * L1 read-only claim that kept lying after a login. */}
       <p className="text-center text-xs text-foreground-muted">
-        {t("nav.footerReadOnly")}
+        {t(sessionControl ? "nav.modeActive" : "nav.modeReadOnly")}
       </p>
     </section>
   );

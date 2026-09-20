@@ -202,3 +202,65 @@ describe("UiTokenGate", () => {
     expect(states).toEqual([true, false]);
   });
 });
+
+describe("UiTokenGate session events (fix/login-feedback toast source)", () => {
+  /** Gate + collected event log, storage-backed (like the adapter wiring). */
+  function gateWithEvents(): { gate: UiTokenGate; events: string[] } {
+    const events: string[] = [];
+    const gate = new UiTokenGate({ hasToken: () => hasUiToken() });
+    gate.listen((event) => events.push(event.type));
+    return { gate, events };
+  }
+
+  it("submitToken emits loginStored exactly once the token lands in storage", async () => {
+    const { gate, events } = gateWithEvents();
+    gate.openLogin();
+    gate.submitToken("typed-token");
+    expect(events).toEqual(["loginStored"]);
+    // Not a login: dismissal and logout never announce one.
+    gate.openLogin();
+    gate.dismiss();
+    gate.submitToken("second-token");
+    expect(events).toEqual(["loginStored", "loginStored"]);
+    gate.logout();
+    expect(events).toEqual(["loginStored", "loginStored"]);
+  });
+
+  it("a 401 mid-flight emits tokenRejected (the toast beside the inline line)", async () => {
+    sessionStorage.setItem(UI_TOKEN_STORAGE_KEY, "stale-token");
+    const { gate, events } = gateWithEvents();
+    let attempts = 0;
+    gate.runAuthorized(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new ApiError(401, "ui token rejected");
+    });
+    await vi.waitFor(() =>
+      expect(gate.getState()).toMatchObject({ open: true, reason: "rejected" }),
+    );
+    expect(events).toEqual(["tokenRejected"]);
+    // The retry with a fresh value succeeds → the stored event, no rejection.
+    gate.submitToken("fresh-token");
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    expect(events).toEqual(["tokenRejected", "loginStored"]);
+  });
+
+  it("non-401 failures stay silent — the callback owns that feedback", async () => {
+    const { gate, events } = gateWithEvents();
+    sessionStorage.setItem(UI_TOKEN_STORAGE_KEY, "t");
+    gate.runAuthorized(async () => {
+      throw new ApiError(423, "locked");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(events).toEqual([]);
+  });
+
+  it("listen unsubscribes — a detached feedback sink hears nothing", async () => {
+    const events: string[] = [];
+    const gate = new UiTokenGate({ hasToken: () => hasUiToken() });
+    const detach = gate.listen((event) => events.push(event.type));
+    detach();
+    gate.submitToken("typed-token");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(events).toEqual([]);
+  });
+});

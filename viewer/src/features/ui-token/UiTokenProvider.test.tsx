@@ -7,6 +7,7 @@ import { UiTokenSlot } from "./UiTokenSlot";
 import { UiTokenContext } from "./UiTokenContext";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { HttpAdapter } from "@/gateway/HttpAdapter";
+import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { I18nProvider } from "@/i18n";
 
 /**
@@ -24,9 +25,13 @@ describe("UiTokenProvider (SSR smoke)", () => {
       <GatewayContext.Provider value={new HttpAdapter("/api")}>
         <QueryClientProvider client={new QueryClient()}>
           <I18nProvider initialLang="en">
-            <UiTokenProvider>
-              <p>read-only content stays browsable</p>
-            </UiTokenProvider>
+            {/* Same order as App.tsx: the provider pushes login toasts, so
+             * the toast layer must sit above it (useToast throws bare). */}
+            <ToastProvider>
+              <UiTokenProvider>
+                <p>read-only content stays browsable</p>
+              </UiTokenProvider>
+            </ToastProvider>
           </I18nProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
