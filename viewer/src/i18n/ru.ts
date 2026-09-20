@@ -472,6 +472,9 @@ export const ru = {
   "tasks.board.validatingOverdueTitle":
     "в валидации дольше 24 часов — требуется решение владельца",
   "tasks.board.dragDisabled": "войдите для управления",
+  "tasks.board.styleLabel": "Вид доски",
+  "tasks.board.styleGroups": "Группы",
+  "tasks.board.styleClassic": "Классика",
   "tasks.priority.critical": "критический",
   "tasks.priority.high": "высокий",
   "tasks.priority.normal": "обычный",

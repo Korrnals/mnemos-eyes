@@ -13,7 +13,7 @@ image:
   repository: ghcr.io/korrnals/vesmaro-eyes
   # Explicit tag synced from server/app.py by scripts/sync-version.sh.
   # If left empty, .Chart.AppVersion is used.
-  tag: "1.10.2"
+  tag: "1.11.0"
   pullPolicy: Always
 
 imagePullSecrets:
@@ -28,6 +28,18 @@ serviceAccount:
 podAnnotations: {}
 
 podLabels: {}
+
+# --- ADR 0011 Ф4: root UI switch -------------------------------------------
+# Which UI owns "/": board (default — frozen board at /, React viewer at
+# /app) or app (viewer at / with history fallback, frozen board at /board,
+# /app 302 -> / so old bookmarks survive). Pure routing: no data, no image
+# rebuild — the flip re-creates the pod with a different env only.
+# Flip ONLY per RUNBOOK.md §9 (owner sign-off after the parity round):
+#   helm upgrade vesmaro-eyes deploy/chart/vesmaro-eyes -n kube-agents --set rootApp=app
+# Rollback is the mirror-image one-liner (--set rootApp=board).
+# Anything but board|app fails `helm template`/`helm upgrade` (and the
+# server itself fails safe to board on top of that).
+rootApp: board
 
 # Egress allowlist for memory-server URLs added/edited via the API (SEC-1):
 # hosts outside the list are rejected 422. Default covers this lab —

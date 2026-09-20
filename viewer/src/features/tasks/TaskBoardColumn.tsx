@@ -5,19 +5,33 @@ import { Badge } from "@/components/ui/badge";
 import type { BoardTask } from "@/gateway/boardTypes";
 import { useT } from "@/i18n";
 import { columnBadgeVariant, columnLabelKey } from "./taskStatus";
-import { groupTasksByProject } from "./taskGrouping";
+import { groupTasksByProject, sortGroupTasks } from "./taskGrouping";
 import { columnDropId, groupDropId } from "./boardDnd";
 import { TaskBoardCard } from "./TaskBoardCard";
+import type { BoardStyle } from "./tasksViewPrefs";
 
 /**
- * One kanban column (Ф3): wire column title + counter, project-group
- * accordions INSIDE the column (the persisted "vesmaro.taskGroups" set is
- * shared with the list view — one collapse state per project across both
- * projections), a SortableContext for the vertical in-column reorder and a
- * column-root droppable (append target / empty column landing zone).
+ * One kanban column (Ф3; CV-5 adds the second style): wire column title +
+ * counter, a SortableContext for the vertical in-column reorder and a
+ * column-root droppable (append target / empty column landing zone) — the
+ * SHARED layer of both board styles. The style prop only switches the list
+ * rendering inside:
+ *
+ * - "groups" (Ф3 default, unchanged): project-group accordions INSIDE the
+ *   column (the persisted "vesmaro.taskGroups" set is shared with the list
+ *   view), each collapsed header doubling as an append droppable;
+ * - "classic" (CV-5): NO accordions — one flat card list, classic kanon
+ *   order priority → position (the list view's `sortGroupTasks`
+ *   comparator), roomier cards, taller column with internal scroll.
  *
  * Compact density narrows the columns (verdict §3 "тонкие колонки"); the
  * board scrolls horizontally when the 7 lanes outgrow the viewport.
+ *
+ * DnD semantics are the SAME in both styles: the page-level resolver works
+ * on the wire position order (the single source of truth for `position`),
+ * so a classic-view drop resolves against the wire order and the priority
+ * projection re-sorts the resting place — the standard behaviour of a
+ * sorted kanban, never a second resolver.
  */
 export function TaskBoardColumn({
   column,
@@ -30,6 +44,7 @@ export function TaskBoardColumn({
   collapsed,
   onToggleGroup,
   compact,
+  style,
 }: {
   column: string;
   /** Position-ordered tasks of THIS column (already filtered). */
@@ -44,9 +59,14 @@ export function TaskBoardColumn({
   collapsed: ReadonlySet<string>;
   onToggleGroup: (project: string) => void;
   compact: boolean;
+  /** Board render style (CV-5): "groups" accordions or "classic" flat flow. */
+  style: BoardStyle;
 }) {
   const t = useT();
   const groups = groupTasksByProject(tasks);
+  // Classic render order: priority → position (grouped keeps the wire order —
+  // the accordions own their in-group sequencing).
+  const visibleTasks = style === "classic" ? sortGroupTasks(tasks) : tasks;
   const { setNodeRef, isOver } = useDroppable({
     id: columnDropId(column),
     disabled: !canDrag,
@@ -79,28 +99,55 @@ export function TaskBoardColumn({
       <div
         ref={setNodeRef}
         className={
-          "flex-1 space-y-2 overflow-y-auto p-2 " +
-          (compact ? "max-h-[70vh]" : "max-h-[75vh]")
+          "flex-1 overflow-y-auto p-2 " +
+          // Classic columns run taller (CV-5 "во всю высоту" within the
+          // document-scrolled shell): the viewport cap keeps the scroll
+          // INTERNAL to the column, the page never scrolls under the board.
+          (style === "classic"
+            ? compact
+              ? "max-h-[75vh] "
+              : "max-h-[80vh] "
+            : compact
+              ? "max-h-[70vh] "
+              : "max-h-[75vh] ")
         }
       >
         <SortableContext
-          items={tasks.map((task) => task.id)}
+          items={visibleTasks.map((task) => task.id)}
           strategy={verticalListSortingStrategy}
         >
-          {groups.map((group) => (
-            <BoardGroup
-              key={group.project || "__none"}
-              column={column}
-              project={group.project}
-              tasks={group.tasks}
-              canDrag={canDrag}
-              showMenu={showMenu}
-              reportCounts={reportCounts}
-              query={query}
-              collapsed={collapsed.has(group.project)}
-              onToggle={() => onToggleGroup(group.project)}
-            />
-          ))}
+          {style === "classic" ? (
+            <ul className="space-y-2">
+              {visibleTasks.map((task) => (
+                <TaskBoardCard
+                  key={task.id}
+                  task={task}
+                  reportCount={reportCounts[task.id]}
+                  canDrag={canDrag}
+                  showMenu={showMenu}
+                  query={query}
+                  skin="classic"
+                />
+              ))}
+            </ul>
+          ) : (
+            <div className="space-y-2">
+              {groups.map((group) => (
+                <BoardGroup
+                  key={group.project || "__none"}
+                  column={column}
+                  project={group.project}
+                  tasks={group.tasks}
+                  canDrag={canDrag}
+                  showMenu={showMenu}
+                  reportCounts={reportCounts}
+                  query={query}
+                  collapsed={collapsed.has(group.project)}
+                  onToggle={() => onToggleGroup(group.project)}
+                />
+              ))}
+            </div>
+          )}
         </SortableContext>
 
         {tasks.length === 0 ? (

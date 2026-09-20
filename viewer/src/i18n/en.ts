@@ -461,6 +461,9 @@ export const en: Record<TranslationKey, string> = {
   "tasks.board.validatingOverdueTitle":
     "validating for over 24 hours — an owner decision is required",
   "tasks.board.dragDisabled": "sign in to manage",
+  "tasks.board.styleLabel": "Board layout",
+  "tasks.board.styleGroups": "Groups",
+  "tasks.board.styleClassic": "Classic",
   "tasks.priority.critical": "critical",
   "tasks.priority.high": "high",
   "tasks.priority.normal": "normal",

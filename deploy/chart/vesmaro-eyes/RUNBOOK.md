@@ -246,3 +246,109 @@ hostNetwork-порт 8080 при откате снова займётся под
 Rollback сплита: `--set uiToken.enabled=false` (или `helm rollback`) — env
 пропадает из пода, guard возвращается в переходный режим; секрет
 `vesmaro-eyes-ui-token` переживёт удаление (resource-policy: keep).
+
+## 9. Ф4 (ADR 0011): переключение корня на новый app
+
+Механика: env `VESMARO_ROOT_APP` (values-ключ `rootApp`, значения
+`board` | `app`) выбирает, какой UI владеет `/`:
+
+| Режим | `/` | `/app` | `/board` |
+|---|---|---|---|
+| `board` (дефолт, сегодня) | старый борд | новый app (history-fallback) | 404 (маршрута нет) |
+| `app` (после переключения) | новый app (history-fallback, deep-links `/tasks/42` работают) | 302 → `/` (закладки живут) | старый борд (index + его ассеты; сами ассеты борда остаются и на абсолютных `/styles/…`, `/js/…`) |
+
+Переключение — чистый routing: образ тот же, данные (PVC/SQLite) не
+трогаются, API не меняется. Изменение env пересоздаёт под (стратегия
+Recreate → окно простоя как у обычного деплоя, ~30–60 с). Некорректное
+значение (`--set rootApp=apa`) роняет `helm upgrade` на рендере
+(`rootApp must be 'board' or 'app'`), а сервер дополнительно fail-safe'ит
+неизвестный env в `board` с WARNING в логе — молчаливого флипа не бывает.
+
+### 9.1 Pre-switch чек-лист (все пункты обязательны)
+
+1. **Parity-раунд владельца завершён** (гейт QA Ф4): новый app на `/app`
+   проверён владельцем по всем ключевым сценариям, вердикт «готов»
+   зафиксирован. Если это повторная попытка после отката — счётчик
+   фолбэков учтён: вторая попытка только после нового полного
+   parity-раунда, а не «ещё раз попробовать».
+2. **Образ текущий**: `./scripts/sync-version.sh --check` зелёный;
+   image.tag в values = версия в `server/app.py`; деплой живёт на этом
+   теге (`kubectl -n kube-agents get deploy vesmaro-eyes -o
+   jsonpath='{.spec.template.spec.containers[0].image}'`).
+3. **Бэкап-стратегия не нужна**: переключение не пишет в данные и
+   бесшумно обратимо одной командой (ниже). Если хочется перестраховаться
+   — снимок PVC делается стандартно, но не требуется.
+4. Владелец доступен для вердикта после переключения (не уходим на флип
+   «перед выходными без владельца на связи»).
+
+### 9.2 Включение (одна команда)
+
+```bash
+helm upgrade vesmaro-eyes deploy/chart/vesmaro-eyes -n kube-agents \
+  --set rootApp=app
+
+kubectl -n kube-agents rollout status deployment/vesmaro-eyes --timeout=300s
+```
+
+### 9.3 Проверки после переключения
+
+```bash
+# / отдаёт НОВЫЙ app (title/index нового app, не «task board»):
+curl -ksS https://vesmaro.abyss.lab/ | head -c 300
+
+# /board отдаёт СТАРЫЙ борд (title «vesmaro-eyes — task board»):
+curl -ksS https://vesmaro.abyss.lab/board | head -c 300
+
+# API жив и не менялся:
+curl -ksS https://vesmaro.abyss.lab/api/health | head -c 400
+
+# Старые закладки: /app редиректит на / (ожидается 302 + Location: /):
+curl -ksS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
+  https://vesmaro.abyss.lab/app
+
+# Deep-link нового app отдаёт shell приложения (200, html):
+curl -ksS -o /dev/null -w '%{http_code}\n' https://vesmaro.abyss.lab/tasks
+
+# Режим долетел до пода (в выводе ожидается VESMARO_ROOT_APP=app):
+kubectl -n kube-agents exec deploy/vesmaro-eyes -- env | grep VESMARO_ROOT_APP
+```
+
+Дополнительно руками владельца: открыть `/` в браузере (новый app),
+открыть `/board` (старый борд), проверить вход/мутации в новом app.
+
+### 9.4 Откат (одна команда, без редеплоя образа)
+
+```bash
+helm upgrade vesmaro-eyes deploy/chart/vesmaro-eyes -n kube-agents \
+  --set rootApp=board
+
+kubectl -n kube-agents rollout status deployment/vesmaro-eyes --timeout=300s
+```
+
+После отката: `curl /` снова борд, `/app` снова новый app, `/board` 404.
+Откат не требует cleanup'а: переключение не меняет данные, секреты и
+конфигурацию — только env пода.
+
+### 9.5 Неделя наблюдения и снятие /board
+
+После включения — 7 дней наблюдения (критерии фиксируются по факту,
+аппаратуры для метрик маршрутов нет — это ручной протокол владельца):
+
+- владелец работает в новом app на `/`; `/board` открывается только для
+  сверки при сомнениях;
+- regressions не накапливаются: каждый найденный дефект нового app либо
+  закрывается до конца недели, либо явно отложен с согласия владельца;
+- откатов в течение недели не было (иначе счётчик фолбэков +1 → возврат
+  к parity-раунду, см. §9.1.1).
+
+**Снятие `/board` с раздачи** — отдельный шаг, ТОЛЬКО после явного
+вердикта владельца «старый борд больше не нужен»:
+
+- критерий: вся активность недели прошла в новом app, `/board` не
+  использовался ни для работы, ни для сверки; никаких открытых блокеров
+  по новому app;
+- исполнение: отдельное изменение в репо (удаление `/board`-роутов из
+  `server/app.py` + запись в values/RUNBOOK), со своим ревью и своим
+  деплоем — НЕ часть этого переключения;
+- до этого шага `/board` остаётся постоянным fallback'ом: он не мешает
+  новому app и не требует обслуживания.

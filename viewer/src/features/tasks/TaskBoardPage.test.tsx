@@ -122,6 +122,21 @@ describe("TaskBoardPage (mock adapter — 7 WF-1 columns)", () => {
     expect(html).toContain('href="/tasks/list"');
   });
 
+  it("carries the «Groups | Classic» board style toggle next to it (default: groups)", async () => {
+    const html = await renderBoard(
+      new MockAdapter({ latency: false }),
+      "/tasks",
+      seedBoard,
+    );
+    // A stateful segmented group (aria-pressed), no navigation — both styles
+    // share the route; with no localStorage the default "groups" is pressed.
+    expect(html).toContain('aria-label="Board layout"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain(">Groups</button>");
+    expect(html).toContain('aria-pressed="false"');
+    expect(html).toContain(">Classic</button>");
+  });
+
   it("keeps the filters in the URL: ?q= filters cards and highlights titles", async () => {
     const html = await renderBoard(
       new MockAdapter({ latency: false }),
