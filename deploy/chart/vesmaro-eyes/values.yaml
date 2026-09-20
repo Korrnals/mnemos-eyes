@@ -33,8 +33,10 @@ podLabels: {}
 # hosts outside the list are rejected 422. Default covers this lab —
 # in-cluster mnemos service name, LAN range for the laptop store,
 # .abyss.lab hostnames, loopback for local checks. Extend when adding
-# stores with other hosts.
-memoryHostsAllowlist: "agentsnode-mnemos,192.168.1.0/24,.abyss.lab,localhost,127.0.0.1"
+# stores with other hosts. W5: the mesh-node healthz base_url
+# (http://mnemos-mesh-peer.kube-agents.svc.cluster.local:9090) goes
+# through the same validator, so its FQDN must be allowed too.
+memoryHostsAllowlist: "agentsnode-mnemos,mnemos-mesh-peer.kube-agents.svc.cluster.local,192.168.1.0/24,.abyss.lab,localhost,127.0.0.1"
 
 # --- secrets -------------------------------------------------------------
 boardToken:
@@ -218,4 +220,16 @@ networkPolicy:
         - port: 8788
           protocol: TCP
     # Escape hatch for future registered stores.
-    extra: []
+    # W5: mesh-node healthz — the agentsnode-mnemos sidecar (mesh node
+    # "cluster") serves GET /healthz on its metrics listener :9090. The
+    # selector is the mesh-owned additive label (the ONLY selector of
+    # the mnemos-mesh-peer Service/NP in the mnemos-mesh repo), NOT the
+    # chart's app.kubernetes.io/name label.
+    extra:
+      - to:
+          - podSelector:
+              matchLabels:
+                mnemos-mesh.korrnals.com/node: cluster
+        ports:
+          - port: 9090
+            protocol: TCP
