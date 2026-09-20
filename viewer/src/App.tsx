@@ -30,7 +30,7 @@ export default function App() {
     <AuthProvider adapterMode={ADAPTER} endpoint={adapterEndpointLabel()}>
       {/* Ф3 mutation feedback: one toast region above every route. */}
       <ToastProvider>
-        {/* Ф3 ui-token gate: one panel for all mutations, queued retries. */}
+        {/* Ф3 ui-token gate: one login window for all mutations, queued retries. */}
         <UiTokenProvider>
           <RouterProvider router={router} />
           <AuthOverlay />

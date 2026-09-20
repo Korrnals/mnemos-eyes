@@ -477,7 +477,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.8.0", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.8.1", lifespan=lifespan)
 
 # --------------------------------------------------- security headers (Ф0a)
 # АРХКОМ-3 decision 13 / security verdict §5.2: on EVERY response — CSP,
@@ -487,7 +487,7 @@ app = FastAPI(title="vesmaro-eyes", version="1.8.0", lifespan=lifespan)
 # Header-only middleware: no body buffering, so SSE (/api/events) keeps
 # streaming (its no-cache is deliberately superseded by no-store — an
 # EventSource never caches either way).
-_CSP = ("default-src 'self'; script-src 'self'; object-src 'none'; "
+_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; "
         "base-uri 'self'; frame-ancestors 'none'; connect-src 'self'; "
         "img-src 'self' data:")
 

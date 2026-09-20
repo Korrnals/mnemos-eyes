@@ -3,6 +3,7 @@ import { Outlet, ScrollRestoration, useLocation } from "react-router";
 import { RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
+import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
@@ -80,6 +81,10 @@ export function Shell() {
        * router's ScrollRestoration, never a hand-rolled cache). */}
       <ScrollRestoration />
       <FocusMain pathname={location.pathname} />
+      {/* Toast region — mounted INSIDE the router (toast actions are in-app
+       * Links; a Link outside Router context throws). Shell is the persistent
+       * root layout, so toasts survive every route change. */}
+      <ToastViewport />
     </div>
   );
 }

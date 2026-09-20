@@ -279,21 +279,22 @@ export const en: Record<TranslationKey, string> = {
   "toasts.regionLabel": "Notifications",
   "toasts.dismissAria": "Dismiss notification",
 
-  // --- ui-token gate (Ф3, class ui) ------------------------------------------------
-  "uiToken.title": "Mutations are protected by a ui token",
-  "uiToken.description":
-    "Task mutations need a class-ui token. Paste the value — it stays in this tab only (sessionStorage) and travels only to your board server.",
-  "uiToken.rejectedDescription":
-    "The server rejected the token (401). Paste a current value — the operation will retry automatically.",
-  "uiToken.fieldLabel": "Ui token",
-  "uiToken.showValue": "Reveal the token value",
-  "uiToken.hideValue": "Hide the token value",
-  "uiToken.hint":
+  // --- ui-token login window (Ф3, class ui; fix/login-window) -----------------------
+  "login.title": "Sign in",
+  "login.description":
+    "Sign in with a ui token to edit tasks. The value stays in this tab only (sessionStorage) and travels only to your board server.",
+  "login.continueQueued": "Sign in to continue — your action will run automatically",
+  "login.rejected": "The server rejected the token (401) — paste a current value.",
+  "login.fieldLabel": "Token",
+  "login.showValue": "Reveal the token value",
+  "login.hideValue": "Hide the token value",
+  "login.hint":
     "Where to get one: the value of the vesmaro-eyes-ui-token secret (e.g. kubectl get secret vesmaro-eyes-ui-token -o yaml via your cluster admin).",
-  "uiToken.continueReadOnly": "Continue read-only",
-  "uiToken.submit": "Save and continue",
-  "uiToken.signOut": "Sign out",
-  "uiToken.signOutAria": "Remove the ui token from this tab",
+  "login.continueReadOnly": "Continue read-only",
+  "login.submit": "Sign in",
+  "login.signIn": "Sign in",
+  "login.signOut": "Sign out",
+  "login.signOutAria": "Remove the ui token from this tab",
 
   // --- tasks (Ф2 — read-only domain, mutations are Ф3) ---------------------------
   "tasks.title": "Tasks",

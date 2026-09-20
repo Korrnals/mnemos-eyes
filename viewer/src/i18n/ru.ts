@@ -282,21 +282,22 @@ export const ru = {
   "toasts.regionLabel": "Уведомления",
   "toasts.dismissAria": "Закрыть уведомление",
 
-  // --- ui-token gate (Ф3, class ui) ------------------------------------------------
-  "uiToken.title": "Мутации защищены ui-токеном",
-  "uiToken.description":
-    "Для изменения задач нужен токен класса ui. Вставьте значение — оно останется только в этой вкладке (sessionStorage) и уйдёт только на ваш board-сервер.",
-  "uiToken.rejectedDescription":
-    "Сервер отклонил токен (401). Вставьте актуальное значение — операция повторится автоматически.",
-  "uiToken.fieldLabel": "Ui-токен",
-  "uiToken.showValue": "Показать значение токена",
-  "uiToken.hideValue": "Скрыть значение токена",
-  "uiToken.hint":
+  // --- ui-token login window (Ф3, class ui; fix/login-window) -----------------------
+  "login.title": "Вход",
+  "login.description":
+    "Войдите с ui-токеном, чтобы изменять задачи. Значение останется только в этой вкладке (sessionStorage) и уйдёт только на ваш board-сервер.",
+  "login.continueQueued": "Войдите, чтобы продолжить — действие выполнится автоматически",
+  "login.rejected": "Сервер отклонил токен (401) — вставьте актуальное значение.",
+  "login.fieldLabel": "Токен",
+  "login.showValue": "Показать значение токена",
+  "login.hideValue": "Скрыть значение токена",
+  "login.hint":
     "Где взять: значение секрета vesmaro-eyes-ui-token (например, kubectl get secret vesmaro-eyes-ui-token -o yaml у администратора кластера).",
-  "uiToken.continueReadOnly": "Продолжить только чтение",
-  "uiToken.submit": "Сохранить и продолжить",
-  "uiToken.signOut": "Выйти",
-  "uiToken.signOutAria": "Убрать ui-токен из этой вкладки",
+  "login.continueReadOnly": "Продолжить только чтение",
+  "login.submit": "Войти",
+  "login.signIn": "Войти",
+  "login.signOut": "Выйти",
+  "login.signOutAria": "Убрать ui-токен из этой вкладки",
 
   // --- tasks (Ф2 reads + Ф3 mutations) --------------------------------------------
   "tasks.title": "Задачи",
