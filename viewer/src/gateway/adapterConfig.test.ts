@@ -183,10 +183,25 @@ describe("createGateway", () => {
 });
 
 describe("routerBasename", () => {
-  it("mounts the router under the Vite base and stays at root in dev", async () => {
+  it("follows the runtime location: /app pages keep the prefix, root pages mount at /", async () => {
+    // node-env (no window): root mount
     const { routerBasename } = await import("./adapterConfig");
-    expect(routerBasename("/app/")).toBe("/app");
+    expect(routerBasename("/app/")).toBeUndefined();
     expect(routerBasename("/")).toBeUndefined();
-    expect(routerBasename("")).toBeUndefined();
+    // stubbed browser location under /app: prefixed mount
+    const originalWindow = (globalThis as Record<string, unknown>).window;
+    (globalThis as Record<string, unknown>).window = {
+      location: { pathname: "/app/tasks" },
+    };
+    try {
+      vi.resetModules();
+      const fresh = await import("./adapterConfig");
+      expect(fresh.routerBasename("/app/")).toBe("/app");
+      expect(fresh.routerBasename("/")).toBe("/app");
+    } finally {
+      if (originalWindow === undefined) delete (globalThis as Record<string, unknown>).window;
+      else (globalThis as Record<string, unknown>).window = originalWindow;
+      vi.resetModules();
+    }
   });
 });
