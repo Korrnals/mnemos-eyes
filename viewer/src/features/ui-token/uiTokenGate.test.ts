@@ -7,11 +7,12 @@ import { UiTokenGate } from "./uiTokenGate";
  * Ф3 ui-token gate state machine (DOM-free — the React provider is a thin
  * wrapper). Flow contract:
  *
- *   run without token  → panel opens (required), run queued, onDeferred fires
- *   submitToken        → token stored, panel closes, queued run RE-RUNS
- *   dismiss            → panel closes, queued run DROPPED
- *   run → 401          → token cleared, panel reopens (rejected), run requeued
- *   logout             → token cleared, no panel
+ *   openLogin          → window opens (manual), nothing queued
+ *   run without token  → window opens (required), run queued, onDeferred fires
+ *   submitToken        → token stored, window closes, queued run RE-RUNS
+ *   dismiss            → window closes, queued run DROPPED
+ *   run → 401          → token cleared, window reopens (rejected), run requeued
+ *   logout             → token cleared, no window
  */
 
 class MemoryStorage {
@@ -44,9 +45,42 @@ beforeEach(() => {
 describe("UiTokenGate", () => {
   it("boots closed; tokenPresent mirrors the injected source", () => {
     const withToken = gateWithToken("t").gate.getState();
-    expect(withToken).toEqual({ open: false, reason: "required", tokenPresent: true });
+    expect(withToken).toEqual({ open: false, reason: "manual", tokenPresent: true });
     const withoutToken = gateWithToken(null).gate.getState();
     expect(withoutToken.tokenPresent).toBe(false);
+  });
+
+  it("openLogin opens the window (manual) without queueing anything", async () => {
+    // Storage-backed source: submitToken's setUiToken flips hasToken, like
+    // the real adapter wiring.
+    const gate = new UiTokenGate({ hasToken: () => hasUiToken() });
+    gate.openLogin();
+    expect(gate.getState()).toEqual({
+      open: true,
+      reason: "manual",
+      tokenPresent: false,
+    });
+    // A manual sign-in never resurrects a run: nothing was queued, so the
+    // submit must not execute anything (the run below was never registered).
+    const run = vi.fn(async () => undefined);
+    gate.submitToken("typed-token");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).not.toHaveBeenCalled();
+    // The token is stored and the window closed — the TopBar flips to
+    // «Выйти» reactively.
+    expect(hasUiToken()).toBe(true);
+    expect(gate.getState().open).toBe(false);
+  });
+
+  it("openLogin drops a previously queued run (manual entry is a fresh start)", async () => {
+    const { gate } = gateWithToken(null);
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run); // queued, window up (required)
+    await vi.waitFor(() => expect(gate.getState().open).toBe(true));
+    gate.openLogin(); // user opens the window from the TopBar meanwhile
+    gate.submitToken("fresh");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("run without a token opens the panel (required) and defers the run", async () => {

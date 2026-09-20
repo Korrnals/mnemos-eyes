@@ -2,24 +2,27 @@ import { createContext, useContext } from "react";
 
 /**
  * DI context for the Ф3 ui-token gate (token class `ui`, ADR 0011 Ф3 split).
- * The provider owns the token panel (one modal for the whole app), the
+ * The provider owns the login window (one dialog for the whole app), the
  * stored-token presence flag and the queued-retry semantics:
  *
  * - `runAuthorized(run)` executes a mutation callback when a ui token is
- *   stored; without one it opens the panel with `run` queued — after a
- *   successful login the queued run executes (the board's retry pattern).
- * - A 401 mid-flight clears the stale token and re-opens the panel
- *   (`rejected` reason) with the same run queued for retry.
- * - Dismissing the panel (Esc / «continue read-only») drops the queued run —
- *   read-only browsing always stays available underneath.
+ *   stored; without one it opens the login window with `run` queued — after
+ *   a successful login the queued run executes (the board's retry pattern).
+ * - A 401 mid-flight clears the stale token and re-opens the window
+ *   (`rejected` reason, inline error) with the same run queued for retry.
+ * - `openLogin()` opens the window directly (TopBar «Войти», no run queued).
+ * - Dismissing the window (Esc / cross) drops the queued run — read-only
+ *   browsing always stays available underneath.
  */
 export interface UiTokenContextValue {
   /** True while a ui token sits in sessionStorage (drives the TopBar slot). */
   tokenPresent: boolean;
+  /** Open the login window (TopBar «Войти»; no action queued). */
+  openLogin: () => void;
   /**
    * Run a mutation callback under the token gate. The callback owns its own
    * success handling and non-401 failure handling; it MUST rethrow ApiError
-   * 401 so the gate can take over (drop token → panel → retry after login).
+   * 401 so the gate can take over (drop token → window → retry after login).
    * `onDeferred` fires when the gate QUEUES the run instead of executing it
    * (no token / rejected token) — callers driving spinners reset there.
    */

@@ -102,12 +102,33 @@ export function TaskListPage() {
     return <TasksUnsupported />;
   }
 
-  if (board.isPending) {
-    return (
-      <section aria-labelledby="tasks-title" className="mx-auto max-w-5xl space-y-4">
+  // The page header (h1 + «+ Задача») renders in EVERY board state — the
+  // create entry is a capability of the adapter, not of the current fetch
+  // (fix/login-window regression: the button must never vanish behind the
+  // skeleton/error/empty branches; open dialogs hide nothing either).
+  const header = (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 id="tasks-title" className="text-xl font-semibold">
           {t("tasks.title")}
         </h1>
+        {canMutate ? (
+          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" aria-hidden="true" />
+            {t("tasks.create.label")}
+          </Button>
+        ) : null}
+      </div>
+      {canMutate ? (
+        <CreateTaskDialog open={createOpen} onOpenChange={setCreateOpen} />
+      ) : null}
+    </>
+  );
+
+  if (board.isPending) {
+    return (
+      <section aria-labelledby="tasks-title" className="mx-auto max-w-5xl space-y-4">
+        {header}
         <div role="status" aria-label={t("tasks.loading")}>
           <TableRowSkeleton rows={6} columns={6} />
         </div>
@@ -118,9 +139,7 @@ export function TaskListPage() {
   if (board.isError) {
     return (
       <section aria-labelledby="tasks-title" className="mx-auto max-w-5xl space-y-4">
-        <h1 id="tasks-title" className="text-xl font-semibold">
-          {t("tasks.title")}
-        </h1>
+        {header}
         <EmptyState
           variant="error"
           title={t("tasks.loadFailed")}
@@ -147,20 +166,7 @@ export function TaskListPage() {
 
   return (
     <section aria-labelledby="tasks-title" className="mx-auto max-w-5xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 id="tasks-title" className="text-xl font-semibold">
-          {t("tasks.title")}
-        </h1>
-        {canMutate ? (
-          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" aria-hidden="true" />
-            {t("tasks.create.label")}
-          </Button>
-        ) : null}
-      </div>
-      {canMutate ? (
-        <CreateTaskDialog open={createOpen} onOpenChange={setCreateOpen} />
-      ) : null}
+      {header}
 
       {/* Mini-stats: per-column counts of the WHOLE board (wire semantics:
        * counts never describe the filtered view — ui-contract /api/board). */}

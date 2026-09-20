@@ -5,23 +5,29 @@ import { isApiError } from "@/lib/errors";
  * Framework-free state machine of the Ф3 ui-token gate (the provider is a
  * thin React wrapper around it — this class is what unit tests drive).
  *
- *   closed ──run without token──────────────▶ open(required, run queued)
- *   closed ──run, 401 mid-flight────────────▶ open(rejected, run queued)
- *   open   ──submitToken(valid)─────────────▶ closed → queued run re-runs
- *   open   ──dismiss────────────────────────▶ closed → queued run dropped
+ *   closed ──openLogin───────────────────────▶ open(manual, no run queued)
+ *   closed ──run without token───────────────▶ open(required, run queued)
+ *   closed ──run, 401 mid-flight─────────────▶ open(rejected, run queued)
+ *   open   ──submitToken(valid)──────────────▶ closed → queued run re-runs
+ *   open   ──dismiss─────────────────────────▶ closed → queued run dropped
+ *
+ * One window, three reasons: `manual` is the TopBar «Войти» (no action
+ * pending — plain sign-in), `required` is a deferred mutation (the window
+ * shows the "your action will continue" line), `rejected` is a server-side
+ * 401 on a stored token (inline error + the same queued retry).
  *
  * Token presence is INJECTED (`hasToken`) so the adapter owns the policy:
  * BoardAdapter answers from sessionStorage; MockAdapter answers true (the
- * dev playground has no auth wall — mutations run without a panel).
+ * dev playground has no auth wall — mutations run without the window).
  */
 
-export type UiTokenPanelReason = "required" | "rejected";
+export type UiTokenWindowReason = "manual" | "required" | "rejected";
 
 export interface UiTokenGateState {
-  /** Panel visibility. */
+  /** Login-window visibility. */
   open: boolean;
-  /** Why the panel is up — drives the description copy. */
-  reason: UiTokenPanelReason;
+  /** Why the window is up — drives the contextual line and inline error. */
+  reason: UiTokenWindowReason;
   /** Mirrors the injected hasToken() after every transition. */
   tokenPresent: boolean;
 }
@@ -48,7 +54,7 @@ export class UiTokenGate {
     this.hasToken = options.hasToken;
     this.state = {
       open: false,
-      reason: "required",
+      reason: "manual",
       tokenPresent: options.hasToken(),
     };
   }
@@ -65,14 +71,20 @@ export class UiTokenGate {
   /**
    * Run a mutation callback under the gate. The callback owns its success
    * and non-401 failure handling; it MUST rethrow ApiError 401 so the gate
-   * can take over. `onDeferred` fires when the run is QUEUED (panel opens)
+   * can take over. `onDeferred` fires when the run is QUEUED (window opens)
    * instead of executed — spinner owners reset there.
    */
   runAuthorized(run: () => Promise<void>, onDeferred?: () => void): void {
     void this.guard(run, onDeferred);
   }
 
-  /** Store the pasted token, close the panel, retry the queued run. */
+  /** TopBar «Войти»: open the window WITHOUT queueing anything. */
+  openLogin(): void {
+    this.pending = null; // a manual sign-in never resurrects a dropped run
+    this.setState({ open: true, reason: "manual" });
+  }
+
+  /** Store the pasted token, close the window, retry the queued run. */
   submitToken(value: string): void {
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
@@ -83,7 +95,7 @@ export class UiTokenGate {
     if (queued) void this.guard(queued.run, queued.onDeferred);
   }
 
-  /** Esc / «continue read-only»: drop the queued run, close the panel. */
+  /** Esc / «continue read-only»: drop the queued run, close the window. */
   dismiss(): void {
     this.pending = null;
     this.setState({ open: false });

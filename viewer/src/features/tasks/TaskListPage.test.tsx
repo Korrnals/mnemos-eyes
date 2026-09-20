@@ -125,7 +125,7 @@ describe("TaskListPage (mock adapter)", () => {
     expect(html).toContain("reports — 3");
   });
 
-  it("renders the loading skeleton while the board is pending", async () => {
+  it("renders the loading skeleton while the board is pending — «+ Задача» stays in the header", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
@@ -144,9 +144,12 @@ describe("TaskListPage (mock adapter)", () => {
     );
     expect(html).toContain('role="status"');
     expect(html).toContain("Loading tasks");
+    // fix/login-window regression: the create entry is a capability of the
+    // adapter, not of the fetch — it must never hide behind the skeleton.
+    expect(html).toContain(">Task</button>");
   });
 
-  it("renders the error state with retry from a failed board fetch", async () => {
+  it("renders the error state with retry from a failed board fetch — «+ Задача» stays too", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const query = client
       .getQueryCache()
@@ -174,6 +177,7 @@ describe("TaskListPage (mock adapter)", () => {
     );
     expect(html).toContain("Could not load tasks");
     expect(html).toContain("Retry");
+    expect(html).toContain(">Task</button>");
   });
 
   it("renders the honest unsupported state on a mnemos gateway", async () => {
