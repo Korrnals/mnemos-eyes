@@ -43,6 +43,8 @@ from .store import (
     AssignmentNotFoundError,
     AssignmentTokenError,
     REAP_QUEUED_AFTER_S,
+    AutomationError,
+    AutomationValidationError,
     EXECUTOR_TRANSPORTS,
     ExecutorConflictError,
     ExecutorError,
@@ -52,6 +54,7 @@ from .store import (
     PRESENCE_ONLINE_S,
     PRESENCE_STALE_S,
     REPORT_KINDS,
+    RuleNotFoundError,
     Store,
     TASK_STATUSES,
     TaskLockedError,
@@ -984,6 +987,190 @@ class ExecutionSettingsBody(BaseModel):
     default_executor: str = Field(default="", max_length=120)
     fallback_executor: str = Field(default="", max_length=120)
     scope: str = Field(default="", max_length=120)
+
+
+# Automation contracts (SCHED-1 S1, ADR 0013 §2) — freeze-frame portable
+# shapes for codegen. next_run_at/last_run_at are SERVER-owned columns:
+# they appear in *Out only; the create/patch bodies deliberately do not
+# declare them (a client value is silently ignored, house allow-list
+# pattern — same as ``col`` in TaskPatch).
+class ConditionItem(BaseModel):
+    """One hook condition clause. Strict: unknown keys are a 422 at the
+    pydantic boundary; field/op/value dictionaries are re-validated in the
+    store against the closed allowlists (defense in depth)."""
+    model_config = ConfigDict(extra="forbid")
+    field: str
+    op: str                            # eq | ne | in
+    value: Any                         # scalar, or list of scalars for 'in'
+
+
+class ScheduleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    target_kind: str = "task"          # v1: 'task' only — 422 on anything else
+    task_id: str = Field(min_length=1, max_length=100)
+    specialist: str = Field(min_length=1, max_length=120)
+    harness: str = "zcode"
+    executor_id: str = Field(default="", max_length=120)
+    trigger_kind: str                  # interval | time-of-day
+    trigger_value: str = Field(min_length=1, max_length=32)
+    window_from: str | None = None     # 'HH:MM' UTC; None = always (pair rule)
+    window_to: str | None = None
+    max_runs_per_day: int = Field(default=4, ge=1, le=1000)
+    cooldown_s: int = Field(default=300, ge=0, le=86400)
+    # NOTE: no ``enabled`` — creation is disabled by definition (ADR 0013
+    # §2); enablement is a separate audited PATCH (rule.toggled).
+
+
+class SchedulePatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    target_kind: str | None = None
+    task_id: str | None = Field(default=None, min_length=1, max_length=100)
+    specialist: str | None = Field(default=None, min_length=1, max_length=120)
+    harness: str | None = None
+    executor_id: str | None = Field(default=None, max_length=120)
+    trigger_kind: str | None = None
+    trigger_value: str | None = Field(default=None, min_length=1, max_length=32)
+    window_from: str | None = None     # '' clears the window (both ends)
+    window_to: str | None = None
+    max_runs_per_day: int | None = Field(default=None, ge=1, le=1000)
+    cooldown_s: int | None = Field(default=None, ge=0, le=86400)
+    enabled: bool | None = None
+
+
+class ScheduleOut(_ApiModel):
+    id: int
+    name: str
+    enabled: bool
+    target_kind: str
+    task_id: str
+    specialist: str
+    harness: str = "zcode"
+    executor_id: str = ""
+    trigger_kind: str
+    trigger_value: str
+    window_from: str | None = None
+    window_to: str | None = None
+    max_runs_per_day: int = 4
+    cooldown_s: int = 300
+    next_run_at: str | None = None     # server-computed only
+    last_run_at: str | None = None     # S2 tick writes this (S1: stays NULL)
+    created_by: str = "owner"
+    created_at: str
+    updated_at: str
+
+
+class SchedulesOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[ScheduleOut]
+
+
+class HookCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    on: str                            # single kind from HOOK_EVENT_WHITELIST
+    condition: list[ConditionItem] | None = None
+    source_allowlist: list[str] | None = None   # None → action-dependent default
+    action: str = "notify"             # notify | create_assignment
+    action_payload: dict[str, Any] | None = None
+    cooldown_s: int = Field(default=300, ge=0, le=86400)
+    budget: int = Field(default=4, ge=1, le=1000)
+    # no ``enabled`` — same creation-is-disabled rule as schedules
+
+
+class HookPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    on: str | None = None
+    condition: list[ConditionItem] | None = None
+    source_allowlist: list[str] | None = None
+    action: str | None = None
+    action_payload: dict[str, Any] | None = None
+    cooldown_s: int | None = Field(default=None, ge=0, le=86400)
+    budget: int | None = Field(default=None, ge=1, le=1000)
+    enabled: bool | None = None
+
+
+class HookOut(_ApiModel):
+    id: int
+    name: str
+    enabled: bool
+    on: str
+    condition: list[ConditionItem] = []
+    source_allowlist: list[str] = []
+    action: str
+    action_payload: dict[str, Any] = {}
+    cooldown_s: int = 300
+    budget: int = 4
+    created_by: str = "owner"
+    created_at: str
+    updated_at: str
+
+
+class HooksOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[HookOut]
+
+
+class LaunchOut(_ApiModel):
+    id: int
+    rule_id: int
+    rule_kind: str                     # schedule | hook
+    rule_name: str                     # snapshot — survives rule surgery
+    run_at: str
+    event_id: int | None = None
+    trigger: str                       # tick | manual | event
+    origin: str = ""
+    decision: str                      # launched | skipped | missed
+    reason: str = ""
+    assignment_id: int | None = None
+    attempted_at: str
+
+
+class LaunchesOut(_ApiModel):
+    ok: bool
+    count: int                         # page size
+    total: int                         # full matching set
+    items: list[LaunchOut]
+    next_cursor: str | None = None
+    truncated: bool = False
+
+
+class ScheduleRunOut(_ApiModel):
+    """Synchronous «Запустить сейчас» result. Gates of create_assignment
+    are translated honestly as HTTP 404/422/409 (a journal skipped row is
+    still written); the 200 arm is decision=launched. The skipped arm of
+    ``decision`` is reserved for soft refusals the engine may add in S2."""
+    ok: bool
+    decision: str
+    reason: str = ""
+    assignment_id: int | None = None
+    launch_id: int
+    run_at: str
+
+
+class AutomationStatusOut(_ApiModel):
+    ok: bool
+    engine: bool                       # S1: constant false — the S2 loop does not exist
+    global_kill_switch: bool
+    daily_cap: int
+    daily_used: int
+    condition_meta: dict[str, Any]     # fields/ops/values_hint (+ events/actions)
+
+
+class AutomationSettingsBody(BaseModel):
+    enabled: bool | None = None
+    cap_global_per_day: int | None = Field(default=None, ge=1, le=1000)
+
+
+class AutomationSettingsOut(_ApiModel):
+    ok: bool
+    enabled: bool
+    cap_global_per_day: int
+
+
+class RuleDeletedOut(_ApiModel):
+    ok: bool
+    note: str = ""
 
 
 # BE-7: task history timeline for the task modal — board audit events plus
@@ -2743,6 +2930,334 @@ async def put_execution_settings(body: ExecutionSettingsBody,
         "fallback_executor": body.fallback_executor,
         "scope": body.scope.strip(),
     }
+
+
+# --------------------------------------- automation (SCHED-1 S1, ADR 0013)
+# Contracts WITHOUT an engine: rule CRUD + journal + manual «Запустить
+# сейчас» + status/settings. NO loops, NO ECA, NO tick, NO missed-detection
+# — all of that is S2 behind the T2 gate (ADR 0013 §5). Mutations are
+# ui-token class (the owner's domain), house rate budget 10/60 s.
+_AUTOMATION_RATE_LIMIT = 10        # mutations per client ...
+_AUTOMATION_RATE_WINDOW = 60.0     # ... per sliding window (seconds)
+_automation_limiter = RateLimiter(
+    limit=_AUTOMATION_RATE_LIMIT, window=_AUTOMATION_RATE_WINDOW)
+_AUTOMATION_PAGE_CAP = 200         # journal page cap; above → truncated
+
+
+def _automation_rate_limit(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    if not _automation_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"automation rate limit exceeded "
+            f"({_AUTOMATION_RATE_LIMIT} per {_AUTOMATION_RATE_WINDOW:.0f}s "
+            "per client)",
+        )
+
+
+def _automation_http(exc: AutomationError) -> HTTPException:
+    """Map store automation errors onto HTTP: 404 unknown rule id / 422
+    contract violation (incl. duplicate names — S1 AC) / 409 defensive."""
+    if isinstance(exc, RuleNotFoundError):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, AutomationValidationError):
+        return HTTPException(422, str(exc))
+    return HTTPException(409, str(exc))
+
+
+def _encode_launch_cursor(offset: int) -> str:
+    payload = json.dumps({"v": 1, "offset": offset}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _decode_launch_cursor(cursor: str) -> int:
+    """Opaque cursor → journal offset. 422 on anything this server did not
+    issue (garbage base64/JSON, wrong version, negative/non-int offset)."""
+    try:
+        data = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
+    except (ValueError, UnicodeEncodeError):
+        raise HTTPException(422, "invalid cursor") from None
+    offset = data.get("offset") if isinstance(data, dict) else None
+    if (not isinstance(data, dict) or data.get("v") != 1
+            or not isinstance(offset, int) or isinstance(offset, bool)
+            or offset < 0):
+        raise HTTPException(422, "invalid cursor")
+    return offset
+
+
+def _broadcast_rule_event(kind: str, rule_kind: str, rule: dict[str, Any],
+                          changes: dict[str, Any] | None = None) -> None:
+    """automation.rule.* SSE (ui-contract §11 reserve, S1 emitters live in
+    the CRUD routes). One event per mutation; clients treat the family as
+    a single list-sync signal (АРХКОМ-5 FE verdict)."""
+    event: dict[str, Any] = {"kind": kind, "rule_kind": rule_kind,
+                             "rule": rule}
+    if changes is not None:
+        event["changes"] = changes
+    _broadcast(event)
+
+
+@app.get("/api/automation/schedules")
+async def automation_schedules() -> SchedulesOut:
+    """List schedule rules (OPEN read — same boundary as GET /api/board;
+    the cluster ingress is the auth boundary). Soft-deleted rules stay
+    listed with enabled=false (retention, ADR 0013 §2)."""
+    items = store.list_schedules()
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@app.post("/api/automation/schedules", status_code=201)
+async def automation_create_schedule(body: ScheduleCreate,
+                                    request: Request) -> ScheduleOut:
+    """Create a schedule (ui-token, 10/60 s). Creation is DISABLED —
+    enablement is a separate audited PATCH (rule.toggled). next_run_at is
+    computed server-side from now; a client value is ignored. 422 on
+    contract violations (unknown harness/target_kind, interval < 60 s,
+    bad 'HH:MM'/ISO-duration, duplicate name); never on task existence —
+    assignability belongs to fire time (SCHED-1 Н2)."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    try:
+        rule = store.create_schedule(body.model_dump(), actor="owner")
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    _broadcast_rule_event("automation.rule.created", "schedule", rule)
+    return rule
+
+
+@app.patch("/api/automation/schedules/{rule_id}")
+async def automation_patch_schedule(rule_id: int, body: SchedulePatch,
+                                    request: Request) -> ScheduleOut:
+    """PATCH a schedule (ui-token). Every effective patch recomputes
+    next_run_at from now (schedule clock is server-owned). A pure
+    {enabled} flip is audited as rule.toggled — the per-rule kill-switch;
+    anything else is rule.updated (old→new in the audit trail). Idempotent
+    no-op patches emit nothing."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    patch = body.model_dump(exclude_none=True)
+    try:
+        rule, changes = store.update_schedule(
+            rule_id, patch, actor="owner")
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    if changes:
+        kind = ("automation.rule.toggled" if set(patch) == {"enabled"}
+                else "automation.rule.updated")
+        _broadcast_rule_event(kind, "schedule", rule, changes)
+    return rule
+
+
+@app.delete("/api/automation/schedules/{rule_id}")
+async def automation_delete_schedule(rule_id: int,
+                                     request: Request) -> RuleDeletedOut:
+    """DELETE = soft-disable retention (ADR 0013 §2): the row is never
+    destroyed, the rule stays listed with enabled=false and its UNIQUE
+    name keeps holding (rename or re-enable via PATCH). Audited as
+    rule.deleted old→new."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    try:
+        rule = store.delete_schedule(rule_id, actor="owner")
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    _broadcast_rule_event(
+        "automation.rule.deleted", "schedule", rule,
+        {"enabled": [True, False]})
+    return {"ok": True, "note": "soft-disabled and retained (retention)"}
+
+
+@app.post("/api/automation/schedules/{rule_id}/run")
+async def automation_run_schedule(rule_id: int,
+                                  request: Request) -> ScheduleRunOut:
+    """«Запустить сейчас» — the MANUAL trigger (ADR 0013 §2: not T2; the
+    owner's hand, not the engine).
+
+    Synchronous: the response carries the decision and the assignment id.
+    The assignment is created through the same code path as POST
+    /api/assignments with created_by='owner' (manual = ui-token action,
+    NOT automation); budgets and the global kill-switch do NOT apply. The
+    create gates translate honestly: 404 unknown task, 422 archived/
+    terminal, 409 while an active assignment holds the task (≤1
+    invariant) — a journal skipped(reason) row is written for every
+    refused attempt. The launches row is trigger='manual', origin='ui',
+    run_at = click time (+1 s walk on a same-second collision — the S2
+    occurrence key is shared, not forked). Works on disabled rules: the
+    per-rule kill-switch stops the engine, not the owner (manual run-now
+    is the conscious replacement for missed occurrences, ADR §4).
+
+    SSE: assignment.created via the standard notification path — and
+    deliberately NO scheduler.launched (this is not automation)."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    try:
+        result = store.run_schedule_now(rule_id)
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    except AssignmentError as exc:
+        raise _assignment_http(exc) from exc
+    a = result["assignment"]
+    _notify_and_broadcast(
+        "work", f"{a['task_id']}: запуск по правилу «{result['rule_name']}»",
+        f"специалист {a['specialist']}, harness {a['harness']}",
+        a["task_id"],
+        {"kind": "assignment.created",
+         "assignment": _assignment_public(a), "task_id": a["task_id"]},
+    )
+    return {"ok": True, "decision": "launched", "reason": "",
+            "assignment_id": a["id"], "launch_id": result["launch_id"],
+            "run_at": result["run_at"]}
+
+
+@app.get("/api/automation/hooks")
+async def automation_hooks() -> HooksOut:
+    """List hook rules (OPEN read; retention semantics as schedules)."""
+    items = store.list_hooks()
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@app.post("/api/automation/hooks", status_code=201)
+async def automation_create_hook(body: HookCreate,
+                                 request: Request) -> HookOut:
+    """Create a hook (ui-token). ``on`` is validated against the server
+    constant HOOK_EVENT_WHITELIST (automation.* and heartbeats are
+    structurally absent); condition fields/ops/values against the closed
+    allowlist (422 at CRUD time, never at fire time); source_allowlist
+    defaults by action — notify hears everything except automation,
+    create_assignment only ui/server (machine = explicit audited opt-in).
+    Creation is disabled; enablement is a separate PATCH."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    try:
+        rule = store.create_hook(body.model_dump(), actor="owner")
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    _broadcast_rule_event("automation.rule.created", "hook", rule)
+    return rule
+
+
+@app.patch("/api/automation/hooks/{rule_id}")
+async def automation_patch_hook(rule_id: int, body: HookPatch,
+                                request: Request) -> HookOut:
+    """PATCH a hook (ui-token). Changing ``action`` without an explicit
+    ``source_allowlist`` resets the list to the new action's default (А-1:
+    a machine-origin list must not silently survive under
+    create_assignment). rule.toggled / rule.updated audit as schedules."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    patch = body.model_dump(exclude_none=True)
+    try:
+        rule, changes = store.update_hook(rule_id, patch, actor="owner")
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    if changes:
+        kind = ("automation.rule.toggled" if set(patch) == {"enabled"}
+                else "automation.rule.updated")
+        _broadcast_rule_event(kind, "hook", rule, changes)
+    return rule
+
+
+@app.delete("/api/automation/hooks/{rule_id}")
+async def automation_delete_hook(rule_id: int,
+                                 request: Request) -> RuleDeletedOut:
+    """DELETE = soft-disable retention (same semantics as schedules)."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    try:
+        rule = store.delete_hook(rule_id, actor="owner")
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    _broadcast_rule_event(
+        "automation.rule.deleted", "hook", rule, {"enabled": [True, False]})
+    return {"ok": True, "note": "soft-disabled and retained (retention)"}
+
+
+@app.get("/api/automation/launches")
+async def automation_launches(
+    rule_id: int | None = None,
+    kind: str = "",
+    decision: str = "",
+    limit: int = Query(50, ge=1),
+    cursor: str = "",
+) -> LaunchesOut:
+    """Launch journal page (OPEN read; append-only). Uniform cursor
+    contract (ADR 0011 §11): ``limit`` (default 50, hard cap 200) + opaque
+    ``cursor`` → ``next_cursor``; sort ``attempted_at DESC`` with the
+    unique ``id`` tiebreak; ``truncated`` is true only when the request
+    limit was silently capped. Filters: rule_id, kind (schedule|hook),
+    decision (launched|skipped|missed) — 422 on garbage; a cursor is only
+    valid for the parameters it was issued with."""
+    if kind and kind not in ("schedule", "hook"):
+        raise HTTPException(422, f"invalid kind: {kind}")
+    if decision and decision not in ("launched", "skipped", "missed"):
+        raise HTTPException(422, f"invalid decision: {decision}")
+    truncated = limit > _AUTOMATION_PAGE_CAP
+    limit = min(limit, _AUTOMATION_PAGE_CAP)
+    offset = _decode_launch_cursor(cursor) if cursor else 0
+    rows, total = store.automation_launches(
+        rule_id=rule_id, kind=kind or None, decision=decision or None,
+        limit=limit, offset=offset)
+    next_cursor = (_encode_launch_cursor(offset + len(rows))
+                   if offset + len(rows) < total else None)
+    return {"ok": True, "count": len(rows), "total": total, "items": rows,
+            "next_cursor": next_cursor, "truncated": truncated}
+
+
+@app.get("/api/automation/status")
+async def automation_status() -> AutomationStatusOut:
+    """Engine/caps/condition-meta projection (OPEN read — the UI status
+    banner source). ``engine`` is a CONSTANT false in S1: the scheduler
+    loop does not exist in this build (ADR 0013 §2 — contracts only).
+    ``daily_used`` counts non-manual launches today (provably 0 in S1,
+    computed honestly so S2 keeps the reader). ``condition_meta`` is the
+    meta-dictionary the condition form is built from — the Frontend
+    blocker: fields/ops/values come from the server, never hardcoded."""
+    settings = store.automation_settings()
+    schedules = store.list_schedules()
+    hooks = store.list_hooks()
+    return {
+        "ok": True,
+        "engine": False,
+        "global_kill_switch": settings["enabled"],
+        "daily_cap": settings["cap_global_per_day"],
+        "daily_used": store.automation_daily_used(),
+        "condition_meta": store.automation_condition_meta(),
+        "rules": {
+            "schedules": {"total": len(schedules),
+                          "enabled": sum(1 for r in schedules if r["enabled"])},
+            "hooks": {"total": len(hooks),
+                      "enabled": sum(1 for r in hooks if r["enabled"])},
+        },
+    }
+
+
+@app.get("/api/automation/settings")
+async def automation_get_settings() -> AutomationSettingsOut:
+    """Read the global kill-switch + daily cap (OPEN read — ids and flags
+    only, no secrets)."""
+    s = store.automation_settings()
+    return {"ok": True, "enabled": s["enabled"],
+            "cap_global_per_day": s["cap_global_per_day"]}
+
+
+@app.put("/api/automation/settings")
+async def automation_put_settings(body: AutomationSettingsBody,
+                                  request: Request) -> AutomationSettingsOut:
+    """Set the kill-switch / daily cap (ui-token, audited old→new as
+    automation.settings.changed). In S1 flipping ``enabled`` is INERT
+    data — no engine exists to kill; the flag is the persistent owner
+    opt-in the S2 loop will read at boot (default false, C-1)."""
+    _guard_ui_write(request)
+    _automation_rate_limit(request)
+    try:
+        settings, changes = store.set_automation_settings(
+            enabled=body.enabled,
+            cap_global_per_day=body.cap_global_per_day,
+            actor="owner")
+    except AutomationError as exc:
+        raise _automation_http(exc) from exc
+    return {"ok": True, "enabled": settings["enabled"],
+            "cap_global_per_day": settings["cap_global_per_day"]}
 
 
 # --------------------------------------------------------- task inbox (AGG-1)

@@ -195,6 +195,30 @@ hash в payload, если понадобится). Транспортное ог
 клиент после (re)connect обязан пере-fetch `GET /api/assignments` — SSE
 здесь уведомление, не источник правды.
 
+### Зарезервированные kinds (SCHED-1 / ADR 0013, S1 — контракты)
+
+Домен автоматизации запуска (расписания и хуки). S1 (контракты, без
+движка) вводит эмиттеры только для `automation.rule.*` — CRUD-роуты
+`/api/automation/{schedules,hooks}`; `scheduler.*` — резерв до S2
+(движок за T2-гейтом), эмиттеров в S1 НЕТ. Пер-тиковые события запрещены
+(тот же урок, что per-heartbeat ban, Amd 2 §7).
+
+| kind | Payload (v1) | Эмиттер | Клиент |
+| --- | --- | --- | --- |
+| `automation.rule.created` | `rule_kind` (`schedule\|hook`) + `rule` (объект Schedule/Hook) | POST `/api/automation/{schedules,hooks}` (S1) | пере-fetch списка правил |
+| `automation.rule.updated` | `rule_kind` + `rule` + `changes` (field → [old, new]) | PATCH `/api/automation/{schedules,hooks}/{id}` (S1) | пере-fetch списка правил |
+| `automation.rule.toggled` | `rule_kind` + `rule` + `changes` (только `enabled`) | PATCH чистого `{enabled}` (S1) | пере-fetch списка правил |
+| `automation.rule.deleted` | `rule_kind` + `rule` + `changes` (`enabled` → false) | DELETE `/api/automation/{schedules,hooks}/{id}` (S1; soft-disable retention) | пере-fetch списка правил |
+| `scheduler.launched` | `{rule_id: int, rule_kind, assignment_id: int, task_id: str, specialist: str, actor: str}` — в ленту исполнения UI-10 | **S2 only** (движок; резерв) | лента исполнения + пере-fetch |
+| `scheduler.missed` | `{rule_id, rule_kind, run_at, reason}` + notification | **S2 only** (движок; резерв) | notification + пере-fetch |
+
+Семейство `automation.rule.*` клиент вправе обрабатывать как один сигнал
+`rule.changed` для синка списка (вердикт FE, АРХКОМ-5) — конкретные kind
+нужны для точечной подсветки. Ручной «Запустить сейчас»
+(`POST /api/automation/schedules/{id}/run`) эмитит **только**
+`assignment.created` существующим путём create_assignment — БЕЗ
+`scheduler.launched`: ручной запуск не автомитика (ADR 0013 §2).
+
 ### Встроенные объекты
 
 - `Task`: `id`, `col` (`open|in-progress|blocked|resolved|done`),
