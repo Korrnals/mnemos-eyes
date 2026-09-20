@@ -1213,7 +1213,7 @@ def main(argv: list[str] | None = None) -> int:
         # Let already-submitted kills land (SIGTERM at least) before the
         # process exits; children still RUNNING at shutdown are deliberately
         # left alone — the next start's sweep owns them.
-        if not poller.terminator.drain(timeout=KILL_GRACE_SECONDS + 5.0):
+        if not poller.terminator.drain(timeout=2 * KILL_GRACE_SECONDS + 5.0):
             log.warning("shutdown: terminator still busy — a pending kill "
                         "may not have landed")
         board.close()
