@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Archive,
   ChevronLeft,
@@ -21,25 +21,73 @@ import { useTaskMutations } from "./useTaskMutations";
  * enhancement). Without a ui token the move still leads to the login window
  * through the standard token gate (runAuthorized).
  *
+ * Two mounting modes (fix/kanban-context-menu — the SAME menu everywhere):
+ * - INLINE (list rows): renders its own ⋯ trigger, uncontrolled open state;
+ * - CONTROLLED (kanban cards): the card owns `open`/`onOpenChange` so one
+ *   popup serves two entries — the hover-revealed ⋯ trigger (anchored to
+ *   the button) and the card right-click (`position` = viewport coords →
+ *   `position: fixed` popup clamped into the viewport).
+ *
+ * Drag isolation: the ⋯ trigger AND the popup stop pointerdown propagation
+ * — a press inside the menu never bubbles to the card's dnd-kit listeners,
+ * so the 5px PointerSensor activation can never start from the menu (the
+ * sensor additionally ignores non-primary buttons, which makes the
+ * right-click entry safe by construction).
+ *
  * A11y: the ⋯ trigger is a plain labelled button (`aria-haspopup="menu"`,
  * `aria-expanded`); the popup is a `role="menu"` of real buttons — Tab/
  * Shift+Tab and Enter work natively, ArrowUp/Down rove focus, Esc closes
  * (from the submenu Esc steps back to the root first), and closing returns
  * focus to the trigger (WCAG 2.1.1 / 2.1.2 / 2.4.3). Outside pointer press
- * dismisses too.
+ * dismisses too. The contextmenu entry is a pointer-only convenience — the
+ * keyboard path is the tab-reachable ⋯ trigger in both modes.
  */
 
 type MenuView = "root" | "move";
 
-export function TaskRowMenu({ task }: { task: BoardTask }) {
+/** Cursor-anchored popup clamping: min-w-44 + a viewport safety margin. */
+const CURSOR_MENU_WIDTH_PX = 192;
+/** Tallest view (the 7-column move list) + margin, keeps it on screen. */
+const CURSOR_MENU_HEIGHT_PX = 336;
+const CURSOR_MENU_VIEWPORT_MARGIN_PX = 8;
+
+export function TaskRowMenu({
+  task,
+  open: openProp,
+  onOpenChange,
+  position = null,
+  revealOnParentHover = false,
+}: {
+  task: BoardTask;
+  /** Controlled open (kanban card); omit for the uncontrolled list rows. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Viewport coords for the contextmenu path; null anchors to the trigger. */
+  position?: { x: number; y: number } | null;
+  /** Kanban affordance: ⋯ hidden until the parent `group/card` hover/focus. */
+  revealOnParentHover?: boolean;
+}) {
   const t = useT();
   const { moveTask, archiveTask } = useTaskMutations();
-  const [open, setOpen] = useState(false);
+  // Controlled mirror: in controlled mode `openProp` wins in render, in
+  // uncontrolled (list) mode onOpenChange is absent and the local state is
+  // the single source — one setter serves both.
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = openProp ?? uncontrolledOpen;
   const [view, setView] = useState<MenuView>("root");
   const [editOpen, setEditOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (!next) setView("root");
+      setUncontrolledOpen(next);
+      onOpenChange?.(next);
+    },
+    [onOpenChange],
+  );
 
   // Outside press dismisses; Esc handled on the menu itself.
   useEffect(() => {
@@ -52,7 +100,7 @@ export function TaskRowMenu({ task }: { task: BoardTask }) {
     };
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
+  }, [open, setOpen]);
 
   // Focus the first item when the (sub)menu opens.
   useEffect(() => {
@@ -66,7 +114,6 @@ export function TaskRowMenu({ task }: { task: BoardTask }) {
 
   const close = (refocus = true) => {
     setOpen(false);
-    setView("root");
     if (refocus) triggerRef.current?.focus();
   };
 
@@ -102,6 +149,25 @@ export function TaskRowMenu({ task }: { task: BoardTask }) {
     archiveTask(task);
   };
 
+  // Cursor placement: fixed coords clamped so the popup never leaves the
+  // viewport (bottom/right flips to fit); the anchored mode keeps the
+  // list-proven absolute position under the trigger.
+  const popupStyle: React.CSSProperties = position
+    ? {
+        left: Math.max(
+          CURSOR_MENU_VIEWPORT_MARGIN_PX,
+          Math.min(position.x, window.innerWidth - CURSOR_MENU_WIDTH_PX),
+        ),
+        top: Math.max(
+          CURSOR_MENU_VIEWPORT_MARGIN_PX,
+          Math.min(position.y, window.innerHeight - CURSOR_MENU_HEIGHT_PX),
+        ),
+      }
+    : {};
+  const popupPlacement = position
+    ? "fixed z-30 "
+    : "absolute right-0 top-full z-30 mt-1 ";
+
   return (
     <div
       ref={wrapperRef}
@@ -113,7 +179,6 @@ export function TaskRowMenu({ task }: { task: BoardTask }) {
         const next = event.relatedTarget;
         if (!next || !wrapperRef.current?.contains(next as Node)) {
           setOpen(false);
-          setView("root");
         }
       }}
     >
@@ -124,11 +189,19 @@ export function TaskRowMenu({ task }: { task: BoardTask }) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t("tasks.menu.triggerAria", { id: task.id })}
+        // Never feed the kanban drag sensor: without this the pointerdown
+        // bubbles to the card root and a 5px travel becomes a drag.
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
-          event.stopPropagation(); // the row itself navigates on click
-          setOpen((current) => !current);
+          event.stopPropagation(); // the row/card surface must not react
+          setOpen(!open);
         }}
-        className="size-7"
+        className={
+          "size-7 " +
+          (revealOnParentHover
+            ? "opacity-0 transition-opacity duration-instant group-hover/card:opacity-100 group-focus-within/card:opacity-100 aria-expanded:opacity-100 "
+            : "")
+        }
       >
         <MoreHorizontal className="size-4" aria-hidden="true" />
       </Button>
@@ -138,8 +211,15 @@ export function TaskRowMenu({ task }: { task: BoardTask }) {
           ref={menuRef}
           role="menu"
           aria-label={t("tasks.menu.label", { id: task.id })}
+          style={popupStyle}
           onKeyDown={onKeyDown}
-          className="absolute right-0 top-full z-30 mt-1 min-w-44 rounded-md border border-border-subtle bg-well p-1 shadow-modal"
+          // Same drag-isolation as the trigger: presses inside the popup
+          // must not reach the card's dnd-kit listeners either.
+          onPointerDown={(event) => event.stopPropagation()}
+          className={
+            popupPlacement +
+            "min-w-44 rounded-md border border-border-subtle bg-well p-1 shadow-modal"
+          }
         >
           {view === "root" ? (
             <>
