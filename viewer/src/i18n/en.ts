@@ -36,7 +36,9 @@ export const en: Record<TranslationKey, string> = {
   "nav.session": "Session",
   "nav.collapse": "Collapse sidebar",
   "nav.expand": "Expand sidebar",
-  "nav.footerReadOnly": "L1 read-only",
+  // Session-aware mode line (fix/login-feedback) — see ru.ts.
+  "nav.modeReadOnly": "read-only",
+  "nav.modeActive": "session active",
   "shell.skipToContent": "Skip to content",
   "shell.viewFell": "This view fell into the well",
   "shell.tryAgain": "Try again",
@@ -295,6 +297,11 @@ export const en: Record<TranslationKey, string> = {
   "login.signIn": "Sign in",
   "login.signOut": "Sign out",
   "login.signOutAria": "Remove the ui token from this tab",
+  // Login feedback toasts (fix/login-feedback) — see ru.ts.
+  "login.toastSignedIn": "Signed in — control available",
+  "login.toastRejected": "Token rejected",
+  "login.toastRejectedDetail":
+    "The server answered 401 — the login window is open for a current value.",
 
   // --- tasks (Ф2 — read-only domain, mutations are Ф3) ---------------------------
   "tasks.title": "Tasks",

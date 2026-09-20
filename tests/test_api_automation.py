@@ -508,7 +508,8 @@ class TestSettingsAndStatus:
         meta = s["condition_meta"]
         assert meta["fields"] and meta["ops"] == ["eq", "in", "ne"]
         assert meta["values_hint"]["col"] == [
-            "open", "in-progress", "blocked", "resolved", "done"]
+            "backlog", "validating", "open", "in-progress", "blocked",
+            "resolved", "done"]
         assert meta["values_hint"]["project"] is None  # no closed enum
         assert meta["events"] == sorted(HOOK_EVENT_WHITELIST)
         assert set(meta["actions"]) == {"create_assignment", "notify"}

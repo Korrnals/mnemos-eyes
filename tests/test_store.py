@@ -18,7 +18,7 @@ import sqlite3
 
 import pytest
 
-from server.store import COLUMNS, VALID_ENVS, VALID_STATUSES, Store
+from server.store import TASK_COLUMNS, VALID_ENVS, VALID_STATUSES, Store
 
 EXPECTED_TABLES = {
     "board_meta", "tasks", "events", "memory_servers", "memory_groups",
@@ -42,8 +42,8 @@ class TestSchema:
 
     def test_board_shape(self, tmp_path):
         board = Store(tmp_path / "board.db").board()
-        assert board["columns"] == list(COLUMNS)
-        assert set(board["counts"].keys()) == set(COLUMNS)
+        assert board["columns"] == list(TASK_COLUMNS)
+        assert set(board["counts"].keys()) == set(TASK_COLUMNS)
         assert isinstance(board["tasks"], list)
 
 
@@ -128,7 +128,8 @@ class TestTaskCrud:
         with pytest.raises(ValueError, match="invalid env"):
             store.create_task({"title": "x", "env": "staging"})
         with pytest.raises(ValueError, match="invalid col"):
-            store.create_task({"title": "x", "col": "backlog"})
+            # WF-1: 'backlog'/'validating' are valid columns — garbage only
+            store.create_task({"title": "x", "col": "nowhere"})
 
     def test_move_task(self, tmp_path):
         store = Store(tmp_path / "board.db")

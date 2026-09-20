@@ -23,6 +23,15 @@ import { isApiError } from "@/lib/errors";
 
 export type UiTokenWindowReason = "manual" | "required" | "rejected";
 
+/**
+ * Session-feedback events (fix/login-feedback): the machine announces the two
+ * transitions a human wants CONFIRMED — a submitted token actually landed in
+ * storage (`loginStored`), and the server refused it mid-flight (`tokenRejected`).
+ * Consumers subscribe via `listen()` (the provider translates these into
+ * toasts); the machine itself stays UI-free.
+ */
+export type UiTokenGateEvent = { type: "loginStored" } | { type: "tokenRejected" };
+
 export interface UiTokenGateState {
   /** Login-window visibility. */
   open: boolean;
@@ -33,6 +42,7 @@ export interface UiTokenGateState {
 }
 
 type Listener = (state: UiTokenGateState) => void;
+type EventListener = (event: UiTokenGateEvent) => void;
 
 interface QueuedRun {
   run: () => Promise<void>;
@@ -47,6 +57,7 @@ export interface UiTokenGateOptions {
 export class UiTokenGate {
   private readonly hasToken: () => boolean;
   private readonly listeners = new Set<Listener>();
+  private readonly eventListeners = new Set<EventListener>();
   private state: UiTokenGateState;
   private pending: QueuedRun | null = null;
 
@@ -57,6 +68,12 @@ export class UiTokenGate {
       reason: "manual",
       tokenPresent: options.hasToken(),
     };
+  }
+
+  /** Subscribe to session-feedback events; returns the unsubscribe. */
+  listen(listener: EventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   getState(): UiTokenGateState {
@@ -90,6 +107,9 @@ export class UiTokenGate {
     if (trimmed.length === 0) return;
     setUiToken(trimmed);
     this.setState({ open: false, tokenPresent: this.hasToken() });
+    // Storage may be unavailable (fail-soft) — only a token that actually
+    // landed counts as a login for feedback purposes.
+    if (this.state.tokenPresent) this.emit({ type: "loginStored" });
     const queued = this.pending;
     this.pending = null;
     if (queued) void this.guard(queued.run, queued.onDeferred);
@@ -127,6 +147,7 @@ export class UiTokenGate {
       clearUiToken();
       this.pending = onDeferred ? { run, onDeferred } : { run };
       this.setState({ open: true, reason: "rejected", tokenPresent: false });
+      this.emit({ type: "tokenRejected" });
       onDeferred?.();
     }
   }
@@ -134,5 +155,17 @@ export class UiTokenGate {
   private setState(patch: Partial<UiTokenGateState>): void {
     this.state = { ...this.state, ...patch };
     for (const listener of [...this.listeners]) listener(this.state);
+  }
+
+  /** Session-feedback sink — failures must never break the gate itself. */
+  private emit(event: UiTokenGateEvent): void {
+    for (const listener of [...this.eventListeners]) {
+      try {
+        listener(event);
+      } catch {
+        // A throwing feedback handler (e.g. a test double) stays the
+        // handler's business; the state machine continues regardless.
+      }
+    }
   }
 }

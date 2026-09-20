@@ -4,6 +4,7 @@ import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { useTaskInbox } from "@/features/tasks/useTasks";
+import { useSessionControl } from "@/features/ui-token/useSessionControl";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
 import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ export interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const t = useT();
   const { pathname } = useLocation();
+  const sessionControl = useSessionControl();
   const openDomain = activeDomain(pathname);
   const hideLabels = collapsed ? undefined : "md:inline";
 
@@ -84,13 +86,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <PanelLeftClose className="size-4" aria-hidden="true" />
           )}
         </Button>
+        {/* Session-aware mode line (fix/login-feedback): the old static
+         * «L1 · только чтение» kept claiming read-only AFTER a login. The
+         * line now states the live contract — read-only without a ui token,
+         * active session with one — flipping reactively with the gate. */}
         <p
           className={cn(
             "hidden px-2 py-2 text-xs text-foreground-muted",
             collapsed ? undefined : "md:inline",
           )}
         >
-          {t("nav.footerReadOnly")}
+          {t(sessionControl ? "nav.modeActive" : "nav.modeReadOnly")}
         </p>
       </div>
     </aside>

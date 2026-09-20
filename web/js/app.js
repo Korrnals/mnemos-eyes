@@ -71,7 +71,14 @@ function esc(s) {
 }
 
 // ------------------------------------------------------------------- board
+// Column id → label dictionary: every column render site (board headers,
+// modal chip, archive filter) goes through it with a raw-id fallback, so
+// unknown wire ids stay readable instead of crashing. WF-1 prep: backlog /
+// validating get their RU labels up front (order mirrors the server's
+// TASK_COLUMNS — backlog, validating, left of open).
 const COLUMN_TITLES = {
+  backlog: "бэклог",
+  validating: "на валидации",
   open: "открыто",
   "in-progress": "в работе",
   blocked: "блокировано",

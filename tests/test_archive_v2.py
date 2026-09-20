@@ -95,8 +95,9 @@ class TestArchiveV2Filters:
     def test_validation_422(self, client):
         assert client.get("/api/archive",
                           params={"status": "junk"}).status_code == 422
+        # WF-1: 'backlog' is a valid column now — garbage only
         assert client.get("/api/archive",
-                          params={"col": "backlog"}).status_code == 422
+                          params={"col": "junk"}).status_code == 422
 
 
 class TestArchiveV2Pagination:
