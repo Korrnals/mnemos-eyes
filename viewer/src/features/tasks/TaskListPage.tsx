@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageSquare, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { TableRowSkeleton } from "@/components/skeletons/Skeletons";
-import { isTaskSource } from "@/gateway/capabilities";
+import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { BoardTask } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
@@ -33,6 +33,8 @@ import {
   saveCollapsedGroups,
   sortGroupTasks,
 } from "./taskGrouping";
+import { CreateTaskDialog } from "./CreateTaskDialog";
+import { TaskRowMenu } from "./TaskRowMenu";
 import { useBoardTasks, useReportCounts } from "./useTasks";
 
 /** Honest mnemos-mode state: the task domain is a board-native view (Ф2). */
@@ -54,21 +56,25 @@ function TasksUnsupported() {
 
 /**
  * `/tasks` — the task LIST view of the domain (ARCHCOM-3 verdict §3: dense
- * table on `--row-h` tokens; the kanban view is a Ф3 deliverable). Filters
- * live in the URL (`?status=&priority=&project=&agent=&q=` — QA verdict §3),
- * rows group by project (collapsible, persisted under "vesmaro.taskGroups")
- * and sort priority → position inside a group. Desktop renders a semantic
- * table; under md the same rows render as card-rows (no second data path).
+ * table on `--row-h` tokens; the kanban view needs WF-1 and is NOT in this
+ * wave — moving is the row ⋯ action). Filters live in the URL
+ * (`?status=&priority=&project=&agent=&q=` — QA verdict §3), rows group by
+ * project (collapsible, persisted under "vesmaro.taskGroups") and sort
+ * priority → position inside a group. Desktop renders a semantic table;
+ * under md the same rows render as card-rows (no second data path). Ф3
+ * adds the row action menu (edit/move/archive) and «+ Задача».
  */
 export function TaskListPage() {
   const t = useT();
   const { lang } = useI18n();
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
+  const canMutate = isTaskMutationSource(gateway);
   const board = useBoardTasks();
   const [searchParams, setSearchParams] = useSearchParams();
   const state = parseTaskListParams(searchParams);
   const [collapsed, setCollapsed] = useState(() => loadCollapsedGroups());
+  const [createOpen, setCreateOpen] = useState(false);
 
   const tasks = board.data?.tasks ?? [];
   // Stable id list so the report-count memo does not re-derive per render.
@@ -141,9 +147,20 @@ export function TaskListPage() {
 
   return (
     <section aria-labelledby="tasks-title" className="mx-auto max-w-5xl space-y-4">
-      <h1 id="tasks-title" className="text-xl font-semibold">
-        {t("tasks.title")}
-      </h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 id="tasks-title" className="text-xl font-semibold">
+          {t("tasks.title")}
+        </h1>
+        {canMutate ? (
+          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" aria-hidden="true" />
+            {t("tasks.create.label")}
+          </Button>
+        ) : null}
+      </div>
+      {canMutate ? (
+        <CreateTaskDialog open={createOpen} onOpenChange={setCreateOpen} />
+      ) : null}
 
       {/* Mini-stats: per-column counts of the WHOLE board (wire semantics:
        * counts never describe the filtered view — ui-contract /api/board). */}
@@ -281,12 +298,15 @@ export function TaskListPage() {
                 <th scope="col" className="px-2 py-1 font-medium">
                   {t("tasks.colDate")}
                 </th>
+                <th scope="col" className="px-2 py-1 font-medium">
+                  {canMutate ? <span className="sr-only">{t("tasks.colActions")}</span> : null}
+                </th>
               </tr>
             </thead>
             {groups.map((group) => (
               <tbody key={group.project || "__none"} className="group-tbody">
                 <tr>
-                  <td colSpan={6} className="border-b border-border-subtle px-2 py-1">
+                  <td colSpan={7} className="border-b border-border-subtle px-2 py-1">
                     <GroupToggle
                       project={group.project}
                       count={group.tasks.length}
@@ -302,6 +322,7 @@ export function TaskListPage() {
                     lang={lang}
                     hidden={collapsed.has(group.project)}
                     reportCount={reportCounts[task.id]}
+                    showMenu={canMutate}
                   />
                 ))}
               </tbody>
@@ -326,6 +347,7 @@ export function TaskListPage() {
                           task={task}
                           lang={lang}
                           reportCount={reportCounts[task.id]}
+                          showMenu={canMutate}
                         />
                       </li>
                     ))}
@@ -334,8 +356,6 @@ export function TaskListPage() {
               </section>
             ))}
           </div>
-
-          <p className="text-xs text-foreground-muted">{t("tasks.readOnlyNote")}</p>
         </>
       )}
     </section>
@@ -418,11 +438,13 @@ function TaskTableRow({
   lang,
   hidden,
   reportCount,
+  showMenu,
 }: {
   task: BoardTask;
   lang: "ru" | "en";
   hidden: boolean;
   reportCount?: number;
+  showMenu: boolean;
 }) {
   const t = useT();
   const navigate = useNavigate();
@@ -466,6 +488,9 @@ function TaskTableRow({
       <td className="whitespace-nowrap px-2 text-xs text-foreground-muted">
         {formatTaskDate(task.updated_at, lang)}
       </td>
+      <td className="px-1 py-0.5 text-right">
+        {showMenu ? <TaskRowMenu task={task} /> : null}
+      </td>
     </tr>
   );
 }
@@ -475,37 +500,42 @@ function TaskCardRow({
   task,
   lang,
   reportCount,
+  showMenu,
 }: {
   task: BoardTask;
   lang: "ru" | "en";
   reportCount?: number;
+  showMenu: boolean;
 }) {
   const t = useT();
   return (
-    <Link
-      to={`/tasks/${encodeURIComponent(task.id)}`}
-      className="flex min-h-row flex-col gap-1 rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well transition-colors duration-instant hover:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
-    >
-      <span className="flex flex-wrap items-center gap-1.5">
-        <Badge variant={priorityBadgeVariant(task.priority)}>
-          {t(priorityLabelKey(task.priority))}
-        </Badge>
-        <Badge variant={statusBadgeVariant(task.status)}>
-          {t(statusLabelKey(task.status))}
-        </Badge>
-        {reportCount ? (
-          <span className="inline-flex items-center gap-0.5 text-xs text-foreground-muted">
-            <MessageSquare className="size-3" aria-hidden="true" />
-            {reportCount}
-          </span>
-        ) : null}
-      </span>
-      <span className="font-medium">{task.title}</span>
-      <span className="flex flex-wrap gap-x-3 text-xs text-foreground-secondary">
-        <span>{task.project || t("tasks.noProject")}</span>
-        <span>{(task.agents ?? []).join(", ") || "—"}</span>
-        <span>{formatTaskDate(task.updated_at, lang)}</span>
-      </span>
-    </Link>
+    <div className="relative flex min-h-row items-start gap-2">
+      <Link
+        to={`/tasks/${encodeURIComponent(task.id)}`}
+        className="flex min-h-row flex-1 flex-col gap-1 rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well transition-colors duration-instant hover:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+      >
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Badge variant={priorityBadgeVariant(task.priority)}>
+            {t(priorityLabelKey(task.priority))}
+          </Badge>
+          <Badge variant={statusBadgeVariant(task.status)}>
+            {t(statusLabelKey(task.status))}
+          </Badge>
+          {reportCount ? (
+            <span className="inline-flex items-center gap-0.5 text-xs text-foreground-muted">
+              <MessageSquare className="size-3" aria-hidden="true" />
+              {reportCount}
+            </span>
+          ) : null}
+        </span>
+        <span className="font-medium">{task.title}</span>
+        <span className="flex flex-wrap gap-x-3 text-xs text-foreground-secondary">
+          <span>{task.project || t("tasks.noProject")}</span>
+          <span>{(task.agents ?? []).join(", ") || "—"}</span>
+          <span>{formatTaskDate(task.updated_at, lang)}</span>
+        </span>
+      </Link>
+      {showMenu ? <TaskRowMenu task={task} /> : null}
+    </div>
   );
 }

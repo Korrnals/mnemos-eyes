@@ -60,6 +60,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "vesmaro-eyes.boardTokenSecretName" . }}
                   key: {{ .Values.boardToken.existingSecretKey }}
+            {{- if .Values.uiToken.enabled }}
+            # ADR 0009 A1 token split: once this env reaches the pod, the
+            # board token no longer passes ui-class mutations (transition
+            # ends). Enable as RUNBOOK.md §8 migration step 2 only.
+            - name: VESMARO_UI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vesmaro-eyes.uiTokenSecretName" . }}
+                  key: {{ .Values.uiToken.existingSecretKey }}
+            {{- end }}
             {{- if .Values.memoryRegistry.configMap.create }}
             - name: VESMARO_MEMORY_CONFIG
               value: /config/memories.yaml

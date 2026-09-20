@@ -13,7 +13,7 @@ image:
   repository: ghcr.io/korrnals/vesmaro-eyes
   # Explicit tag synced from server/app.py by scripts/sync-version.sh.
   # If left empty, .Chart.AppVersion is used.
-  tag: "1.6.0"
+  tag: "1.7.0"
   pullPolicy: Always
 
 imagePullSecrets:
@@ -45,6 +45,21 @@ boardToken:
   # secret you manage yourself.
   existingSecret: ""
   existingSecretKey: VESMARO_BOARD_TOKEN
+
+uiToken:
+  # VESMARO_UI_TOKEN (ui-class write guard, ADR 0009 A1 token split).
+  # disabled = transition mode: no secret is created and no env reaches
+  # the pod, so VESMARO_BOARD_TOKEN keeps passing ui-class mutations —
+  # the upgrade that lands this chart cannot break the running UI.
+  # Enable ONLY as migration step 2 (RUNBOOK.md §8): the moment the env
+  # reaches the pod, the board token STOPS working for the owner UI —
+  # have the ui token value ready first (existingSecret with your own
+  # value, or fetch the generated one right after rollout).
+  # Generation semantics mirror boardToken: randAlphaNum(48) on first
+  # enable, lookup-stable across upgrades, kept on uninstall.
+  enabled: true
+  existingSecret: ""
+  existingSecretKey: VESMARO_UI_TOKEN
 
 mnemos:
   cluster:

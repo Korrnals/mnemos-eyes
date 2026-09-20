@@ -7,6 +7,7 @@ import { useStatus } from "@/hooks/useStatus";
 import { getToken } from "@/gateway/auth";
 import { useT, type TranslationKey } from "@/i18n";
 import { useAuth } from "./AuthContext";
+import { UiTokenStatus } from "@/features/ui-token/UiTokenStatus";
 
 /**
  * TopBar auth/connection slot (T6). Two pieces of state, one compact widget:
@@ -19,9 +20,10 @@ import { useAuth } from "./AuthContext";
  *   reflects a token restored from localStorage so a reload renders the
  *   correct state immediately (the /auth/me confirmation follows async).
  *
- * Board adapter (Ф0): no session affordance renders at all — reads are open
- * and token-free (ADR 0011 §7), so the sign-in entry must not appear and
- * the auth screen can never be pulled in.
+ * Board adapter (Ф0): reads are open and token-free (ADR 0011 §7) — the
+ * mnemos sign-in entry must not appear. Ф3 adds exactly one affordance:
+ * the ui-token sign-out (UiTokenStatus), rendered while a ui token is
+ * stored so a shared machine can be scrubbed with one click.
  */
 export function AuthStatus() {
   const { state, adapterMode, endpoint, logout, openOverlay } = useAuth();
@@ -53,7 +55,9 @@ export function AuthStatus() {
         label={connection.label}
         className="hidden text-sm text-foreground-secondary lg:inline-flex"
       />
-      {isBoard ? null : authenticated ? (
+      {isBoard ? (
+        <UiTokenStatus />
+      ) : authenticated ? (
         <Button
           variant="ghost"
           size="sm"

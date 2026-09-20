@@ -4,6 +4,7 @@ import type { RequestConfig } from "./http";
 import { EventStream } from "./events";
 import type { BoardEvent } from "./events";
 import { ApiError } from "@/lib/errors";
+import { getUiToken } from "./uiToken";
 import type {
   ArchivePage,
   ArchiveParams,
@@ -14,6 +15,7 @@ import type {
   BoardSearchResponse,
   BoardSummary,
   BoardTask,
+  InboxRefreshResult,
   MemoryPulse,
   MemoryPulseItem,
   MemoryPulseServerNote,
@@ -21,10 +23,14 @@ import type {
   MergedMemoryListItem,
   MergedTags,
   PulseParams,
+  TaskCreateInput,
   TaskHistory,
   TaskInbox,
   TaskMemories,
+  TaskMutationAck,
+  TaskPatchInput,
   TaskReports,
+  TaskUnarchiveResult,
 } from "./boardTypes";
 import type {
   A2ASession,
@@ -64,6 +70,16 @@ import type {
  * - pulse          GET /api/memories/pulse       ?scope&project&limit (Ф1)
  * - boardHealth    GET /api/health               (per-store detail view, Ф1)
  * - events         GET /api/events               (SSE, see gateway/events.ts)
+ *
+ * Ф3 mutations (board-openapi-snapshot.json; all class-`ui` token-gated —
+ * Bearer attached only when a ui token is stored, see gateway/uiToken.ts):
+ * - createTask     POST   /api/tasks                        → 201 TaskOut
+ * - patchTask      PATCH  /api/tasks/{id}                   → 200 TaskOut | 423
+ * - moveTask       POST   /api/tasks/{id}/move              → 200 TaskOut
+ * - archiveTask    POST   /api/tasks/{id}/archive           → 200 OkOut
+ * - unarchiveTask  POST   /api/tasks/{id}/unarchive         → 200 UnarchiveOut
+ * - adoptInboxItem POST   /api/tasks/inbox/{memory_id}/adopt → 201 TaskOut | 409
+ * - refreshInbox   POST   /api/tasks/inbox/refresh          → 200 counters
  *
  * v0 honestly declares metrics / traces / sessions / agentRecall
  * unsupported (501) — they are mnemos-side views the merge API does not
@@ -136,6 +152,32 @@ export interface BoardGateway extends MemoryGateway {
    * Throws 404 when the id is neither on the board.
    */
   taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask>;
+
+  // --- Ф3 mutations (ui-token gated; see the class docblock) ------------------
+
+  /** True when a ui token is stored (mutation affordances stay visible). */
+  hasUiToken(): boolean;
+  /** Create a native task (`POST /api/tasks`, 201 → TaskOut). */
+  createTask(payload: TaskCreateInput): Promise<BoardTask>;
+  /**
+   * Patch content fields (`PATCH /api/tasks/{id}`). 423 Locked when the task
+   * is older than 24h and `force` is not true (BE-12).
+   */
+  patchTask(taskId: string, patch: TaskPatchInput): Promise<BoardTask>;
+  /** Move to a column, optionally at a position (`POST /api/tasks/{id}/move`). */
+  moveTask(taskId: string, col: string, position?: number): Promise<BoardTask>;
+  /** Archive (`POST /api/tasks/{id}/archive`). */
+  archiveTask(taskId: string): Promise<TaskMutationAck>;
+  /** Restore from the archive (`POST /api/tasks/{id}/unarchive`). */
+  unarchiveTask(taskId: string): Promise<TaskUnarchiveResult>;
+  /**
+   * Adopt an inbox mirror row as a native task
+   * (`POST /api/tasks/inbox/{memory_id}/adopt`). 409 on double adoption —
+   * the error body carries the existing `task_id`.
+   */
+  adoptInboxItem(memoryId: string): Promise<BoardTask>;
+  /** Force one synchronous inbox scan (`POST /api/tasks/inbox/refresh`). */
+  refreshInbox(): Promise<InboxRefreshResult>;
 }
 
 export interface BoardAdapterOptions {
@@ -145,12 +187,19 @@ export interface BoardAdapterOptions {
   fetchImpl?: typeof fetch;
   /** Default per-request timeout; search gets a dedicated generous budget. */
   timeoutMs?: number;
+  /**
+   * Test seam for the ui-token source. Defaults to the sessionStorage-backed
+   * `getUiToken` (gateway/uiToken.ts) — mutations attach `Authorization:
+   * Bearer <token>` only when it answers non-empty.
+   */
+  getUiTokenFn?: () => string;
 }
 
 export class BoardAdapter implements BoardGateway {
   private readonly baseUrl: string;
   private readonly fetchImpl?: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly getUiTokenFn: () => string;
 
   constructor(options: BoardAdapterOptions | string = {}) {
     // Backwards-compatible string form: new BoardAdapter("/api").
@@ -158,6 +207,7 @@ export class BoardAdapter implements BoardGateway {
     this.baseUrl = opts.baseUrl ?? "/api";
     this.fetchImpl = opts.fetchImpl;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.getUiTokenFn = opts.getUiTokenFn ?? getUiToken;
   }
 
   async search(params: SearchParams, signal?: AbortSignal): Promise<SearchResult[]> {
@@ -347,6 +397,64 @@ export class BoardAdapter implements BoardGateway {
     return task;
   }
 
+  // --- Ф3 mutations (ui-token gated; wire contract in the class docblock) ----
+
+  hasUiToken(): boolean {
+    return this.getUiTokenFn().length > 0;
+  }
+
+  async createTask(payload: TaskCreateInput): Promise<BoardTask> {
+    return this.request<BoardTask>("/tasks", { method: "POST", body: payload, auth: true });
+  }
+
+  async patchTask(taskId: string, patch: TaskPatchInput): Promise<BoardTask> {
+    return this.request<BoardTask>(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      body: patch,
+      auth: true,
+    });
+  }
+
+  async moveTask(taskId: string, col: string, position?: number): Promise<BoardTask> {
+    return this.request<BoardTask>(`/tasks/${encodeURIComponent(taskId)}/move`, {
+      method: "POST",
+      // position null is a legal "append to the end" on the wire.
+      body: { col, position: position ?? null },
+      auth: true,
+    });
+  }
+
+  async archiveTask(taskId: string): Promise<TaskMutationAck> {
+    return this.request<TaskMutationAck>(`/tasks/${encodeURIComponent(taskId)}/archive`, {
+      method: "POST",
+      auth: true,
+    });
+  }
+
+  async unarchiveTask(taskId: string): Promise<TaskUnarchiveResult> {
+    return this.request<TaskUnarchiveResult>(
+      `/tasks/${encodeURIComponent(taskId)}/unarchive`,
+      { method: "POST", auth: true },
+    );
+  }
+
+  async adoptInboxItem(memoryId: string): Promise<BoardTask> {
+    return this.request<BoardTask>(
+      `/tasks/inbox/${encodeURIComponent(memoryId)}/adopt`,
+      { method: "POST", auth: true },
+    );
+  }
+
+  async refreshInbox(): Promise<InboxRefreshResult> {
+    return this.request<InboxRefreshResult>("/tasks/inbox/refresh", {
+      method: "POST",
+      auth: true,
+      // The server scans every store synchronously — seconds are accepted
+      // for an explicit refresh (board-openapi-snapshot description).
+      timeoutMs: SEARCH_TIMEOUT_MS,
+    });
+  }
+
   // --- v0-unsupported mnemos-side views (fail loud, never pretend) ----------
 
   async agentRecall(
@@ -380,20 +488,27 @@ export class BoardAdapter implements BoardGateway {
   }
 
   /**
-   * Board requests are unauthenticated by design (ADR 0011 §7: reads open
-   * through Ф0–Ф2) — no token provider, no unauthorized flag wiring. The
-   * shared requestJson plumbing still maps every non-2xx to `ApiError`,
-   * composes timeouts with external aborts, and lets caller aborts pass.
+   * Reads stay unauthenticated (ADR 0011 §7: reads open through Ф0–Ф2).
+   * Ф3 mutations opt into `auth: true` — the stored ui token, when present,
+   * becomes `Authorization: Bearer <token>`; without a token the request
+   * ships bare and the server answers 401, which the UI layer turns into
+   * the token panel (never a hidden affordance). requestJson still maps
+   * every non-2xx to `ApiError` and composes timeouts with external aborts.
    */
-  private request<T>(path: string, config: RequestConfig): Promise<T> {
+  private request<T>(
+    path: string,
+    config: RequestConfig & { auth?: boolean },
+  ): Promise<T> {
+    const { auth, ...rest } = config;
     return requestJson<T>(
       {
         baseUrl: this.baseUrl,
         fetchImpl: this.fetchImpl,
         defaultTimeoutMs: this.timeoutMs,
+        ...(auth ? { getToken: this.getUiTokenFn } : {}),
       },
       path,
-      config,
+      rest,
     );
   }
 }

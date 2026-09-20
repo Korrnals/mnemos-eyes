@@ -10,15 +10,17 @@ import { GatewayContext } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { I18nProvider } from "@/i18n";
 import { ApiError } from "@/lib/errors";
+import { ToastProvider } from "@/components/Toast/ToastProvider";
+import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { ArchiveParams } from "@/gateway/boardTypes";
 
 /**
- * Ф2 archive page (BE-11b reading surface): URL-state filters + pagination,
- * expandable rows carrying the full archived detail, the honest disabled
- * unarchive mutation, and the state matrix (loading / error / empty /
- * unsupported). The q debounce itself is behaviour for a DOM test-runner —
- * here the URL-driven contract is pinned: a ?q= deep link renders the
- * filtered page the server answered for exactly that key.
+ * Ф2+Ф3 archive page (BE-11b): URL-state filters + pagination, expandable
+ * rows carrying the full archived detail, and the Ф3 «Restore to board»
+ * mutation (live, no longer the honest-disabled stub). The q debounce
+ * itself is behaviour for a DOM test-runner — here the URL-driven contract
+ * is pinned: a ?q= deep link renders the filtered page the server answered
+ * for exactly that key.
  */
 
 type Gateway = MockAdapter | HttpAdapter;
@@ -40,11 +42,15 @@ async function renderArchive(
   return renderToString(
     <GatewayContext.Provider value={gateway}>
       <QueryClientProvider client={queryClient}>
-        <I18nProvider initialLang="en">
-          <MemoryRouter initialEntries={[path]}>
-            <TaskArchivePage />
-          </MemoryRouter>
-        </I18nProvider>
+        <ToastProvider>
+          <UiTokenProvider>
+            <I18nProvider initialLang="en">
+              <MemoryRouter initialEntries={[path]}>
+                <TaskArchivePage />
+              </MemoryRouter>
+            </I18nProvider>
+          </UiTokenProvider>
+        </ToastProvider>
       </QueryClientProvider>
     </GatewayContext.Provider>,
   );
@@ -62,11 +68,15 @@ describe("TaskArchivePage (mock adapter)", () => {
     expect(html).toContain("<details");
   });
 
-  it("unarchive is an honest disabled mutation with the phase-3 tooltip", async () => {
+  it("unarchive is a live mutation (Ф3): enabled button, no read-only note", async () => {
     const html = await renderArchive(new MockAdapter({ latency: false }));
     expect(html).toContain("Restore to board");
-    expect(html).toContain('title="Restore is a mutation; arrives in Phase 3"');
-    expect(html).toContain("Read-only list");
+    expect(html).not.toContain('title="Restore is a mutation; arrives in Phase 3"');
+    expect(html).not.toContain("Read-only list");
+    // The button is enabled — the only disabled controls on the page are the
+    // pager buttons at offset 0 (Next), so the restore button carries no
+    // disabled attribute of its own.
+    expect(html).not.toMatch(new RegExp("Restore to board[^<]*disabled"));
   });
 
   it("a ?q= deep link renders the page fetched for exactly that filter", async () => {
@@ -108,11 +118,15 @@ describe("TaskArchivePage (mock adapter)", () => {
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
         <QueryClientProvider client={client}>
-          <I18nProvider initialLang="en">
-            <MemoryRouter initialEntries={["/tasks/archive"]}>
-              <TaskArchivePage />
-            </MemoryRouter>
-          </I18nProvider>
+          <ToastProvider>
+            <UiTokenProvider>
+              <I18nProvider initialLang="en">
+                <MemoryRouter initialEntries={["/tasks/archive"]}>
+                  <TaskArchivePage />
+                </MemoryRouter>
+              </I18nProvider>
+            </UiTokenProvider>
+          </ToastProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
     );
@@ -137,11 +151,15 @@ describe("TaskArchivePage (mock adapter)", () => {
     const html = renderToString(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
         <QueryClientProvider client={client}>
-          <I18nProvider initialLang="en">
-            <MemoryRouter initialEntries={["/tasks/archive"]}>
-              <TaskArchivePage />
-            </MemoryRouter>
-          </I18nProvider>
+          <ToastProvider>
+            <UiTokenProvider>
+              <I18nProvider initialLang="en">
+                <MemoryRouter initialEntries={["/tasks/archive"]}>
+                  <TaskArchivePage />
+                </MemoryRouter>
+              </I18nProvider>
+            </UiTokenProvider>
+          </ToastProvider>
         </QueryClientProvider>
       </GatewayContext.Provider>,
     );

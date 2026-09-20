@@ -147,6 +147,7 @@ hostNetwork-порт 8080 при откате снова займётся под
 | `vesmaro-eyes-mnemos` | вне-helm, вручную (см. `deploy/k8s/vesmaro-eyes.yaml`, шапка) | `MNEMOS_TOKEN` (`mnk_…`, totp_required=0) | только читает (existingSecret) |
 | `vesmaro-eyes-laptop` | вне-helm, вручную | `MNEMOS_LAPTOP_TOKEN` | только читает (existingSecret) |
 | `vesmaro-eyes-board-token` | **чарт** (lookup+randAlphaNum 48, keep при uninstall) | `VESMARO_BOARD_TOKEN` | создаёт/переиспользует |
+| `vesmaro-eyes-ui-token` | **чарт**, только при `uiToken.enabled=true` (иначе не существует; ADR 0009 A1) | `VESMARO_UI_TOKEN` | создаёт/переиспользует |
 | `vesmaro-eyes-tls` | `scripts/gen-tls-secret.sh`, 825d | `tls.crt`/`tls.key` (self-signed) | только читает (ingress.tls) |
 | `ghcr-pull` | вне-helm (registry pull) | dockerconfigjson | только читает (imagePullSecrets) |
 
@@ -194,3 +195,54 @@ hostNetwork-порт 8080 при откате снова займётся под
 `deploy/chart/vesmaro-eyes/Chart.yaml` (`version` + `appVersion`),
 `deploy/chart/vesmaro-eyes/values.yaml` (`image.tag`). После смены версии —
 пересборка образа и `helm upgrade vesmaro-eyes deploy/chart/vesmaro-eyes -n kube-agents`.
+
+## 8. Token-split (ADR 0009 A1): включение VESMARO_UI_TOKEN
+
+Мутации борда делятся на два класса bearer-токенов:
+
+| Класс | Env / секрет | Кто ходит | Эндпоинты |
+|---|---|---|---|
+| ui | `VESMARO_UI_TOKEN` (`vesmaro-eyes-ui-token`) | владелец (UI) | все мутации борда: tasks create/patch/move/delete, archive/unarchive, task-drafts, inbox refresh/adopt, board-reflect, notifications/read, groups/servers CRUD, refresh-all |
+| machine | `VESMARO_BOARD_TOKEN` (`vesmaro-eyes-board-token`, легаси-имя сохранено осознанно) | poller/агенты | `POST /api/tasks/{id}/reports`; будущие assignments claim/start/heartbeat/complete/fail |
+
+Правила guard: класс не сконфигурен → 503 (fail-closed); неверный bearer → 401.
+Чтения открыты, как раньше. Отчёты принимают ОБА класса.
+
+**Порядок миграции (соблюдать; каждый шаг — отдельный helm upgrade):**
+
+1. **Задеплой с поддержкой сплита** (`uiToken.enabled=false` — значение по
+   умолчанию). Ничего не меняется: секрета `vesmaro-eyes-ui-token` нет, env
+   `VESMARO_UI_TOKEN` в под не попадает, board-токен по-прежнему проходит
+   ui-мутации (переходный режим в коде сервера).
+2. **Положить VESMARO_UI_TOKEN в чарт.** Рекомендуемый путь — без окна
+   простоя UI:
+   ```bash
+   # 2a. Сгенерировать значение СВОЁ (например, openssl rand -base64 36),
+   #     создать секрет руками:
+   kubectl -n kube-agents create secret generic vesmaro-eyes-ui-token \
+     --from-literal=VESMARO_UI_TOKEN='<значение>'
+   # 2b. Включить ссылку на него и применить:
+   helm upgrade vesmaro-eyes deploy/chart/vesmaro-eyes -n kube-agents \
+     --set uiToken.enabled=true,uiToken.existingSecret=vesmaro-eyes-ui-token
+   # 2c. ДО шага 2b подставить значение в UI (где раньше стоял board-токен).
+   ```
+   Альтернатива без своего значения: `--set uiToken.enabled=true` — чарт
+   сгенерирует randAlphaNum(48); тогда сразу после rollout достать значение
+   и подставить в UI, **пока UI-мутации отвечают 401** (board-токен уже не
+   проходит):
+   ```bash
+   kubectl -n kube-agents get secret vesmaro-eyes-ui-token \
+     -o jsonpath='{.data.VESMARO_UI_TOKEN}' | base64 -d
+   ```
+   Значение токена не публиковать нигде (логи, issue, скриншоты).
+3. **Позже сузить BOARD до machine-only** (организационный шаг): убедиться,
+   что UI и люди больше не используют board-токен, а `scripts/assignment_poller.py`
+   продолжает работать с ним (reports + будущие assignment-роуты). Для
+   гарантии — ротация board-токена: `kubectl -n kube-agents delete secret
+   vesmaro-eyes-board-token` + `helm upgrade` (lookup перегенерирует) +
+   обновить env поллера. Poller миграции НЕ требует: его токен работает на
+   всём протяжении.
+
+Rollback сплита: `--set uiToken.enabled=false` (или `helm rollback`) — env
+пропадает из пода, guard возвращается в переходный режим; секрет
+`vesmaro-eyes-ui-token` переживёт удаление (resource-policy: keep).

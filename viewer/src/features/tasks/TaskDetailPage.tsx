@@ -1,10 +1,11 @@
+import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { FileText, History, Layers, ScrollText } from "lucide-react";
+import { FileText, History, Layers, PencilLine, Play, ScrollText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton, TableRowSkeleton } from "@/components/skeletons/Skeletons";
-import { isTaskSource } from "@/gateway/capabilities";
+import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { TaskHistory, TaskMemories } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
@@ -17,6 +18,8 @@ import {
   statusBadgeVariant,
   statusLabelKey,
 } from "./taskStatus";
+import { EditTaskDialog } from "./EditTaskDialog";
+import { useTaskMutations } from "./useTaskMutations";
 import {
   useSyncReportCount,
   useTask,
@@ -29,8 +32,10 @@ import {
  * `/tasks/:id` — the task PAGE (concept §4.1: a route, not the board's modal
  * stack; tabs are URL state `?tab=reports|history|memory|details`, default
  * «Отчёты»). The row comes from the shared `tasks.board` projection (no
- * single-task GET exists — see useTasks.ts). READ-ONLY by Ф2 mandate: no
- * edit/move controls, honest footer note; mutations land in Ф3.
+ * single-task GET exists — see useTasks.ts). Ф3 adds the mutation header:
+ * «Изменить» (content edit, BE-12 force path inside) and UI-8 «Вернуть в
+ * работу» on a live final report (PATCH status=in-progress — the column
+ * never moves).
  */
 
 const TASK_TABS = [
@@ -51,8 +56,14 @@ export function TaskDetailPage() {
   const { lang } = useI18n();
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
+  const canMutate = isTaskMutationSource(gateway);
   const { id } = useParams<{ id: string }>();
   const task = useTask(id);
+  // UI-8 needs the reports anyway (the «Отчёты» tab loads the same key —
+  // one wire call, no extra request for the header decision).
+  const reports = useTaskReports(id);
+  const { resumeTask } = useTaskMutations();
+  const [editOpen, setEditOpen] = useState(false);
   const [searchParams] = useSearchParams();
   const tabParam = searchParams.get("tab") ?? "reports";
   const tab: TaskTabId = isTaskTabId(tabParam) ? tabParam : "reports";
@@ -124,12 +135,39 @@ export function TaskDetailPage() {
   }
 
   const current = task.data;
+  // UI-8: a live (non-superseded) final report marks the task as finished —
+  // only then does the header offer «Вернуть в работу».
+  const hasLiveFinal = (reports.data?.items ?? []).some(
+    (report) => report.kind === "final" && !report.superseded,
+  );
 
   return (
     <TaskDetailShell>
-      {/* Header: id + status/priority badges + dates + env + people chips. */}
+      {/* Header: id + status/priority badges + dates + env + people chips
+       * + Ф3 mutation actions. */}
       <header className="space-y-2">
-        <p className="font-mono text-xs text-foreground-muted">{current.id}</p>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <p className="font-mono text-xs text-foreground-muted">{current.id}</p>
+          {canMutate ? (
+            <div className="flex flex-wrap gap-2">
+              {hasLiveFinal ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => resumeTask(current)}
+                  title={t("tasks.resumeTitle")}
+                >
+                  <Play className="size-4" aria-hidden="true" />
+                  {t("tasks.resumeLabel")}
+                </Button>
+              ) : null}
+              <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+                <PencilLine className="size-4" aria-hidden="true" />
+                {t("tasks.editLabel")}
+              </Button>
+            </div>
+          ) : null}
+        </div>
         <h1 id="task-title" className="text-xl font-semibold">
           {current.title}
         </h1>
@@ -161,6 +199,11 @@ export function TaskDetailPage() {
           </span>
         </p>
       </header>
+
+      {/* Content edit (BE-12 lock + force path lives inside). */}
+      {canMutate ? (
+        <EditTaskDialog task={current} open={editOpen} onOpenChange={setEditOpen} />
+      ) : null}
 
       {/* Tabs as links (deep-linkable ?tab=; nav + aria-current, not ARIA
        * tabs — each pane is a routed view, navigation semantics fit). */}
@@ -201,9 +244,6 @@ export function TaskDetailPage() {
         {tab === "memory" ? <MemoryTab taskId={id} lang={lang} /> : null}
         {tab === "details" ? <DetailsTab taskId={id} lang={lang} /> : null}
       </div>
-
-      {/* Honest read-only footer (Ф2 mandate: mutations are Ф3). */}
-      <p className="text-xs text-foreground-muted">{t("tasks.readOnlyFooter")}</p>
     </TaskDetailShell>
   );
 }

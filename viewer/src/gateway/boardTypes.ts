@@ -93,6 +93,35 @@ export interface ArchiveParams {
   readonly offset?: number;
 }
 
+// --- Ф3 mutation wire types (generated entity schemas) -------------------------
+
+/** Create payload — board `TaskCreate` schema (`POST /api/tasks`). */
+export type TaskCreateInput = Schemas["TaskCreate"];
+
+/**
+ * Content patch — board `TaskPatch` schema (`PATCH /api/tasks/{id}`).
+ * `force: true` overrides the BE-12 24h lock (the server echoes forced
+ * edits back with `forced: true`); `status` is workflow, never content —
+ * the 423 window does not apply to it.
+ */
+export type TaskPatchInput = Schemas["TaskPatch"];
+
+/** Move payload — board `MoveBody` schema (`POST /api/tasks/{id}/move`). */
+export type TaskMoveInput = Schemas["MoveBody"];
+
+/** Archive ack — board `OkOut` schema (`POST /api/tasks/{id}/archive`). */
+export type TaskMutationAck = Schemas["OkOut"];
+
+/** Unarchive result — board `UnarchiveOut` schema; `task` may be null. */
+export type TaskUnarchiveResult = Schemas["UnarchiveOut"];
+
+/**
+ * Inbox scan counters — board `TaskInboxRefreshOut` schema
+ * (`POST /api/tasks/inbox/refresh`): `found` rows seen, `new` rows stored.
+ */
+export type InboxRefreshResult = Schemas["TaskInboxRefreshOut"];
+
+
 // --- Anonymous wire shapes (board answers `dict[str, Any]`) ------------------
 
 /**
