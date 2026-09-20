@@ -725,6 +725,49 @@ async function refreshStores() {
   }
 }
 
+// ---------------------------------------------------------- mesh nodes rail
+// W5: mesh nodes are READ-ONLY board entities — display only, no edit
+// buttons (management = API; freeze-exception: docs/decisions/freeze-exceptions.md).
+function fmtUptime(sec) {
+  if (sec == null || isNaN(sec) || sec < 0) return "—";
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600),
+        m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d}д ${h}ч`;
+  if (h) return `${h}ч ${m}м`;
+  if (m) return `${m}м`;
+  return `${sec}с`;
+}
+
+function renderMeshNodes() {
+  const el = $("#mesh-nodes");
+  if (!el) return;
+  const nodes = state.meshNodes || [];
+  if (!nodes.length) {
+    el.innerHTML = `<div class="column-empty">узлы не объявлены</div>`;
+    return;
+  }
+  el.innerHTML = "";
+  for (const n of nodes) {
+    const dotCls = n.status === "ok" ? "dot-on"
+      : (n.status === "degraded" ? "dot-wait" : "dot-off");
+    const h = n.health || null;
+    const peers = h ? `peers ${h.peers_reachable}/${h.peers_total}` : "peers —";
+    const ver = h?.version ? `v${String(h.version).replace(/^v/, "")}` : "v?";
+    const tail = n.status === "offline" ? "недоступен"
+      : (n.status === "disabled" ? "отключён" : fmtUptime(h?.uptime_seconds));
+    const row = document.createElement("div");
+    row.className = "store-row";
+    row.innerHTML = `
+      <span class="dot ${dotCls}"></span>
+      <span class="store-name">${esc(n.name)}</span>
+      <span class="store-total">${esc(ver)} · ${esc(peers)}</span>
+      <span class="store-group">${esc(tail)}</span>`;
+    row.title = `${n.base_url}${n.description ? " — " + n.description : ""}`
+      + `${n.error ? " · " + n.error : ""} · наблюдение; управление — через API`;
+    el.appendChild(row);
+  }
+}
+
 // ------------------------------------------------------------------ task modal
 // (see openTask / closeTask)
 
@@ -2966,6 +3009,9 @@ async function healthLoop() {
     updateMemStatus(h.servers);
     const anyOk = (h.servers || []).some((s) => s.ok);
     setMnemos(anyOk, anyOk ? "ok" : "down");
+    // W5: mesh nodes ride the same health snapshot (honest-offline)
+    state.meshNodes = h.mesh?.nodes || [];
+    renderMeshNodes();
   } catch { setMnemos(false, "unreachable"); }
 }
 
@@ -2991,6 +3037,9 @@ function connectSSE() {
     if (ev.kind === "server.changed") {
       loadMemServers().then(() => { refreshStores(); renderGroups(); }).catch(() => {});
     }
+    if (ev.kind === "mesh.node.changed") {
+      healthLoop().catch(() => {});   // W5: re-probe mesh nodes + re-render rail
+    }
   };
 }
 
@@ -3015,6 +3064,7 @@ applyTheme(localStorage.getItem(THEME_KEY)
   await loadMemServers().catch(() => {});
   refreshPulse();
   refreshStores();
+  renderMeshNodes();   // W5: placeholder paint; healthLoop fills live state
   renderGroups();
   refreshBell();
   refreshArchiveTeaser();

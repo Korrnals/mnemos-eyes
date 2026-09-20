@@ -269,6 +269,99 @@ class Decoy:
         self._srv.close()
 
 
+# --------------------------------------------------------------- fake mesh
+class _FakeMeshNodeHandler(BaseHTTPRequestHandler):
+    """Serves the W5 mesh healthz contract on the owning FakeMeshNode."""
+
+    def log_message(self, *args):  # silence request logging
+        pass
+
+    def do_GET(self):
+        fake: FakeMeshNode = self.server.fake  # type: ignore[attr-defined]
+        with fake.lock:
+            fake.requests.append({
+                "method": self.command,
+                "path": self.path,
+                "auth_present": bool(self.headers.get("Authorization")),
+            })
+        if self.path.split("?")[0] != "/healthz":
+            self._reply(404, {"detail": "not found"})
+            return
+        with fake.lock:
+            payload = fake.degraded and {
+                "status": "degraded", "version": fake.version,
+                "node_id": fake.node_id, "uptime_seconds": fake.uptime,
+                "unix_socket": {"path": "/sock", "core_connected": False},
+                "peers": [],
+            } or dict(fake.payload)
+        if fake.fail_healthz:
+            self._reply(500, {"detail": "fake mesh node: intentional failure"})
+            return
+        if fake.non_json:
+            data = b"not-json{"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self._reply(200, payload)
+
+    def _reply(self, code: int, payload) -> None:
+        data = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+class FakeMeshNode:
+    """Loopback mesh-node double speaking the W5 healthz contract:
+    ``{"status","version","node_id","uptime_seconds","unix_socket","peers"}``.
+    ``fail_healthz`` (500), ``non_json`` (200 + garbage) and ``degraded``
+    flip the served shape to exercise failure paths."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+        self.lock = threading.Lock()
+        self.fail_healthz = False
+        self.non_json = False
+        self.degraded = False
+        self.version = "v1.2.3"
+        self.node_id = "node-qa-1"
+        self.uptime = 3661
+        self.payload = {
+            "status": "ok", "version": self.version, "node_id": self.node_id,
+            "uptime_seconds": self.uptime,
+            "unix_socket": {"path": "/run/mnemos-mesh/core.sock",
+                            "core_connected": True},
+            "peers": [
+                {"id": "peer-a", "address": "10.1.0.2:9000", "reachable": True,
+                 "last_check": "2026-09-20T00:00:00Z"},
+                {"id": "peer-b", "address": "10.1.0.3:9000", "reachable": False,
+                 "last_check": "2026-09-20T00:00:00Z"},
+            ],
+        }
+        self._srv = ThreadingHTTPServer(("127.0.0.1", 0), _FakeMeshNodeHandler)
+        self._srv.daemon_threads = True
+        self._srv.fake = self  # type: ignore[attr-defined]
+        threading.Thread(target=self._srv.serve_forever, daemon=True).start()
+        self.port = self._srv.server_address[1]
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def healthz_requests(self) -> list[dict]:
+        with self.lock:
+            return [r for r in self.requests if r["path"].startswith("/healthz")]
+
+    def close(self) -> None:
+        self._srv.shutdown()
+        self._srv.server_close()
+
+
 # ----------------------------------------------------------------- fixtures
 @pytest.fixture(scope="session")
 def app_module():
@@ -332,6 +425,13 @@ def legacy_secret() -> str:
 @pytest.fixture()
 def fake_mnemos():
     fake = FakeMnemos()
+    yield fake
+    fake.close()
+
+
+@pytest.fixture()
+def fake_mesh_node():
+    fake = FakeMeshNode()
     yield fake
     fake.close()
 

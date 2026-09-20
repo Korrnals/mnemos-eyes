@@ -528,6 +528,21 @@ CREATE TABLE IF NOT EXISTS server_log (
     action     TEXT NOT NULL,
     detail     TEXT NOT NULL DEFAULT ''
 );
+-- W5 (ROADMAP-v2 §5, mesh federation): mesh nodes as observable board
+-- entities. base_url is the node's metrics/healthz address (host:port);
+-- GET {base_url}/healthz needs NO token, so there is deliberately no
+-- token column here — a mesh node must not hold board-class secrets
+-- (ADR 0009 Amd 2). Additive table riding the _SCHEMA executescript —
+-- NO SEED_VERSION bump (the seed check wipes tasks, not registries).
+CREATE TABLE IF NOT EXISTS mesh_nodes (
+    name         TEXT PRIMARY KEY,
+    base_url     TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_tasks_col ON tasks (col, position);
 CREATE INDEX IF NOT EXISTS idx_notifications_task ON notifications (task_id);
 CREATE INDEX IF NOT EXISTS idx_events_id ON events (id);
@@ -1324,6 +1339,68 @@ class Store:
                 (server, limit),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------- mesh nodes (W5, ROADMAP-v2 §5)
+    # Observable mesh-node registry — the memory_servers pattern minus the
+    # secret machinery: healthz carries no token, so there is no token_ref,
+    # no state column (health is probed live, never persisted) and no
+    # per-node action log beyond the shared events audit.
+    def list_mesh_nodes(self, include_disabled: bool = True) -> list[dict[str, Any]]:
+        q = "SELECT * FROM mesh_nodes" + ("" if include_disabled else " WHERE enabled=1")
+        with self._lock, self._conn() as db:
+            rows = [dict(r) for r in db.execute(
+                f"{q} ORDER BY sort_order, name").fetchall()]
+        return rows
+
+    def get_mesh_node(self, name: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM mesh_nodes WHERE name=?", (name,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_mesh_node(self, spec: dict[str, Any]) -> dict[str, Any] | None:
+        """Insert or fully update one mesh node. The UPDATE branch also
+        flips ``enabled`` (nodes have no separate action endpoint — the
+        owner manages them via the API, not the UI)."""
+        name = spec["name"]
+        now = _now()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT name FROM mesh_nodes WHERE name=?", (name,)
+            ).fetchone()
+            if row is None:
+                pos = db.execute(
+                    "SELECT COALESCE(MAX(sort_order)+1, 0) AS p FROM mesh_nodes"
+                ).fetchone()["p"]
+                db.execute(
+                    """INSERT INTO mesh_nodes
+                           (name, base_url, description, enabled, sort_order,
+                            created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (name, spec["base_url"], spec.get("description", ""),
+                     1 if spec.get("enabled", True) else 0, pos, now, now),
+                )
+                self._log(db, "mesh_node.created", None, {"node": name})
+            else:
+                db.execute(
+                    """UPDATE mesh_nodes SET base_url=?, description=?,
+                           enabled=?, updated_at=? WHERE name=?""",
+                    (spec["base_url"], spec.get("description", ""),
+                     1 if spec.get("enabled", True) else 0, now, name),
+                )
+                self._log(db, "mesh_node.updated", None, {"node": name})
+        return self.get_mesh_node(name)
+
+    def delete_mesh_node(self, name: str) -> bool:
+        """Remove a node from the board registry (the node itself is
+        untouched — mirrors delete_server semantics)."""
+        with self._lock, self._conn() as db:
+            cur = db.execute("DELETE FROM mesh_nodes WHERE name=?", (name,))
+            deleted = cur.rowcount > 0
+            if deleted:
+                self._log(db, "mesh_node.deleted", None, {"node": name})
+        return deleted
 
     # ------------------------------------------------------- memory groups
     def list_groups(self) -> list[dict[str, Any]]:

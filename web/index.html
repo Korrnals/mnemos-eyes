@@ -96,6 +96,12 @@
           <h2 class="rail-title">Хранилища <button class="rail-add" id="srv-add" title="Подключить хранилище">+</button></h2>
           <div id="stores" class="stores"><!-- per-store stats --></div>
         </section>
+        <!-- W5: mesh nodes — READ-ONLY display (freeze-exception,
+             docs/decisions/freeze-exceptions.md); management is API-only -->
+        <section class="rail-block">
+          <h2 class="rail-title">Узлы меша</h2>
+          <div id="mesh-nodes" class="stores mesh-nodes"><!-- read-only node rows --></div>
+        </section>
         <section class="rail-block">
           <h2 class="rail-title">Кластеры памяти <button class="rail-add" id="grp-add" title="Создать кластер">+</button></h2>
           <div id="groups" class="groups"><!-- group chips --></div>
