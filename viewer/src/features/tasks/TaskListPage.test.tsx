@@ -61,7 +61,11 @@ async function seedBoard(client: QueryClient, gateway: Gateway): Promise<void> {
 
 describe("TaskListPage (mock adapter)", () => {
   it("renders the grouped table: mini-stats, project groups, links to detail", async () => {
-    const html = await renderTasks(new MockAdapter({ latency: false }), "/tasks", seedBoard);
+    const html = await renderTasks(
+      new MockAdapter({ latency: false }),
+      "/tasks",
+      seedBoard,
+    );
     // Title + per-column mini-stats (whole-board counts from the wire).
     expect(html).toContain("Tasks");
     expect(html).toContain("Status counts across the whole board");
@@ -74,9 +78,9 @@ describe("TaskListPage (mock adapter)", () => {
     // Group toggles are disclosed via aria-expanded.
     expect(html).toContain('aria-expanded="true"');
     // Ф3: the create button and the per-row action menu render. SSR emits
-    // BOTH layouts (desktop table + mobile card-rows): 12 tasks × 2.
+    // BOTH layouts (desktop table + mobile card-rows): 15 tasks × 2.
     expect(html).toContain("Actions for task TB-1");
-    expect(html.match(/Actions for task /g)?.length).toBe(24);
+    expect(html.match(/Actions for task /g)?.length).toBe(30);
   });
 
   it("keeps the list state in the URL: ?status=blocked narrows to blocked rows", async () => {
@@ -153,7 +157,10 @@ describe("TaskListPage (mock adapter)", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const query = client
       .getQueryCache()
-      .build(client, { queryKey: keys.tasks.board(), queryFn: () => Promise.resolve(null) });
+      .build(client, {
+        queryKey: keys.tasks.board(),
+        queryFn: () => Promise.resolve(null),
+      });
     query.setState({
       status: "error",
       fetchStatus: "idle",

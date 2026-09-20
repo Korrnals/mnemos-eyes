@@ -53,6 +53,17 @@ const DEFAULT_RECALL_LIMIT = 5;
 /** BE-12 content window: tasks older than this are 423-locked without force. */
 const LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** WF-1 wire mirror: column → workflow status (store.COLUMN_STATUS_MAP). */
+const MOCK_COLUMN_STATUS_MAP: Readonly<Record<string, string>> = {
+  backlog: "open",
+  validating: "open",
+  open: "open",
+  "in-progress": "in-progress",
+  blocked: "blocked",
+  resolved: "resolved",
+  done: "done",
+};
+
 export interface MockAdapterOptions {
   /**
    * Simulated network latency. Default 80–200 ms (drawn from a seeded PRNG,
@@ -353,11 +364,14 @@ export class MockAdapter implements MemoryGateway {
     };
   }
 
-  async archive(params: ArchiveParams = {}, signal?: AbortSignal): Promise<ArchivePage> {
+  async archive(
+    params: ArchiveParams = {},
+    signal?: AbortSignal,
+  ): Promise<ArchivePage> {
     await this.delay(signal);
     const q = (params.q ?? "").trim().toLowerCase();
     const rows = this.archivedTasks.filter((task) => {
-      if (q && !(`${task.title} ${task.summary}`.toLowerCase().includes(q))) return false;
+      if (q && !`${task.title} ${task.summary}`.toLowerCase().includes(q)) return false;
       if (params.status && task.status !== params.status) return false;
       if (params.col && task.col !== params.col) return false;
       if (params.agent && !task.agents.includes(params.agent)) return false;
@@ -404,9 +418,10 @@ export class MockAdapter implements MemoryGateway {
         url: "mock:/api/tasks",
       });
     }
+    const col = payload.col || "open";
     const task: BoardTask = {
       id: `MB-${this.nextTaskNo++}`,
-      col: payload.col || "open",
+      col,
       position: 0,
       title,
       summary: payload.summary ?? "",
@@ -420,9 +435,11 @@ export class MockAdapter implements MemoryGateway {
       created_at: this.stamp(),
       updated_at: this.stamp(),
       archived: 0,
-      status: payload.status ?? payload.col ?? "open",
+      status: payload.status ?? MOCK_COLUMN_STATUS_MAP[col] ?? col,
       priority: payload.priority || "normal",
       archived_from: "",
+      // WF-1: a task born in the validation lane starts its clock now.
+      validating_since: col === "validating" ? this.stamp() : "",
     };
     this.tasks.push(task);
     return { ...task };
@@ -443,9 +460,13 @@ export class MockAdapter implements MemoryGateway {
     );
     const ageMs = this.now() - Date.parse(task.updated_at);
     if (touchesContent && patch.force !== true && ageMs > LOCK_WINDOW_MS) {
-      throw new ApiError(423, `task '${taskId}' is older than 24h — edit with force=true`, {
-        url: `mock:/api/tasks/${taskId}`,
-      });
+      throw new ApiError(
+        423,
+        `task '${taskId}' is older than 24h — edit with force=true`,
+        {
+          url: `mock:/api/tasks/${taskId}`,
+        },
+      );
     }
     const next: BoardTask = {
       ...task,
@@ -477,12 +498,27 @@ export class MockAdapter implements MemoryGateway {
   ): Promise<BoardTask> {
     await this.delay(signal);
     const task = findMutableTask(taskId, this.tasks, this.archivedTasks);
+    // WF-1 v1 transition mirror (store.move_task): blocked → done/resolved
+    // is rejected — the block lifts through in-progress first.
+    if (task.col === "blocked" && (col === "done" || col === "resolved")) {
+      throw new ApiError(
+        422,
+        `недопустимый переход: ${task.col} → ${col} — сначала in-progress (приёмка идёт через resolved)`,
+        { url: `mock:/api/tasks/${taskId}/move` },
+      );
+    }
+    // WF-1 clock: entering validating stamps it, leaving clears it, a
+    // same-column reorder (position-only) keeps it untouched.
+    const enteringValidating = col === "validating" && task.col !== "validating";
+    const leavingValidating = col !== "validating" && task.col === "validating";
     const next: BoardTask = {
       ...task,
       col,
       ...(position !== undefined ? { position } : {}),
-      status: col, // server syncs status with the column on move (BE-10)
+      status: MOCK_COLUMN_STATUS_MAP[col] ?? col, // COLUMN_STATUS_MAP mirror
       updated_at: this.stamp(),
+      ...(enteringValidating ? { validating_since: this.stamp() } : {}),
+      ...(leavingValidating ? { validating_since: "" } : {}),
     };
     replaceInPlace(this.tasks, next);
     return { ...next };
@@ -728,7 +764,14 @@ function countByColumn(tasks: readonly BoardTask[]): Record<string, number> {
 function groupArchiveProjects(rows: readonly BoardTask[]): ArchivePage["projects"] {
   const projects: Record<
     string,
-    { id: string; title: string; col: string; agents: string[]; env: string; updated_at: string }[]
+    {
+      id: string;
+      title: string;
+      col: string;
+      agents: string[];
+      env: string;
+      updated_at: string;
+    }[]
   > = {};
   for (const task of rows) {
     const key = task.project || "";

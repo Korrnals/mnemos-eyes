@@ -245,7 +245,7 @@ describe("task mutations on the mock adapter", () => {
     expect(boardCounts(queryClient).open).toBe(4);
     expect(toasts.at(-1)?.title).toBe(`Task ${createdId} created`);
     expect(toasts.at(-1)?.action?.to).toBe(`/tasks/${createdId}`);
-    expect(before).toBe(12);
+    expect(before).toBe(15); // 15 WF-1 fixture rows
   });
 
   it("adopt: creates the native task, invalidates the inbox; 409 double-adopt links the existing task", async () => {

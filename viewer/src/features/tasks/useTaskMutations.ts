@@ -12,7 +12,7 @@ import { keys } from "@/lib/queryKeys";
 import { useToast } from "@/components/Toast/toastContext";
 import type { ToastApi } from "@/components/Toast/toastContext";
 import { useUiToken } from "@/features/ui-token/UiTokenContext";
-import { statusLabelKey } from "./taskStatus";
+import { columnLabelKey } from "./taskStatus";
 import { applyTaskEventToCache } from "./taskEvents";
 import type { TranslationKey } from "@/i18n";
 import { useT, type TranslateFn } from "@/i18n";
@@ -138,7 +138,7 @@ export function createTaskMutations(deps: TaskMutationDeps) {
     });
   };
 
-  /** Column move via the row action (NOT kanban DnD — WF-1 precondition). */
+  /** Column move via the row action (the keyboard path — WF-1 precondition). */
   const moveTask = (task: BoardTask, col: string): void => {
     run({ errorTitleKey: "tasks.mutation.moveFailed" }, async () => {
       const updated = await mutations().moveTask(task.id, col);
@@ -146,9 +146,58 @@ export function createTaskMutations(deps: TaskMutationDeps) {
       toast.push({
         kind: "ok",
         title: t("tasks.mutation.moved", { id: updated.id }),
-        detail: t("tasks.mutation.movedDetail", { col: t(statusLabelKey(col)) }),
+        detail: t("tasks.mutation.movedDetail", { col: t(columnLabelKey(col)) }),
       });
     });
+  };
+
+  /**
+   * Kanban DnD move (Ф3): optimistic first, reconciled after. The drop is
+   * applied to the cache IMMEDIATELY through the same SSE mapping
+   * (`task.moved` with the projected row), the wire call follows; the server
+   * answer re-applies the authoritative row and the later real SSE event is
+   * idempotent on top. Any failure — 422 invalid transition (WF-1 mirror:
+   * blocked → done/resolved), network, 409 — rolls the card back to its
+   * original row BEFORE the toast: the board never lies about state it could
+   * not change. 422 gets its own actionable copy («сначала в работу»); other
+   * errors keep the standard move-failed toast.
+   */
+  const moveTaskOptimistic = (task: BoardTask, col: string, position: number): void => {
+    run(
+      {
+        errorTitleKey: "tasks.mutation.moveFailed",
+        onError: (error) => {
+          if (error.status === 422) {
+            toast.push({
+              kind: "error",
+              title: t("tasks.mutation.moveInvalidTitle"),
+              detail: error.message
+                ? `${error.message} · ${t("tasks.mutation.moveRevertedDetail")}`
+                : t("tasks.mutation.moveRevertedDetail"),
+            });
+            return true;
+          }
+          return false;
+        },
+      },
+      async () => {
+        apply({ kind: "task.moved", task: { ...task, col, position } });
+        try {
+          const updated = await mutations().moveTask(task.id, col, position);
+          apply({ kind: "task.moved", task: updated });
+          toast.push({
+            kind: "ok",
+            title: t("tasks.mutation.moved", { id: updated.id }),
+            detail: t("tasks.mutation.movedDetail", { col: t(columnLabelKey(col)) }),
+          });
+        } catch (error) {
+          // Roll the projection back to the pre-drag row, then let the
+          // wrapper classify (422 branch above / standard toast).
+          apply({ kind: "task.moved", task });
+          throw error;
+        }
+      },
+    );
   };
 
   /** Archive (confirm is the page's business — native confirm there). */
@@ -277,6 +326,7 @@ export function createTaskMutations(deps: TaskMutationDeps) {
     patchTask,
     resumeTask,
     moveTask,
+    moveTaskOptimistic,
     archiveTask,
     unarchiveTask,
     createTask,

@@ -32,22 +32,27 @@ function mustEvent(payload: unknown): BoardEvent {
 
 /** True when a query under the given key prefix is marked invalidated. */
 function isKeyInvalidated(client: QueryClient, prefix: readonly unknown[]): boolean {
-  return client.getQueryCache().getAll().some((query) => {
-    const key = query.queryKey as readonly unknown[];
-    return (
-      key.length >= prefix.length &&
-      JSON.stringify(key.slice(0, prefix.length)) === JSON.stringify(prefix) &&
-      query.state.isInvalidated
-    );
-  });
+  return client
+    .getQueryCache()
+    .getAll()
+    .some((query) => {
+      const key = query.queryKey as readonly unknown[];
+      return (
+        key.length >= prefix.length &&
+        JSON.stringify(key.slice(0, prefix.length)) === JSON.stringify(prefix) &&
+        query.state.isInvalidated
+      );
+    });
 }
 
 function boardOf(client: QueryClient): BoardSummary {
-  return client.getQueryData<BoardSummary>(keys.tasks.board()) ?? {
-    columns: [],
-    tasks: [],
-    counts: {},
-  };
+  return (
+    client.getQueryData<BoardSummary>(keys.tasks.board()) ?? {
+      columns: [],
+      tasks: [],
+      counts: {},
+    }
+  );
 }
 
 const CREATED_TASK = {
@@ -74,7 +79,10 @@ describe("task.created / updated / moved — surgical board patch", () => {
     const client = seededClient();
     const before = boardOf(client);
 
-    applyTaskEventToCache(client, mustEvent({ kind: "task.created", task: CREATED_TASK }));
+    applyTaskEventToCache(
+      client,
+      mustEvent({ kind: "task.created", task: CREATED_TASK }),
+    );
 
     const after = boardOf(client);
     expect(after.tasks.map((t) => t.id)).toContain("T-NEW");
@@ -86,7 +94,10 @@ describe("task.created / updated / moved — surgical board patch", () => {
     const client = seededClient();
     const before = boardOf(client);
 
-    const updated = { ...before.tasks.find((t) => t.id === "TB-3")!, title: "Переименована" };
+    const updated = {
+      ...before.tasks.find((t) => t.id === "TB-3")!,
+      title: "Переименована",
+    };
     applyTaskEventToCache(client, mustEvent({ kind: "task.updated", task: updated }));
 
     const after = boardOf(client);
@@ -97,7 +108,10 @@ describe("task.created / updated / moved — surgical board patch", () => {
 
   it("task.moved replaces the row and recounts both columns", () => {
     const client = seededClient();
-    const moved = { ...boardOf(client).tasks.find((t) => t.id === "TB-3")!, col: "blocked" };
+    const moved = {
+      ...boardOf(client).tasks.find((t) => t.id === "TB-3")!,
+      col: "blocked",
+    };
     applyTaskEventToCache(client, mustEvent({ kind: "task.moved", task: moved }));
 
     const after = boardOf(client);
@@ -131,7 +145,10 @@ describe("task.deleted / task.archived — removal paths", () => {
       projects: {},
     });
 
-    applyTaskEventToCache(client, mustEvent({ kind: "task.archived", task_id: "TB-4" }));
+    applyTaskEventToCache(
+      client,
+      mustEvent({ kind: "task.archived", task_id: "TB-4" }),
+    );
 
     expect(boardOf(client).tasks.find((t) => t.id === "TB-4")).toBeUndefined();
     expect(isKeyInvalidated(client, ["tasks", "archive"])).toBe(true);
@@ -149,7 +166,10 @@ describe("task.deleted / task.archived — removal paths", () => {
       projects: {},
     });
 
-    applyTaskEventToCache(client, mustEvent({ kind: "task.unarchived", task_id: "RB-1" }));
+    applyTaskEventToCache(
+      client,
+      mustEvent({ kind: "task.unarchived", task_id: "RB-1" }),
+    );
 
     // The honest exception: the payload carries only task_id, so the row
     // cannot be patched — the keys go stale instead of rows being invented.
@@ -271,9 +291,14 @@ describe("dictionary discipline (additive-only, ui-contract §11)", () => {
 
   it("silently skips an unknown future kind (additive-only dictionary)", () => {
     const client = seededClient();
-    const parsed = parseBoardEvent(JSON.stringify({ kind: "unknown-future-kind", x: 1 }));
-    if (parsed.status !== "ignored") throw new Error("expected the frame to be ignored");
+    const parsed = parseBoardEvent(
+      JSON.stringify({ kind: "unknown-future-kind", x: 1 }),
+    );
+    if (parsed.status !== "ignored")
+      throw new Error("expected the frame to be ignored");
     expect(parsed.reason).toBe("unknown-kind");
-    expect(JSON.stringify(boardOf(client))).toBe(JSON.stringify(boardOf(seededClient())));
+    expect(JSON.stringify(boardOf(client))).toBe(
+      JSON.stringify(boardOf(seededClient())),
+    );
   });
 });

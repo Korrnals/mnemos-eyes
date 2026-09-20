@@ -46,14 +46,21 @@ const TracesPage = lazy(() =>
 const TaskListPage = lazy(() =>
   import("@/features/tasks/TaskListPage").then((m) => ({ default: m.TaskListPage })),
 );
+const TasksIndex = lazy(() =>
+  import("@/features/tasks/TaskBoardPage").then((m) => ({ default: m.TasksIndex })),
+);
 const TaskDetailPage = lazy(() =>
-  import("@/features/tasks/TaskDetailPage").then((m) => ({ default: m.TaskDetailPage })),
+  import("@/features/tasks/TaskDetailPage").then((m) => ({
+    default: m.TaskDetailPage,
+  })),
 );
 const TaskInboxPage = lazy(() =>
   import("@/features/tasks/TaskInboxPage").then((m) => ({ default: m.TaskInboxPage })),
 );
 const TaskArchivePage = lazy(() =>
-  import("@/features/tasks/TaskArchivePage").then((m) => ({ default: m.TaskArchivePage })),
+  import("@/features/tasks/TaskArchivePage").then((m) => ({
+    default: m.TaskArchivePage,
+  })),
 );
 const TasksLayout = lazy(() =>
   import("@/features/tasks/TasksLayout").then((m) => ({ default: m.TasksLayout })),
@@ -128,10 +135,11 @@ export function buildRoutes(): RouteObject[] {
           ),
         },
 
-        // Задачи domain (Ф2, ADR 0011): READ-ONLY reading surfaces — the
-        // list, the task page (tabs), the inbox mirror and the archive.
-        // The layout route owns the domain SSE bridge (taskEvents.ts).
-        // /tasks/board (kanban) is a Ф3 deliverable and stays unregistered.
+        // Задачи domain (Ф2–Ф3, ADR 0011): the KANBAN is view №1 at the
+        // domain root (CV-4 — the index honours the persisted view choice,
+        // see TasksIndex), the dense list lives at /tasks/list, then the
+        // task page (tabs), the inbox mirror and the archive. The layout
+        // route owns the domain SSE bridge (taskEvents.ts).
         {
           path: "/tasks",
           element: (
@@ -140,7 +148,8 @@ export function buildRoutes(): RouteObject[] {
             </Page>
           ),
           children: [
-            { index: true, element: <TaskListPage /> },
+            { index: true, element: <TasksIndex /> },
+            { path: "list", element: <TaskListPage /> },
             { path: "inbox", element: <TaskInboxPage /> },
             { path: "archive", element: <TaskArchivePage /> },
             // Static siblings rank above :id (react-router ranking).

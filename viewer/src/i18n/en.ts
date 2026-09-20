@@ -27,6 +27,7 @@ export const en: Record<TranslationKey, string> = {
   // Task-domain sections (Ф2).
   "nav.task": "Task",
   "nav.taskList": "List",
+  "nav.taskBoard": "Kanban",
   "nav.taskInbox": "Inbox",
   "nav.taskArchive": "Archive",
   "nav.status": "Status",
@@ -405,8 +406,7 @@ export const en: Record<TranslationKey, string> = {
   "tasks.inboxRefreshed": "scan: {{time}}",
   "tasks.inboxShowAdopted": "show adopted",
   "tasks.inboxEmpty": "Stores scanned — no new task:queue records",
-  "tasks.inboxEmptyHint":
-    "New records appear after a store scan (the “Scan” button).",
+  "tasks.inboxEmptyHint": "New records appear after a store scan (the “Scan” button).",
   "tasks.inboxLabel": "task:queue records",
   "tasks.inboxStaleNote": "Disappeared from the source (cannot be adopted):",
   "tasks.inboxStaleLabel": "Disappeared records",
@@ -437,6 +437,30 @@ export const en: Record<TranslationKey, string> = {
   "tasks.status.done": "done",
   "tasks.status.withdrawn": "withdrawn",
   "tasks.status.unknown": "unknown",
+
+  // --- tasks: WF-1 kanban column titles (7 lanes; mirror server COLUMN_RU) ---------
+  "tasks.column.backlog": "backlog",
+  "tasks.column.validating": "validating",
+  "tasks.column.open": "open",
+  "tasks.column.in-progress": "in progress",
+  "tasks.column.blocked": "blocked",
+  "tasks.column.resolved": "resolved",
+  "tasks.column.done": "done",
+
+  // --- tasks: kanban board (Ф3, CV-4 — ARCHCOM-3 verdict §3) ------------------------
+  "tasks.view.toggleLabel": "Task view",
+  "tasks.view.kanban": "Kanban",
+  "tasks.view.list": "List",
+  "tasks.board.label": "Task kanban board",
+  "tasks.board.columnLabel": "Column “{{col}}”",
+  "tasks.board.emptyColumn": "Empty",
+  "tasks.board.noMatchColumn": "Nothing matches the filters",
+  "tasks.board.archcomBadge": "archcom",
+  "tasks.board.archcomTitle": "owner decision required",
+  "tasks.board.validatingFor": "validating {{hours}}h {{minutes}}m",
+  "tasks.board.validatingOverdueTitle":
+    "validating for over 24 hours — an owner decision is required",
+  "tasks.board.dragDisabled": "sign in to manage",
   "tasks.priority.critical": "critical",
   "tasks.priority.high": "high",
   "tasks.priority.normal": "normal",
@@ -472,7 +496,8 @@ export const en: Record<TranslationKey, string> = {
   "tasks.create.description":
     "The first line becomes the title, the rest the summary. The task is created on the board in the “open” column right away.",
   "tasks.create.textLabel": "Raw text",
-  "tasks.create.textPlaceholder": "Task title on the first line…\nThen the summary and context.",
+  "tasks.create.textPlaceholder":
+    "Task title on the first line…\nThen the summary and context.",
   "tasks.create.textHint": "first line → title (1–200), the rest → summary",
   "tasks.create.textError":
     "The first line is required and must stay under 200 characters — it becomes the title.",
@@ -486,7 +511,8 @@ export const en: Record<TranslationKey, string> = {
   "tasks.menu.edit": "Edit",
   "tasks.menu.move": "Move to…",
   "tasks.menu.archive": "Archive",
-  "tasks.menu.archiveConfirm": "Archive {{id}}? It can be restored from the archive later.",
+  "tasks.menu.archiveConfirm":
+    "Archive {{id}}? It can be restored from the archive later.",
   "tasks.menu.back": "Back",
 
   // --- tasks: mutation toasts (Ф3) ---------------------------------------------------
@@ -498,6 +524,8 @@ export const en: Record<TranslationKey, string> = {
   "tasks.mutation.resumed": "{{id}}: resumed",
   "tasks.mutation.resumedDetail": "status in-progress · column unchanged",
   "tasks.mutation.moveFailed": "Could not move the task",
+  "tasks.mutation.moveInvalidTitle": "invalid transition: move to in-progress first",
+  "tasks.mutation.moveRevertedDetail": "the card is back where it was",
   "tasks.mutation.moved": "{{id}}: moved",
   "tasks.mutation.movedDetail": "column: {{col}}",
   "tasks.mutation.archiveFailed": "Could not archive the task",

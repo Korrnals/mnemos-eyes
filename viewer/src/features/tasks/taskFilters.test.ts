@@ -17,7 +17,9 @@ import {
 describe("parseTaskListParams", () => {
   it("reads all five filters from the URL", () => {
     const state = parseTaskListParams(
-      new URLSearchParams("status=blocked&priority=critical&project=mnemos&agent=zcode&q=fts"),
+      new URLSearchParams(
+        "status=blocked&priority=critical&project=mnemos&agent=zcode&q=fts",
+      ),
     );
     expect(state).toEqual({
       status: "blocked",
@@ -67,19 +69,31 @@ describe("filterTasks (client-side over the board projection)", () => {
     expect(filterTasks(MOCK_TASKS, { priority: "critical" }).map((t) => t.id)).toEqual([
       "TB-1",
       "TB-5",
+      "TB-14",
     ]);
-    expect(filterTasks(MOCK_TASKS, { project: "vesmaro" }).every((t) => t.project === "vesmaro")).toBe(true);
-    expect(filterTasks(MOCK_TASKS, { agent: "claude" }).map((t) => t.id)).toEqual(["T6"]);
+    expect(
+      filterTasks(MOCK_TASKS, { project: "vesmaro" }).every(
+        (t) => t.project === "vesmaro",
+      ),
+    ).toBe(true);
+    expect(filterTasks(MOCK_TASKS, { agent: "claude" }).map((t) => t.id)).toEqual([
+      "T6",
+    ]);
     expect(filterTasks(MOCK_TASKS, { q: "httadapter-never" })).toEqual([]);
     // q is a substring match over id/title/summary — "tb-1" legitimately
     // also hits TB-10/TB-11, but an exact-ish unique token stays unique.
     expect(filterTasks(MOCK_TASKS, { q: "rb-2" }).map((t) => t.id)).toEqual(["RB-2"]);
     // … and title (case-insensitive).
-    expect(filterTasks(MOCK_TASKS, { q: "DENSITÉ" }).map((t) => t.id)).toEqual(["TB-11"]);
+    expect(filterTasks(MOCK_TASKS, { q: "DENSITÉ" }).map((t) => t.id)).toEqual([
+      "TB-11",
+    ]);
   });
 
   it("combines filters with AND semantics", () => {
-    const rows = filterTasks(MOCK_TASKS, { project: "mnemos-eyes", priority: "critical" });
+    const rows = filterTasks(MOCK_TASKS, {
+      project: "mnemos-eyes",
+      priority: "critical",
+    });
     expect(rows.map((t) => t.id)).toEqual(["TB-1", "TB-5"]);
   });
 

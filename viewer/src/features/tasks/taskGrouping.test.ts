@@ -58,9 +58,19 @@ describe("sortGroupTasks (priority → position → id)", () => {
     const weights = priorities.map(weight);
     expect([...weights].sort((a, b) => b - a)).toEqual(weights);
 
-    // Within one priority bucket the board position wins (open bucket):
+    // Within one priority bucket the board position wins. The workflow-open
+    // bucket now also holds the WF-1 lanes (backlog/validating read open):
+    // critical TB-14, high TB-13, normals by position (TB-12/TB-3 tie at 0 —
+    // the id breaks it), then the low TB-4.
     const open = sorted.filter((t) => t.status === "open");
-    expect(open.map((t) => t.id)).toEqual(["TB-3", "TB-10", "TB-4"]);
+    expect(open.map((t) => t.id)).toEqual([
+      "TB-14",
+      "TB-13",
+      "TB-12",
+      "TB-3",
+      "TB-10",
+      "TB-4",
+    ]);
   });
 });
 
