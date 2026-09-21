@@ -123,8 +123,9 @@ function VersionLabel() {
   return (
     <span
       title={t("nav.versionAria", { version })}
-      className="ml-auto font-mono text-[10px] text-foreground-muted/70"
+      className="ml-1 shrink-0 font-mono text-[10px] text-foreground-muted/70"
     >
+      {" · "}
       {version}
     </span>
   );
