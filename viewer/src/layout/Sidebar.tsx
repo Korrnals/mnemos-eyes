@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { useTaskInbox } from "@/features/tasks/useTasks";
 import { useSessionControl } from "@/features/ui-token/useSessionControl";
+import { useBoardHealth } from "@/hooks/usePulse";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
 import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
@@ -89,7 +90,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         {/* Session-aware mode line (fix/login-feedback): the old static
          * «L1 · только чтение» kept claiming read-only AFTER a login. The
          * line now states the live contract — read-only without a ui token,
-         * active session with one — flipping reactively with the gate. */}
+         * active session with one — flipping reactively with the gate.
+         * Owner feedback: the live server version rides the same footer
+         * line («какая версия перед глазами») — hidden when the gateway
+         * does not expose it (mock/legacy). One cached boardHealth read,
+         * no new polling. */}
         <p
           className={cn(
             "hidden px-2 py-2 text-xs text-foreground-muted",
@@ -97,9 +102,31 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           )}
         >
           {t(sessionControl ? "nav.modeActive" : "nav.modeReadOnly")}
+          <VersionLabel />
         </p>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Live server version (owner feedback): rides the mode line — «сессия
+ * активна · 1.12.1». One cached boardHealth read (the Overview shares the
+ * same key — no extra traffic); hidden while loading, on error, or when
+ * the gateway serves no version (mock/legacy board).
+ */
+function VersionLabel() {
+  const t = useT();
+  const health = useBoardHealth();
+  const version = health.data?.app_version;
+  if (!version) return null;
+  return (
+    <span
+      title={t("nav.versionAria", { version })}
+      className="ml-auto font-mono text-[10px] text-foreground-muted/70"
+    >
+      {version}
+    </span>
   );
 }
 
