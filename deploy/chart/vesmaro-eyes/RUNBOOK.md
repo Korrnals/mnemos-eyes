@@ -352,3 +352,47 @@ kubectl -n kube-agents rollout status deployment/vesmaro-eyes --timeout=300s
   деплоем — НЕ часть этого переключения;
 - до этого шага `/board` остаётся постоянным fallback'ом: он не мешает
   новому app и не требует обслуживания.
+
+## 10. Подключение устройства (QR-пейринг, ADR 0012 — серверная часть с 1.12.0)
+
+Протокол: LAN-direct, два действия владельца (создать + подтвердить),
+TTL 3 мин, code однократный, exchange привязан к IP первого предъявления.
+Полный контракт — `docs/decisions/0012-qr-pairing-device-tokens.md`.
+
+Операционные предусловия и заметки (из ревью 1.12.0):
+
+1. **Proxy-headers — ЗАКРЫТО в 1.12.1** (обнаружено live-smoke'ом 1.12.0:
+   `source_ip` писал IP ingress-пода 10.42.x.x). Фикс: uvicorn запускается
+   с `--proxy-headers` (Containerfile), `FORWARDED_ALLOW_IPS="*"` через
+   values `extraEnv`. `"*"` безопасен: NetPol чарта пускает ingress только
+   из namespace traefik (LAN-окно диагностики выключено) — спуфинг
+   X-Forwarded-For требует кластерного доступа к поду напрямую.
+   ВТОРОЙ шаг той же проблемы (тоже 2026-09-21): k3s-traefik Service
+   (`kube-system/traefik`) имел `externalTrafficPolicy: Cluster` →
+   NodePort-SNAT, XFF нёс 10.42.0.1 для всех. Патч `kubectl patch svc
+   traefik -n kube-system -p '{"spec":{"externalTrafficPolicy":"Local"}}'
+   — безопасен (кластер односрочный: 1 нода, 1 реплика traefik, VIP на
+   той же ноде), контроль: source_ip pairing'а = реальный LAN-адрес
+   (192.168.1.x), /api/health и / = 200. ВНИМАНИЕ: патч ВНЕ helm-чарта
+   vesmaro-eyes — после апгрейда traefik/k3s ПРОВЕРИТЬ и пере-применить
+   (прецедент: agentsnode-policies, §6.2). IPv6 privacy-адреса (ротация
+   адресов устройства ломает binding) — заметка для клиентской волны.
+2. **Бюджет exchange 5/10 мин против поллинга.** Каждый exchange (в т.ч.
+   повторный 202-poll в `scanned`) расходует per-pairing бюджет; TTL
+   пейринга — 3 мин. Клиент устройства: ждать подтверждения без поллинга
+   или ≤3 поллов с интервалом ≥60 с. Это контракт клиентской/UI-волны.
+3. **Префиксы токенов зарезервированы**: `mnd_` (device), `mnu_`/`mnm_`
+   (ui/machine — будущее). Оператору НЕ выставлять человеческие токены
+   (`VESMARO_UI_TOKEN`/`VESMARO_BOARD_TOKEN`), начинающиеся с этих
+   префиксов, — middleware классифицирует bearer по префиксу.
+4. **Device-токены**: только чтение (v0: `GET /api/tasks*`,
+   `GET /api/memories*`, `GET /api/events`, `GET /api/health`); мутации →
+   403. Лимит ≤5 активных; 6-е подключение → 409 — освободите слот
+   ревоком (`DELETE /api/devices/{id}`), авто-ревока НЕТ. Хранение
+   hash-only; ревок необратим (новый пейринг). Sliding 30 д / hard 90 д.
+5. **Fail-closed**: без настроенного ui-token весь `/api/pairing*` → 503.
+6. lab-CA (offline CA-ключ на машине владельца) — ОБЯЗАТЕЛЬНОЕ предусловие
+   клиентского пейринга/PWA (self-signed + QR эксплуатирует привычку
+   принимать warning); HSTS — вместе с CA-rollout, не раньше. Ритуал
+   установки CA на устройство со сверкой SHA-256 fingerprint — здесь же,
+   когда дойдёт до клиентской волны.

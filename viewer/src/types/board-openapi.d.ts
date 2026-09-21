@@ -1503,6 +1503,162 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/pairing": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Create Pairing
+         * @description Start a pairing (ui-token; ADR 0012 §2.1). 201 returns the code
+         *     (128-bit urlsafe, single-use, TTL 3 min) and the 4 verify digits —
+         *     the code appears in exactly one response body, this one. Rate 3 per
+         *     10 min per client (§3.4). Fail-closed 503 while the ui token is not
+         *     configured (no pairing on a tokenless board).
+         */
+        readonly post: operations["create_pairing_api_pairing_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/pairing/exchange": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Exchange Pairing
+         * @description The device leg (NO auth — the single-use code IS the credential;
+         *     ADR 0012 §2.3/§2.5). Poll semantics:
+         *
+         *     - created → scanned: binds the client IP (§3.1, first exchange only)
+         *       and the self-asserted device_name, emits SSE pairing.requested,
+         *       answers 202 {status: awaiting_confirmation, verify};
+         *     - scanned (repeat): 202 identically, NO duplicate SSE (§4);
+         *     - confirmed (first): 200 {device_id, device_token (mnd_…), scope,
+         *       expires_at} — issuance is one-shot (store CAS); the code is spent,
+         *       every later exchange gets 410;
+         *     - unknown code → 404; TTL-passed/expired/issued/revoked → 410;
+         *     - a different client IP → 403 + a security notification (§3.1).
+         *
+         *     Rate: 5 per 10 min keyed on pairing_id AFTER a successful code lookup
+         *     (§3.4 — garbage codes must not grow the limiter's key space), plus a
+         *     global per-IP budget on this endpoint.
+         */
+        readonly post: operations["exchange_pairing_api_pairing_exchange_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/pairing/{pairing_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Get Pairing
+         * @description Pairing status for the trusted side (ui-token) — the ONLY source of
+         *     the verify digits besides the device's own exchange response (§3.3:
+         *     /api/events is unauthenticated, so the digits never ride SSE or stored
+         *     notifications).
+         */
+        readonly get: operations["get_pairing_api_pairing__pairing_id__get"];
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Cancel Pairing
+         * @description Owner cancel of a not-yet-issued pairing (ui-token; §10.2): created/
+         *     scanned/confirmed → revoked + SSE pairing.revoked. Already revoked →
+         *     200 idempotent; issued → 409 (the device token EXISTS — revoke the
+         *     device via DELETE /api/devices/{id}); TTL-passed → 410.
+         */
+        readonly delete: operations["cancel_pairing_api_pairing__pairing_id__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/pairing/{pairing_id}/confirm": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /**
+         * Confirm Pairing
+         * @description Owner decision on a scanned pairing (ui-token; ADR 0012 §2.4).
+         *     allow=true → confirmed (SSE pairing.confirmed); allow=false → revoked
+         *     (SSE pairing.revoked). Repeat confirms answer 200 idempotently without
+         *     re-deciding (§4); confirm before any scan → 409; TTL-passed → 410.
+         *     The endpoint never accepts verify digits as input (§3.5, CWE-307).
+         */
+        readonly post: operations["confirm_pairing_api_pairing__pairing_id__confirm_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/devices": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * List Devices
+         * @description Device sessions for the owner panel (ui-token; §10.2). Items carry
+         *     NO token material — token_hash stays in the store (hash-only, §5).
+         */
+        readonly get: operations["list_devices_api_devices_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/devices/{device_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Revoke Device
+         * @description Revoke a device session (ui-token; §5). One step, terminal — only a
+         *     new pairing restores access. SSE pairing.revoked carries the device_id;
+         *     the next request with that token gets 401 (scope middleware).
+         */
+        readonly delete: operations["revoke_device_api_devices__device_id__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/events": {
         readonly parameters: {
             readonly query?: never;
@@ -1819,6 +1975,73 @@ export interface components {
             readonly op: string;
             /** Value */
             readonly value: unknown;
+        };
+        /**
+         * DeviceOut
+         * @description Public device session — token_hash never leaves the store.
+         */
+        readonly DeviceOut: {
+            /** Id */
+            readonly id: string;
+            /** Name */
+            readonly name: string;
+            /** Scope */
+            readonly scope: string;
+            /** State */
+            readonly state: string;
+            /** Created At */
+            readonly created_at: string;
+            /**
+             * Last Seen At
+             * @default
+             */
+            readonly last_seen_at: string;
+            /**
+             * Last Seen
+             * @default
+             */
+            readonly last_seen: string;
+            /**
+             * Expires At
+             * @default
+             */
+            readonly expires_at: string;
+            /**
+             * Hard Expires At
+             * @default
+             */
+            readonly hard_expires_at: string;
+            /**
+             * Ua
+             * @default
+             */
+            readonly ua: string;
+            /**
+             * Ip
+             * @default
+             */
+            readonly ip: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** DeviceRevokedOut */
+        readonly DeviceRevokedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly device: components["schemas"]["DeviceOut"];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** DevicesOut */
+        readonly DevicesOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["DeviceOut"][];
+        } & {
+            readonly [key: string]: unknown;
         };
         /** EventItem */
         readonly EventItem: {
@@ -2568,6 +2791,147 @@ export interface components {
         readonly OkOut: {
             /** Ok */
             readonly ok: boolean;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** PairingConfirmBody */
+        readonly PairingConfirmBody: {
+            /** Allow */
+            readonly allow: boolean;
+        };
+        /** PairingConfirmOut */
+        readonly PairingConfirmOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Pairing Id */
+            readonly pairing_id: string;
+            /** State */
+            readonly state: string;
+            /** Outcome */
+            readonly outcome: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /**
+         * PairingCreateBody
+         * @description Optional owner-side label; the device's self-asserted name at
+         *     exchange is what the owner actually confirms (§3.6). Cap 64 chars —
+         *     rendered as text downstream (stored-XSS prophylaxis).
+         */
+        readonly PairingCreateBody: {
+            /**
+             * Device Name
+             * @default
+             */
+            readonly device_name: string;
+        };
+        /** PairingCreatedOut */
+        readonly PairingCreatedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Pairing Id */
+            readonly pairing_id: string;
+            /** Code */
+            readonly code: string;
+            /** Verify */
+            readonly verify: string;
+            /** Expires At */
+            readonly expires_at: string;
+            /**
+             * State
+             * @default created
+             */
+            readonly state: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** PairingExchangeAwaitingOut */
+        readonly PairingExchangeAwaitingOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Status */
+            readonly status: string;
+            /** Pairing Id */
+            readonly pairing_id: string;
+            /** State */
+            readonly state: string;
+            /** Verify */
+            readonly verify: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** PairingExchangeBody */
+        readonly PairingExchangeBody: {
+            /** Code */
+            readonly code: string;
+            /**
+             * Device Name
+             * @default
+             */
+            readonly device_name: string;
+        };
+        /** PairingIssuedOut */
+        readonly PairingIssuedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Device Id */
+            readonly device_id: string;
+            /** Device Token */
+            readonly device_token: string;
+            /** Scope */
+            readonly scope: string;
+            /** Expires At */
+            readonly expires_at: string;
+            /** Hard Expires At */
+            readonly hard_expires_at: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** PairingStatusOut */
+        readonly PairingStatusOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Pairing Id */
+            readonly pairing_id: string;
+            /** State */
+            readonly state: string;
+            /** Verify */
+            readonly verify: string;
+            /**
+             * Device Name
+             * @default
+             */
+            readonly device_name: string;
+            /**
+             * Source Ip
+             * @default
+             */
+            readonly source_ip: string;
+            /**
+             * Scope
+             * @default read
+             */
+            readonly scope: string;
+            /**
+             * Created At
+             * @default
+             */
+            readonly created_at: string;
+            /**
+             * Scanned At
+             * @default
+             */
+            readonly scanned_at: string;
+            /**
+             * Confirmed At
+             * @default
+             */
+            readonly confirmed_at: string;
+            /**
+             * Expires At
+             * @default
+             */
+            readonly expires_at: string;
         } & {
             readonly [key: string]: unknown;
         };
@@ -5696,6 +6060,229 @@ export interface operations {
                     readonly "application/json": {
                         readonly [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly create_pairing_api_pairing_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["PairingCreateBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["PairingCreatedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly exchange_pairing_api_pairing_exchange_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["PairingExchangeBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["PairingIssuedOut"];
+                };
+            };
+            /** @description Accepted */
+            readonly 202: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["PairingExchangeAwaitingOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly get_pairing_api_pairing__pairing_id__get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly pairing_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["PairingStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly cancel_pairing_api_pairing__pairing_id__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly pairing_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["PairingConfirmOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly confirm_pairing_api_pairing__pairing_id__confirm_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly pairing_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["PairingConfirmBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["PairingConfirmOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly list_devices_api_devices_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["DevicesOut"];
+                };
+            };
+        };
+    };
+    readonly revoke_device_api_devices__device_id__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly device_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["DeviceRevokedOut"];
                 };
             };
             /** @description Validation Error */
