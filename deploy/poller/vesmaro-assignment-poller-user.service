@@ -1,0 +1,33 @@
+# vesmaro-eyes assignment poller — HOST user unit, distrobox variant.
+# Deployed at ~/.config/systemd/user/ (HOST home) when the poller runs
+# inside a distrobox container whose python/env you don't want to mirror
+# onto the host. The unit only supervises; execution stays in the box.
+# Live-verified cutover 2026-09-21 (see deploy/poller/README.md §
+# «Laptop-вариант»): restart-clean, single process, survives reboot with
+# `loginctl enable-linger`.
+#
+# Install (HOST side):
+#   cp vesmaro-assignment-poller-user.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now vesmaro-assignment-poller
+#   loginctl enable-linger "$USER"   # start before desktop login (optional)
+#
+# Tokens stay in ~/.config/mnemos-eyes/poller.env (container-side home,
+# 0600) — sourced by poller-unit-launcher.sh, never named here.
+[Unit]
+Description=vesmaro-eyes assignment poller (dispatches inside a distrobox)
+Documentation=https://vesmaro.abyss.lab/api
+
+[Service]
+Type=simple
+# poller-unit-launcher.sh pins the container-visible HOME and the absolute
+# container python — see its header for the two distrobox-exec traps.
+ExecStart=%h/.local/bin/poller-unit-launcher.sh
+TimeoutStartSec=120
+Restart=always
+RestartSec=10
+# AB-FU-1: audit log + launch artifacts carry assignment specs — keep 0600
+UMask=0077
+
+[Install]
+WantedBy=default.target
