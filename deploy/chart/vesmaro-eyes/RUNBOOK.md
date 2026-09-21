@@ -366,9 +366,17 @@ TTL 3 мин, code однократный, exchange привязан к IP пе�
    с `--proxy-headers` (Containerfile), `FORWARDED_ALLOW_IPS="*"` через
    values `extraEnv`. `"*"` безопасен: NetPol чарта пускает ingress только
    из namespace traefik (LAN-окно диагностики выключено) — спуфинг
-   X-Forwarded-For требует кластерного доступа к поду напрямую. IPv6
-   privacy-адреса (ротация адресов устройства в контуре ломает binding)
-   — заметка остаётся актуальной для клиентской волны.
+   X-Forwarded-For требует кластерного доступа к поду напрямую.
+   ВТОРОЙ шаг той же проблемы (тоже 2026-09-21): k3s-traefik Service
+   (`kube-system/traefik`) имел `externalTrafficPolicy: Cluster` →
+   NodePort-SNAT, XFF нёс 10.42.0.1 для всех. Патч `kubectl patch svc
+   traefik -n kube-system -p '{"spec":{"externalTrafficPolicy":"Local"}}'
+   — безопасен (кластер односрочный: 1 нода, 1 реплика traefik, VIP на
+   той же ноде), контроль: source_ip pairing'а = реальный LAN-адрес
+   (192.168.1.x), /api/health и / = 200. ВНИМАНИЕ: патч ВНЕ helm-чарта
+   vesmaro-eyes — после апгрейда traefik/k3s ПРОВЕРИТЬ и пере-применить
+   (прецедент: agentsnode-policies, §6.2). IPv6 privacy-адреса (ротация
+   адресов устройства ломает binding) — заметка для клиентской волны.
 2. **Бюджет exchange 5/10 мин против поллинга.** Каждый exchange (в т.ч.
    повторный 202-poll в `scanned`) расходует per-pairing бюджет; TTL
    пейринга — 3 мин. Клиент устройства: ждать подтверждения без поллинга
