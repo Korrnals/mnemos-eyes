@@ -4,6 +4,7 @@ import { Play, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
+import { useToast } from "@/components/Toast/toastContext";
 import type { HookRule, ScheduleRule } from "@/gateway/boardTypes";
 import { isAutomationMutationSource, isAutomationSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
@@ -132,14 +133,18 @@ export function AutomationPage() {
         />
       ) : (
         <div className="space-y-1 rounded-md border border-border-subtle bg-well p-3 shadow-well">
+          {/* P2-3: the «manual runs only» stanza is gated on !engine — when
+           * S2 turns the loop on, the banner stops claiming it is off. */}
           {!status.data?.engine ? (
-            <Badge variant="warning" className="mb-1">
-              {t("automation.banner.engineOff")}
-            </Badge>
+            <>
+              <Badge variant="warning" className="mb-1">
+                {t("automation.banner.engineOff")}
+              </Badge>
+              <p className="text-xs text-foreground-secondary">
+                {t("automation.banner.engineOffNote")}
+              </p>
+            </>
           ) : null}
-          <p className="text-xs text-foreground-secondary">
-            {t("automation.banner.engineOffNote")}
-          </p>
           {/* Read-only kill-switch + cap (v1: NO toggle) + honest counters. */}
           <p className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-foreground-muted">
             <span>
@@ -224,13 +229,24 @@ export function AutomationPage() {
         onOpenChange={setScheduleFormOpen}
         taskIds={taskIds}
         specialists={specialists}
-        onCreate={(payload) => mutations.createSchedule(payload)}
+        // P3-6: the form guards REAL in-flight — the factory runs gated, so
+        // the promise resolves on the settled mutation (queued-behind-login
+        // runs resolve on dismiss; errors resolve after their toast).
+        onCreate={(payload) =>
+          new Promise<void>((resolve) => {
+            mutations.createSchedule(payload, { onSettled: resolve });
+          })
+        }
       />
       <HookFormDialog
         open={hookFormOpen}
         onOpenChange={setHookFormOpen}
         meta={meta}
-        onCreate={(payload) => mutations.createHookRule(payload)}
+        onCreate={(payload) =>
+          new Promise<void>((resolve) => {
+            mutations.createHookRule(payload, { onSettled: resolve });
+          })
+        }
       />
     </section>
   );
@@ -298,7 +314,7 @@ function SchedulesTab({
                 {rule.enabled ? t("automation.rule.enabled") : t("automation.rule.disabled")}
               </Badge>
               <span className="font-mono text-xs text-foreground-secondary">
-                {rule.trigger_kind === "daily"
+                {rule.trigger_kind === "time-of-day"
                   ? t("automation.rule.dailyAt", { at: rule.trigger_value })
                   : t("automation.rule.everyInterval", { interval: rule.trigger_value })}
               </span>
@@ -446,8 +462,9 @@ function HooksTab({
 /**
  * Journal: decisions with reasons, honest trigger/origin stamps (S1 rows
  * are all manual/ui — the engine-off world reads clearly), cursor «ещё».
- * The assignment link goes to /agents/execution — the assignment surface
- * that already exists (AGW-3), never a new one.
+ * The assignment link goes to /agents/execution because LaunchOut carries
+ * NO task_id (P3-5) — the assignment surface that already exists (AGW-3)
+ * is the honest destination, never a new one.
  */
 function JournalTab({
   launches,
@@ -457,6 +474,7 @@ function JournalTab({
   lang: "ru" | "en";
 }) {
   const t = useT();
+  const toast = useToast();
   const rows = launches.data?.items ?? [];
   const nextCursor = launches.data?.next_cursor ?? null;
   return (
@@ -528,7 +546,18 @@ function JournalTab({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void launches.loadMore(nextCursor)}
+              onClick={() => {
+                // loadMore throws on a cursor failure — the journal keeps
+                // its loaded pages; the owner gets the server text as a
+                // toast (P3-2). The in-flight guard blocks double clicks.
+                void launches.loadMore(nextCursor).catch((error: unknown) => {
+                  toast.push({
+                    kind: "error",
+                    title: t("automation.journal.moreFailed"),
+                    detail: error instanceof Error ? error.message : undefined,
+                  });
+                });
+              }}
             >
               {t("automation.journal.more")}
             </Button>

@@ -972,7 +972,7 @@ export const MOCK_SCHEDULES: ScheduleRule[] = [
     specialist: "@GCW: Senior Frontend Developer",
     harness: "zcode",
     executor_id: "",
-    trigger_kind: "daily",
+    trigger_kind: "time-of-day",
     trigger_value: "09:00",
     window_from: null,
     window_to: null,
@@ -1084,25 +1084,55 @@ export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
   global_kill_switch: false,
   daily_cap: 50,
   daily_used: 0,
-  // condition_meta mirrors the SERVER shape (store.automation_condition_meta):
-  // fields/ops/values_hint + the hook whitelists — the form is BUILT from it,
-  // never from UI constants.
+  // condition_meta mirrors the SERVER dictionaries VERBATIM
+  // (store.RULE_CONDITION_FIELD_ENUMS / HOOK_EVENT_WHITELIST): fields with
+  // closed enums get values_hint; project/specialist/executor_id are
+  // free-form (null); harness joins through KNOWN_HARNESSES. The form is
+  // BUILT from it, never from UI constants (review SCHED-1-UI P2-1).
   condition_meta: {
-    fields: ["task_col", "task_priority"],
+    fields: [
+      "col",
+      "env",
+      "executor_id",
+      "harness",
+      "priority",
+      "project",
+      "specialist",
+      "state",
+      "status",
+      "transport",
+    ],
     ops: ["eq", "ne"],
     values_hint: {
-      task_col: [
-        "backlog",
-        "validating",
-        "open",
-        "in-progress",
-        "blocked",
-        "resolved",
-        "done",
+      col: ["backlog", "validating", "open", "in-progress", "blocked", "resolved", "done"],
+      env: ["cluster", "laptop", "local", "cloud", "unknown"],
+      executor_id: null,
+      harness: [
+        "zcode",
+        "hermes",
+        "pi",
+        "copilot",
+        "claude-code",
+        "cursor",
+        "aider",
+        "continue",
+        "cline",
+        "windsurf",
       ],
-      task_priority: ["low", "normal", "high", "critical"],
+      priority: ["critical", "high", "normal", "low"],
+      project: null,
+      specialist: null,
+      state: ["queued", "claimed", "running", "done", "failed", "cancelled", "expired"],
+      status: ["blocked", "done", "in-progress", "open", "resolved", "withdrawn"],
+      transport: ["local-poll", "mesh-r4"],
     },
-    events: ["assignment.created", "assignment.failed", "task.created", "task.updated"],
+    events: [
+      "task.moved",
+      "assignment.failed",
+      "assignment.expired",
+      "task.validation-timeout",
+      "executor.offline",
+    ],
     actions: ["create_assignment", "notify"],
     source_origins: ["machine", "server", "ui"],
   },

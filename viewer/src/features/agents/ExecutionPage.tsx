@@ -58,7 +58,11 @@ export function ExecutionPage() {
   const [retryTask, setRetryTask] = useState<BoardTask | null>(null);
   const [retryPrefill, setRetryPrefill] = useState<AssignPrefill | null>(null);
   // j/k cursor over the DISPLAYED rows (collapsed groups hide their rows).
-  const [cursor, setCursor] = useState(0);
+  // Cursor starts at -1: NO row is highlighted until the owner actually
+  // presses j/k — a fresh page does not pretend a selection exists
+  // (AGW-3 review P3-9); the first j lands on row 0, the first k on the
+  // LAST row (the k reader starts from the tail of the list).
+  const [cursor, setCursor] = useState(-1);
   const [streamDown, setStreamDown] = useState(false);
   const [lastDataAt, setLastDataAt] = useState(0);
 
@@ -115,7 +119,12 @@ export function ExecutionPage() {
     executorName,
   ]);
 
-  /** Grouping (§1.1): активные → очередь → терминальные за сегодня. */
+  /**
+   * Grouping (§1.1): активные → очередь → терминальные за сегодня.
+   * «За сегодня» is the DEVICE's local timezone day (AGW-3 review P3-5):
+   * the wire stamps carry no TZ contract, so the honest day boundary is
+   * the owner's own clock — the same boundary formatTaskDate renders by.
+   */
   const { activeRows, queuedRows, terminalRows } = useMemo(() => {
     const today = new Date().toDateString();
     const active: AssignmentItem[] = [];
@@ -166,6 +175,9 @@ export function ExecutionPage() {
       if (displayed.length === 0) return;
       event.preventDefault();
       setCursor((current) => {
+        if (current === -1) {
+          return event.key === "j" ? 0 : displayed.length - 1;
+        }
         const delta = event.key === "j" ? 1 : -1;
         return (current + delta + displayed.length) % displayed.length;
       });

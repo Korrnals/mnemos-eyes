@@ -257,6 +257,34 @@ describe("MockAdapter agents — SCHED-1 automation", () => {
     expect(status.rules.hooks).toEqual({ total: 2, enabled: 1 });
   });
 
+  it("createSchedule 422s an unknown trigger_kind with the allowed list (server mirror)", async () => {
+    const mock = adapter();
+    // The phantom "daily" id the UI once sent — the mock must refuse it
+    // EXACTLY like store.SCHEDULE_TRIGGER_KINDS validation (review P1):
+    // the mock may never hide wire drift again.
+    await rejectsApiError(
+      mock.createSchedule({
+        name: "баг-правило",
+        target_kind: "task",
+        task_id: "TB-10",
+        specialist: "x",
+        harness: "zcode",
+        executor_id: "",
+        trigger_kind: "daily" as never,
+        trigger_value: "10:00",
+        window_from: null,
+        window_to: null,
+        max_runs_per_day: 1,
+        cooldown_s: 3600,
+      }),
+      422,
+    );
+    // Nothing was created behind the refused call.
+    expect(
+      (await mock.listSchedules()).items.some((rule) => rule.name === "баг-правило"),
+    ).toBe(false);
+  });
+
   it("schedule CRUD: unique names 422, patch 404, delete soft-disables", async () => {
     const mock = adapter();
     const created = await mock.createSchedule({
@@ -266,7 +294,7 @@ describe("MockAdapter agents — SCHED-1 automation", () => {
       specialist: "@GCW: Tech Lead",
       harness: "zcode",
       executor_id: "",
-      trigger_kind: "daily",
+      trigger_kind: "time-of-day",
       trigger_value: "10:00",
       window_from: null,
       window_to: null,
@@ -274,6 +302,7 @@ describe("MockAdapter agents — SCHED-1 automation", () => {
       cooldown_s: 3600,
     });
     expect(created.enabled).toBe(false); // creation is disabled (S1 contract)
+    expect(created.trigger_kind).toBe("time-of-day"); // the REAL wire id
 
     await rejectsApiError(
       mock.createSchedule({
@@ -283,7 +312,7 @@ describe("MockAdapter agents — SCHED-1 automation", () => {
         specialist: "x",
         harness: "zcode",
         executor_id: "",
-        trigger_kind: "daily",
+        trigger_kind: "time-of-day",
         trigger_value: "10:00",
         window_from: null,
         window_to: null,
@@ -323,7 +352,7 @@ describe("MockAdapter agents — SCHED-1 automation", () => {
       specialist: "@GCW: Tech Lead",
       harness: "zcode",
       executor_id: "",
-      trigger_kind: "daily",
+      trigger_kind: "time-of-day",
       trigger_value: "11:00",
       window_from: null,
       window_to: null,

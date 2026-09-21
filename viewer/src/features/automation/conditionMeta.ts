@@ -1,4 +1,3 @@
-import type { TranslationKey } from "@/i18n";
 import type { ConditionItem } from "@/gateway/boardTypes";
 
 /**
@@ -6,6 +5,10 @@ import type { ConditionItem } from "@/gateway/boardTypes";
  * CLOSED allowlists (`GET /api/automation/status` → condition_meta) — the
  * editor is a triple of DEPENDENT SELECTS over them. A free-text condition
  * control does not exist in the DOM, by contract and by regression test.
+ * Field ids (col/status/state/env/priority/transport/project/specialist/
+ * executor_id/harness) render VERBATIM — server ids are the UI vocabulary
+ * (review SCHED-1-UI P3-3 removed the phantom-label mapping: no UI-side
+ * renaming layer exists, none is needed).
  */
 export interface ConditionMeta {
   /** Closed field allowlist (sorted server-side). */
@@ -54,20 +57,4 @@ export function parseConditionMeta(raw: unknown): ConditionMeta | null {
 /** Human-readable clause line: «field op value» over the wire triple. */
 export function describeClause(clause: ConditionItem): string {
   return `${clause.field} ${clause.op} ${String(clause.value)}`;
-}
-
-/** Field-label key mapping (fields are server ids; the UI names them). */
-export function conditionFieldLabelKey(field: string): TranslationKey {
-  switch (field) {
-    case "task_col":
-      return "automation.field.taskCol";
-    case "task_priority":
-      return "automation.field.taskPriority";
-    case "task_project":
-      return "automation.field.taskProject";
-    case "task_status":
-      return "automation.field.taskStatus";
-    default:
-      return "automation.field.raw";
-  }
 }

@@ -297,7 +297,7 @@ describe("BoardAdapter agents wire — automation surface (SCHED-1)", () => {
     specialist: "@GCW: Senior Frontend Developer",
     harness: "zcode",
     executor_id: "",
-    trigger_kind: "daily",
+    trigger_kind: "time-of-day",
     trigger_value: "09:00",
     window_from: null,
     window_to: null,

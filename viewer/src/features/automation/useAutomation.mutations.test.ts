@@ -131,7 +131,7 @@ describe("rule CRUD through the gate", () => {
         specialist: "@GCW: Tech Lead",
         harness: "zcode",
         executor_id: "",
-        trigger_kind: "daily",
+        trigger_kind: "time-of-day",
         trigger_value: "10:00",
         window_from: null,
         window_to: null,

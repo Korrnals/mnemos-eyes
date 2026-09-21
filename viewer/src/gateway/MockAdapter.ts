@@ -886,6 +886,16 @@ export class MockAdapter implements MemoryGateway {
     signal?: AbortSignal,
   ): Promise<ScheduleRule> {
     await this.delay(signal);
+    // Server mirror (store.py SCHEDULE_TRIGGER_KINDS validation): unknown
+    // trigger kinds are a 422 with the allowed list — the mock must not
+    // hide wire drift (review SCHED-1-UI P1).
+    if (!SCHEDULE_TRIGGER_KINDS.includes(payload.trigger_kind)) {
+      throw new ApiError(
+        422,
+        `unknown trigger_kind: '${payload.trigger_kind}'; allowed: ${SCHEDULE_TRIGGER_KINDS.slice().sort()}`,
+        { url: "mock:/api/automation/schedules" },
+      );
+    }
     assertUniqueRuleName(payload.name, this.schedules, this.hooks, "mock:/api/automation/schedules");
     const rule: ScheduleRule = {
       ...payload,
@@ -1380,6 +1390,9 @@ function assertUniqueRuleName(
     throw new ApiError(422, `rule name '${name}' is already taken`, { url });
   }
 }
+
+/** Server `SCHEDULE_TRIGGER_KINDS` mirror (store.py — {interval, time-of-day}). */
+const SCHEDULE_TRIGGER_KINDS: readonly string[] = ["interval", "time-of-day"];
 
 /** Honest 404 for unknown automation rule ids. */
 function notFoundRule(ruleId: number, kind: string, url: string): ApiError {

@@ -276,7 +276,7 @@ describe("Assignment groups (layer 2)", () => {
     root.unmount();
   });
 
-  it("j moves the cursor to the next displayed row", async () => {
+  it("j/k: NO highlight before the first keypress; j starts at row 0, k at the last", async () => {
     const rows = [
       assignment({ id: 1, state: "running", claimed_by_executor: "x", claimed_by: "z", heartbeat_at: ago(30), started_at: ago(60) }),
       assignment({ id: 2, state: "queued", task_id: "TB-3" }),
@@ -287,15 +287,37 @@ describe("Assignment groups (layer 2)", () => {
     const cursorRow = (): string | undefined =>
       container.querySelector<HTMLLIElement>('li[class~="border-iris-bright/60"]')
         ?.textContent ?? undefined;
-    expect(cursorRow()).toContain("TB-1"); // cursor starts at the first row
+    // Pre-interaction: the cursor is -1 — NO row is highlighted (a fresh
+    // page does not pretend a selection exists; AGW-3 review P3-9).
+    expect(cursorRow()).toBeUndefined();
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
     });
-    expect(cursorRow()).toContain("TB-3"); // moved to the queued row
+    expect(cursorRow()).toContain("TB-1"); // the first j lands on row 0
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
     });
-    expect(cursorRow()).toContain("TB-1"); // and back
+    expect(cursorRow()).toContain("TB-3"); // k from row 0 wraps to the last
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    });
+    expect(cursorRow()).toContain("TB-1"); // and j wraps back to the first
+    root.unmount();
+  });
+
+  it("the first k from scratch lands on the LAST row", async () => {
+    const rows = [
+      assignment({ id: 1, state: "running", claimed_by_executor: "x", claimed_by: "z", heartbeat_at: ago(30), started_at: ago(60) }),
+      assignment({ id: 2, state: "queued", task_id: "TB-3" }),
+    ];
+    const { root, container } = await mountPage(rows);
+    const cursorRow = (): string | undefined =>
+      container.querySelector<HTMLLIElement>('li[class~="border-iris-bright/60"]')
+        ?.textContent ?? undefined;
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+    });
+    expect(cursorRow()).toContain("TB-3"); // first k = the tail row
     root.unmount();
   });
 

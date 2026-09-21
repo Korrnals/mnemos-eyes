@@ -33,7 +33,7 @@ export function ScheduleFormDialog({
   taskIds: readonly string[];
   /** Specialist candidates (datalist, same union as the assign sheet). */
   specialists: readonly string[];
-  onCreate: (payload: ScheduleCreateInput) => void;
+  onCreate: (payload: ScheduleCreateInput) => Promise<void>;
 }) {
   // Keyed mount posture (EditTaskDialog): the dialog gates on `open`, the
   // inner form seeds once — no reset effects.
@@ -61,22 +61,24 @@ function ScheduleForm({
   taskIds: readonly string[];
   specialists: readonly string[];
   onDone: () => void;
-  onCreate: (payload: ScheduleCreateInput) => void;
+  onCreate: (payload: ScheduleCreateInput) => Promise<void>;
 }) {
   const t = useT();
   const [name, setName] = useState("");
   const [taskId, setTaskId] = useState("");
   const [specialist, setSpecialist] = useState("");
   const [harness, setHarness] = useState<string>("zcode");
-  const [triggerKind, setTriggerKind] = useState<"daily" | "interval">("daily");
+  const [triggerKind, setTriggerKind] = useState<"time-of-day" | "interval">("time-of-day");
   const [dailyAt, setDailyAt] = useState("09:00");
   const [interval, setInterval] = useState<string>("PT12H");
+  // P3-6: the guard tracks the REAL mutation in-flight — a double click
+  // cannot fire a second create; the dialog closes on the wire answer.
   const [submitting, setSubmitting] = useState(false);
 
   const submit = (): void => {
     if (name.trim().length === 0 || taskId.trim().length === 0 || submitting) return;
     setSubmitting(true);
-    onCreate({
+    void onCreate({
       name: name.trim(),
       target_kind: "task",
       task_id: taskId.trim(),
@@ -84,15 +86,15 @@ function ScheduleForm({
       harness,
       executor_id: "",
       trigger_kind: triggerKind,
-      trigger_value: triggerKind === "daily" ? dailyAt : interval,
+      trigger_value: triggerKind === "time-of-day" ? dailyAt : interval,
       window_from: null,
       window_to: null,
       // Owner-rare knobs the server owns: sane v1 defaults.
       max_runs_per_day: 1,
       cooldown_s: 3600,
-    });
-    setSubmitting(false);
-    onDone();
+    })
+      .catch(() => setSubmitting(false)) // the toast owns the error text
+      .then(() => onDone());
   };
 
   return (
@@ -161,14 +163,14 @@ function ScheduleForm({
           <select
             id="schedule-trigger-kind"
             value={triggerKind}
-            onChange={(event) => setTriggerKind(event.target.value as "daily" | "interval")}
+            onChange={(event) => setTriggerKind(event.target.value as "time-of-day" | "interval")}
             className={FIELD_CLASS}
           >
-            <option value="daily">{t("automation.form.triggerDaily")}</option>
+            <option value="time-of-day">{t("automation.form.triggerDaily")}</option>
             <option value="interval">{t("automation.form.triggerInterval")}</option>
           </select>
         </label>
-        {triggerKind === "daily" ? (
+        {triggerKind === "time-of-day" ? (
           <label className="flex flex-col gap-1 text-xs text-foreground-secondary">
             {t("automation.form.triggerAtLabel")}
             <input
@@ -226,7 +228,7 @@ export function HookFormDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   meta: ConditionMeta | null;
-  onCreate: (payload: HookCreateInput) => void;
+  onCreate: (payload: HookCreateInput) => Promise<void>;
 }) {
   if (!open) return null;
   return (
@@ -245,19 +247,20 @@ function HookForm({
 }: {
   meta: ConditionMeta | null;
   onDone: () => void;
-  onCreate: (payload: HookCreateInput) => void;
+  onCreate: (payload: HookCreateInput) => Promise<void>;
 }) {
   const t = useT();
   const [name, setName] = useState("");
   const [on, setOn] = useState(meta?.events[0] ?? "");
   const [action, setAction] = useState(meta?.actions[0] ?? "notify");
   const [clauses, setClauses] = useState<readonly ConditionItem[]>([]);
+  // P3-6: the REAL mutation in-flight guard — double clicks are no-ops.
   const [submitting, setSubmitting] = useState(false);
 
   const submit = (): void => {
     if (name.trim().length === 0 || on.length === 0 || submitting) return;
     setSubmitting(true);
-    onCreate({
+    void onCreate({
       name: name.trim(),
       on,
       condition: [...clauses],
@@ -266,9 +269,9 @@ function HookForm({
       action,
       cooldown_s: 300,
       budget: 4,
-    } as HookCreateInput);
-    setSubmitting(false);
-    onDone();
+    } as HookCreateInput)
+      .catch(() => setSubmitting(false)) // the toast owns the error text
+      .then(() => onDone());
   };
 
   return (

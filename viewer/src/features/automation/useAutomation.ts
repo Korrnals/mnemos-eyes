@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   HookCreateInput,
@@ -109,20 +109,33 @@ export function useLaunches() {
     gcTime: GC_TIMES.automationLaunches,
   });
 
+  /** In-flight guard: a second «More» click while a page loads is a no-op. */
+  const loadingMoreRef = useRef(false);
   /** Load one more cursor page and stitch it into the chained list. */
   const loadMore = useCallback(
     async (cursor: string): Promise<void> => {
-      if (!isAutomationSource(gateway)) return;
-      const next = await gateway.listLaunches({ limit: 50, cursor });
-      const base = queryClient.getQueryData<LaunchesPage>(
-        keys.automation.launches({ limit: 50 }),
-      );
-      if (base) {
-        queryClient.setQueryData(keys.automation.launches({ limit: 50 }), {
-          ...base,
-          items: [...base.items, ...next.items],
-          next_cursor: next.next_cursor,
-        });
+      if (!isAutomationSource(gateway) || loadingMoreRef.current) return;
+      loadingMoreRef.current = true;
+      try {
+        const next = await gateway.listLaunches({ limit: 50, cursor });
+        const base = queryClient.getQueryData<LaunchesPage>(
+          keys.automation.launches({ limit: 50 }),
+        );
+        if (base) {
+          queryClient.setQueryData(keys.automation.launches({ limit: 50 }), {
+            ...base,
+            items: [...base.items, ...next.items],
+            next_cursor: next.next_cursor,
+          });
+        }
+      } catch (error) {
+        // The cursor fetch failed: the loaded pages stay on screen and the
+        // query carries the error — the page renders it as its error state
+        // (server text), the next «More» click retries through the guard.
+        queryClient.setQueryData(keys.automation.launches({ limit: 50 }), (base) => base);
+        throw error;
+      } finally {
+        loadingMoreRef.current = false;
       }
     },
     [gateway, queryClient],
@@ -174,6 +187,9 @@ export function createAutomationMutations(deps: AutomationMutationDeps) {
     void queryClient.invalidateQueries({ queryKey: keys.automation.schedules() });
     void queryClient.invalidateQueries({ queryKey: keys.automation.hooks() });
     void queryClient.invalidateQueries({ queryKey: keys.automation.launches({ limit: 50 }).slice(0, 2) });
+    // The banner's rule counters derive from the same rows (P3-4) — the
+    // status key must follow every rule mutation or the counts drift.
+    void queryClient.invalidateQueries({ queryKey: keys.automation.status() });
   };
 
   const createSchedule = (

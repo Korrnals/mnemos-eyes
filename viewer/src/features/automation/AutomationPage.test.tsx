@@ -94,11 +94,15 @@ describe("status banner — the S1 honesty", () => {
     expect(text).toContain("auto-launches today: 0");
     expect(text).toContain("rules: 2 schedules, 2 hook rules");
     // No toggle control exists for the kill-switch (v1 cut) — read-only
-    // rendering, no button carries its label.
+    // rendering: no button carries its label AND no switch/checkbox
+    // semantics hide anywhere in the banner (review P3-1 hardening).
     const killButtons = [...container.querySelectorAll("button")].filter((button) =>
       button.textContent?.toLowerCase().includes("kill"),
     );
     expect(killButtons).toHaveLength(0);
+    expect(container.querySelectorAll('[role="switch"]')).toHaveLength(0);
+    expect(container.querySelectorAll('[role="checkbox"]')).toHaveLength(0);
+    expect(container.querySelectorAll("input[type=checkbox]")).toHaveLength(0);
     root.unmount();
   });
 });
@@ -117,11 +121,21 @@ describe("the condition triple — dependent selects, NO free text (regression)"
     const op = document.querySelector<HTMLSelectElement>("#hook-condition-op")!;
     const value = document.querySelector<HTMLSelectElement>("#hook-condition-value")!;
 
-    // Options come from the server meta dictionary (mock mirrors it).
+    // Options come from the server meta dictionary (mock mirrors the REAL
+    // store.RULE_CONDITION_FIELD_ENUMS: col/env/… — the phantom task_*
+    // ids are gone, review SCHED-1-UI P2-1).
     expect([...field.options].map((option) => option.value)).toEqual([
       "",
-      "task_col",
-      "task_priority",
+      "col",
+      "env",
+      "executor_id",
+      "harness",
+      "priority",
+      "project",
+      "specialist",
+      "state",
+      "status",
+      "transport",
     ]);
     // Dependent: no field → op disabled; value disabled until a field with
     // an enum is chosen.
@@ -130,16 +144,28 @@ describe("the condition triple — dependent selects, NO free text (regression)"
 
     const nativeSet = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
     await act(async () => {
-      nativeSet?.call(field, "task_col");
+      nativeSet?.call(field, "col");
       field.dispatchEvent(new Event("change", { bubbles: true }));
     });
     const colValues = [...value.options].map((option) => option.value);
     expect(colValues).toContain("open");
     expect(colValues).toContain("done");
+    // A free-form field (project) has NO closed set — the value select
+    // stays disabled and the add button explains why.
+    await act(async () => {
+      nativeSet?.call(field, "project");
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(value.disabled).toBe(true);
+    expect(document.body.textContent).toContain("no closed value set");
 
     await act(async () => {
       nativeSet?.call(op, "eq");
       op.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => {
+      nativeSet?.call(field, "col");
+      field.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await act(async () => {
       nativeSet?.call(value, "blocked");
@@ -151,7 +177,7 @@ describe("the condition triple — dependent selects, NO free text (regression)"
     await act(async () => {
       add.click();
     });
-    expect(document.body.textContent).toContain("task_col eq blocked");
+    expect(document.body.textContent).toContain("col eq blocked");
 
     // THE REGRESSION LOCK: inside the condition editor, every control is a
     // SELECT — a free-text condition input does not exist in the DOM.
@@ -207,7 +233,7 @@ describe("journal — cursor pagination", () => {
         specialist: "x",
         harness: "zcode",
         executor_id: "",
-        trigger_kind: "daily",
+        trigger_kind: "time-of-day",
         trigger_value: "10:00",
         window_from: null,
         window_to: null,
