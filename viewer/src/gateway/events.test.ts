@@ -229,6 +229,53 @@ describe("parseBoardEvent — executor.* presence family (AGW-1)", () => {
     );
     if (event.kind !== "executor.deleted") return;
     expect(event.prev_state).toBe(event.state);
+    // The deleted frame never grew a notification in this payload — absent
+    // must stay absent (no invented field).
+    expect("notification" in event).toBe(false);
+  });
+
+  it("keeps the embedded owner notification on registered/deleted (P2-1)", () => {
+    // registered: `_notify_and_broadcast` attaches the notification for the
+    // FIRST open pending registration per host — the frame carries it inline.
+    const registered = parseEvent(
+      JSON.stringify({
+        kind: "executor.registered",
+        executor: { ...EXECUTOR, state: "pending", presence: "offline" },
+        prev_state: null,
+        state: "pending",
+        notification: NOTIFICATION,
+      }),
+    );
+    if (registered.kind !== "executor.registered") return;
+    expect(registered.notification?.id).toBe(7);
+    expect(registered.notification?.category).toBe("work");
+
+    const deleted = parseEvent(
+      JSON.stringify({
+        kind: "executor.deleted",
+        executor: EXECUTOR,
+        prev_state: "approved",
+        state: "approved",
+        notification: NOTIFICATION,
+      }),
+    );
+    if (deleted.kind !== "executor.deleted") return;
+    expect(deleted.notification?.title).toBe("Task moved");
+
+    // ...and the same kinds parse CLEANLY without one (the duplicate-name
+    // register arm and every later host go out bare via `_broadcast`).
+    for (const kind of ["executor.registered", "executor.deleted"] as const) {
+      const bare = parseEvent(
+        JSON.stringify({
+          kind,
+          executor: EXECUTOR,
+          prev_state: "approved",
+          state: "approved",
+        }),
+      );
+      if (bare.kind !== "executor.registered" && bare.kind !== "executor.deleted") return;
+      expect("notification" in bare).toBe(false);
+    }
   });
 
   it("classifies truncated/broken executor frames as malformed", () => {

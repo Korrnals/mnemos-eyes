@@ -140,6 +140,9 @@ export class MockAdapter implements MemoryGateway {
   private assignments: AssignmentItem[];
   private executors: ExecutorItem[];
   private executionSettings: ExecutionSettings;
+  /** Per-project defaults (board_meta `default_executor:project:<slug>`
+   * mirror) — modelled through PUT /settings/execution with a project scope. */
+  private executionProjectDefaults: Record<string, string> = {};
   private schedules: ScheduleRule[];
   private hooks: HookRule[];
   private launches: LaunchRow[];
@@ -797,12 +800,22 @@ export class MockAdapter implements MemoryGateway {
    * approved, enabled executor. The live-heartbeat (online) and
    * local-poll gates are relaxed — mock presence is a static corpus
    * snapshot, so requiring "online now" would freeze the playground.
+   * Scope mirror (server `_execution_settings_keys`): '' is the global
+   * pair; 'project:<slug>' writes ONLY the project default (fallback is
+   * global-scope — 422 when combined), and the project default joins the
+   * routing chain one tier above the global one.
    */
   async putExecutionSettings(
     payload: ExecutionSettingsInput,
     signal?: AbortSignal,
   ): Promise<ExecutionSettings> {
     await this.delay(signal);
+    const scope = (payload.scope ?? "").trim();
+    if (payload.fallback_executor && scope) {
+      throw new ApiError(422, "fallback executor is global-scope only", {
+        url: "mock:/api/settings/execution",
+      });
+    }
     for (const executorId of [payload.default_executor, payload.fallback_executor]) {
       if (!executorId) continue; // '' clears the slot
       const row = this.executors.find((executor) => executor.id === executorId);
@@ -819,13 +832,27 @@ export class MockAdapter implements MemoryGateway {
         );
       }
     }
-    this.executionSettings = {
+    if (scope) {
+      // Project scope: the default slot only — the global pair is untouched.
+      if (payload.default_executor) {
+        this.executionProjectDefaults[scope] = payload.default_executor;
+      } else {
+        delete this.executionProjectDefaults[scope];
+      }
+    } else {
+      this.executionSettings = {
+        ok: true,
+        default_executor: payload.default_executor,
+        fallback_executor: payload.fallback_executor,
+        scope,
+      };
+    }
+    return {
       ok: true,
       default_executor: payload.default_executor,
       fallback_executor: payload.fallback_executor,
-      scope: payload.scope ?? "",
+      scope,
     };
-    return { ...this.executionSettings };
   }
 
   // --- SCHED-1 automation (ADR 0013 S1: CRUD + journal + manual run-now) -------
@@ -1141,7 +1168,7 @@ export class MockAdapter implements MemoryGateway {
       heartbeat_at: null,
       finished_at: null,
       topics: [...task.mnemos_tags],
-      routing: this.resolveRouting(executorId, specialist, task.specialists),
+      routing: this.resolveRouting(executorId, specialist, task.specialists, task.project),
     };
     this.assignments.push(assignment);
     return { ...assignment };
@@ -1151,18 +1178,21 @@ export class MockAdapter implements MemoryGateway {
    * Routing mirror (Amd 2 §5 tier chain): delegated to the shared pure
    * resolver (gateway/routing.ts) over the mock's live registry + settings —
    * the same implementation the AssignExecutorSheet preview uses, so dev
-   * mode and the preview can never drift apart.
+   * mode and the preview can never drift apart. The project-default tier
+   * reads the mock's per-project settings (PUT with a project scope).
    */
   private resolveRouting(
     pin: string,
     specialist: string,
     taskSpecialists: readonly string[],
+    project: string,
   ): RoutingAnnotation {
     return resolveRoutingAnnotation({
       pin,
       specialist,
       taskSpecialists,
       executors: this.executors,
+      projectDefault: this.executionProjectDefaults[`project:${project}`] ?? "",
       globalDefault: this.executionSettings.default_executor,
     });
   }

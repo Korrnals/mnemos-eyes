@@ -82,6 +82,13 @@ export function applyAgentsReconnectToCache(queryClient: QueryClient): void {
  * semantics are live the moment the first agents page lands. When
  * AgentsLayout arrives, MOVE this mount there (one line) so each domain
  * pays only while it is visited.
+ *
+ * KNOWN COST (review P3-1, honest until AGW-3 moves the mount): while a
+ * /tasks route is open, the TasksLayout bridge and this Shell bridge each
+ * own an EventSource — TWO concurrent `/api/events` connections for the
+ * same board. At-most-once SSE makes the duplicate harmless for
+ * correctness (both bridges invalidate/patch independently); it is a
+ * transport cost only, retired by the AGW-3 layout move.
  */
 export function useAgentsEvents(): void {
   const gateway = useGateway();

@@ -166,6 +166,87 @@ describe("MockAdapter agents — executor registry + settings", () => {
       422,
     );
   });
+
+  it("putExecutionSettings: project scope is fallback-forbidden (422) and strips whitespace", async () => {
+    const mock = adapter();
+    // Server mirror: the fallback slot is global-scope only.
+    await rejectsApiError(
+      mock.putExecutionSettings({
+        default_executor: "exec-mesh-qa",
+        fallback_executor: "exec-laptop-zcode",
+        scope: "project:mnemos-eyes",
+      }),
+      422,
+    );
+    // A project-scoped write succeeds (whitespace-stripped scope key) and
+    // leaves the GLOBAL pair untouched.
+    const result = await mock.putExecutionSettings({
+      default_executor: "exec-mesh-qa",
+      fallback_executor: "",
+      scope: "  project:mnemos-eyes  ",
+    });
+    expect(result.scope).toBe("project:mnemos-eyes");
+    const global = await mock.getExecutionSettings();
+    expect(global.default_executor).toBe("exec-laptop-zcode"); // untouched
+  });
+
+  it("project default joins the routing chain ABOVE the global one (P3-2)", async () => {
+    const mock = adapter();
+    await mock.putExecutionSettings({
+      default_executor: "exec-mesh-qa",
+      fallback_executor: "",
+      scope: "project:vesmaro",
+    });
+    // Fresh role-less tasks: no pin, no matching specialist/task-specialist —
+    // the chain falls through to the DEFAULTS, which is what we test.
+    const vesmaroTask = await mock.createTask({
+      title: "Vesmaro probe",
+      summary: "",
+      spec: "",
+      col: "open",
+      priority: "normal",
+      env: "unknown",
+      agents: [],
+      specialists: [],
+      memory_ids: [],
+      mnemos_tags: [],
+      project: "vesmaro",
+    });
+    const mnemosTask = await mock.createTask({
+      title: "Mnemos probe",
+      summary: "",
+      spec: "",
+      col: "open",
+      priority: "normal",
+      env: "unknown",
+      agents: [],
+      specialists: [],
+      memory_ids: [],
+      mnemos_tags: [],
+      project: "mnemos",
+    });
+
+    // The vesmaro task resolves through the PROJECT default first.
+    const created = await mock.createAssignment({
+      task_id: vesmaroTask.id,
+      specialist: "@GCW: Nobody",
+      harness: "zcode",
+    });
+    expect(created.assignment.routing).toEqual({
+      resolved: "exec-mesh-qa",
+      reason: "project-default",
+    });
+    // A task of ANOTHER project still routes through the global tier.
+    const other = await mock.createAssignment({
+      task_id: mnemosTask.id,
+      specialist: "@GCW: Nobody",
+      harness: "zcode",
+    });
+    expect(other.assignment.routing).toEqual({
+      resolved: "exec-laptop-zcode",
+      reason: "global-default",
+    });
+  });
 });
 
 describe("MockAdapter agents — SCHED-1 automation", () => {

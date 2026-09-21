@@ -155,11 +155,27 @@ export interface BoardEventMap {
   // presence pair fires on TRANSITION only (a 60 s sweeper diffs last_seen
   // TTLs; `stale` is a silent hysteresis corridor with NO kind of its own);
   // the registry trio mirrors the register / PATCH / DELETE routes.
-  "executor.online": ExecutorEvent & { readonly last_seen_at: string };
-  "executor.offline": ExecutorEvent & { readonly last_seen_at: string };
-  "executor.registered": ExecutorEvent;
-  "executor.updated": ExecutorEvent;
-  "executor.deleted": ExecutorEvent;
+  // registered/deleted travel through `_notify_and_broadcast` (the owner
+  // notification rides ALONGSIDE — same passthrough as assignment.expired).
+  // Each member carries its LITERAL kind, so narrowing the parsed union
+  // picks the exact payload shape (per-kind optionals included).
+  "executor.online": ExecutorEvent & {
+    readonly kind: "executor.online";
+    readonly last_seen_at: string;
+  };
+  "executor.offline": ExecutorEvent & {
+    readonly kind: "executor.offline";
+    readonly last_seen_at: string;
+  };
+  "executor.registered": ExecutorEvent & {
+    readonly kind: "executor.registered";
+    readonly notification?: BoardNotification;
+  };
+  "executor.updated": ExecutorEvent & { readonly kind: "executor.updated" };
+  "executor.deleted": ExecutorEvent & {
+    readonly kind: "executor.deleted";
+    readonly notification?: BoardNotification;
+  };
 }
 
 export interface AssignmentEvent {
@@ -180,15 +196,10 @@ export interface AssignmentEvent {
  * `_presence_sweep_once` (online/offline carry the transition timestamp),
  * the register route (prev_state is null — no prior registry state), the
  * owner PATCH (updated) and DELETE (deleted; prev_state === state — the
- * removed row's terminal snapshot).
+ * removed row's terminal snapshot). The literal `kind` lives on the MAP
+ * MEMBERS (one per kind), so each member is the exact wire shape.
  */
 export interface ExecutorEvent {
-  readonly kind:
-    | "executor.online"
-    | "executor.offline"
-    | "executor.registered"
-    | "executor.updated"
-    | "executor.deleted";
   /** Public executor row (`_executor_public`; no secret material). */
   readonly executor: BoardExecutor;
   /** Registry/presence state before the transition; null on registration. */
@@ -334,6 +345,9 @@ function withOptionalNotification<T extends object>(
  * are mandatory; the presence pair additionally refuses to parse without
  * its transition timestamp (§5.2 fixes that payload), so a truncated
  * online/offline frame is malformed rather than silently mistimed.
+ * registered/deleted may carry the owner notification inline
+ * (`_notify_and_broadcast` embeds it) — the same optional passthrough the
+ * assignment family uses; online/offline/updated never do (bare `_broadcast`).
  */
 function parseExecutorEvent(
   parsed: Record<string, unknown>,
@@ -344,7 +358,6 @@ function parseExecutorEvent(
     return ignored("malformed-payload", kind);
   }
   const base = {
-    kind,
     executor: parsed.executor as BoardExecutor,
     // Registered carries an explicit null; anything non-string reads as null.
     prev_state: typeof parsed.prev_state === "string" ? parsed.prev_state : null,
@@ -354,9 +367,18 @@ function parseExecutorEvent(
     if (typeof parsed.last_seen_at !== "string") {
       return ignored("malformed-payload", kind);
     }
-    return { status: "event", event: { ...base, last_seen_at: parsed.last_seen_at } };
+    return {
+      status: "event",
+      event: { ...base, kind, last_seen_at: parsed.last_seen_at },
+    };
   }
-  return { status: "event", event: base };
+  if (kind === "executor.registered" || kind === "executor.deleted") {
+    return {
+      status: "event",
+      event: withOptionalNotification({ ...base, kind }, parsed),
+    };
+  }
+  return { status: "event", event: { ...base, kind } };
 }
 
 function ignored(reason: IgnoredEventReason, kind: string): ParsedBoardEvent {
