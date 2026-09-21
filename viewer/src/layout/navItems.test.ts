@@ -23,9 +23,9 @@ describe("domain map", () => {
     ]);
   });
 
-  it("marks only the phase-4+ domains as soon-slots (Ф2 activates Tasks)", () => {
+  it("marks only the phase-4+ domains as soon-slots (AGW-3 activates Agents)", () => {
     const slots = NAV_DOMAINS.filter((d) => d.soonKey).map((d) => d.to);
-    expect(slots).toEqual(["/agents", "/stores"]);
+    expect(slots).toEqual(["/stores"]);
   });
 
   it("never links a domain at a path without a route (no dead links)", () => {
@@ -55,7 +55,9 @@ describe("domain map", () => {
     // Ф2: the task domain is live — its pages resolve the domain.
     expect(activeDomain("/tasks")?.to).toBe("/tasks");
     expect(activeDomain("/tasks/TB-1")?.to).toBe("/tasks");
-    expect(activeDomain("/agents")?.to).toBeUndefined(); // still a slot
+    // AGW-3: the agents domain is live — its pages resolve the domain.
+    expect(activeDomain("/agents")?.to).toBe("/agents");
+    expect(activeDomain("/agents/execution")?.to).toBe("/agents");
   });
 
   it("gives the task domain its Ф2–Ф3 sections (kanban / list / inbox / archive)", () => {
@@ -71,6 +73,15 @@ describe("domain map", () => {
     expect(tasks?.sections?.find((s) => s.to === "/tasks/inbox")?.counter).toBe(
       "inbox",
     );
+  });
+
+  it("gives the agents domain its AGW-3 execution section (root = alias)", () => {
+    const agents = NAV_DOMAINS.find((d) => d.to === "/agents");
+    expect(agents?.soonKey).toBeUndefined();
+    // The domain root has no index route — the domain link goes to the
+    // execution view (spec §1: /agents aliases /agents/execution).
+    expect(agents?.linkTo).toBe("/agents/execution");
+    expect(agents?.sections?.map((s) => s.to)).toEqual(["/agents/execution"]);
   });
 });
 

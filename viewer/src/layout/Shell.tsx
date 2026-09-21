@@ -6,7 +6,6 @@ import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { useAgentsEvents } from "@/features/agents/agentsEvents";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -26,11 +25,6 @@ import { useT } from "@/i18n";
  * Collapse state lives here so it survives route changes.
  */
 export function Shell() {
-  // Agents-domain SSE bridge (AGW-1): invalidation-only, mounted HERE —
-  // not in a domain layout — because /agents routes do not exist until the
-  // Ф3 wave; see features/agents/agentsEvents.ts for the documented mount
-  // decision (moves to AgentsLayout when it lands).
-  useAgentsEvents();
   const [collapsed, setCollapsed] = useState(false);
   const toggle = useCallback(() => setCollapsed((value) => !value), []);
   const location = useLocation();

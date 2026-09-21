@@ -5,6 +5,7 @@ import type { BoardEvent } from "@/gateway/events";
 import { isTaskEventSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
+import { pushExecutionEvent, setFeedStreamState } from "./executionFeedStore";
 
 /**
  * SSE → cache mapping for the agents domain (AGW-1, spec 2026-09-19 §5.9).
@@ -72,23 +73,18 @@ export function applyAgentsReconnectToCache(queryClient: QueryClient): void {
 /**
  * Domain events bridge for the agents domain.
  *
- * MOUNT DECISION (AGW-1, documented per instruction): the task bridge lives
- * in the /tasks layout so other domains never pay for a stream they do not
- * consume — but the /agents routes do not exist until the Ф3 wave (spec
- * §6), so there is no domain layout to own the mount yet. The bridge
- * therefore mounts in the app Shell (see layout/Shell.tsx): it is pure
- * cache invalidation with no render surface, capability-gated (mock/mnemos
- * modes never open a stream), and it guarantees the §5.9 invalidation
- * semantics are live the moment the first agents page lands. When
- * AgentsLayout arrives, MOVE this mount there (one line) so each domain
- * pays only while it is visited.
+ * MOUNT (AGW-3, retired the AGW-1/P3-1 cost): AgentsLayout owns this hook —
+ * the stream exists only while the /agents subtree is visited, and the
+ * /tasks layout keeps its own bridge; the two never overlap, so no route
+ * holds two `/api/events` connections anymore.
  *
- * KNOWN COST (review P3-1, honest until AGW-3 moves the mount): while a
- * /tasks route is open, the TasksLayout bridge and this Shell bridge each
- * own an EventSource — TWO concurrent `/api/events` connections for the
- * same board. At-most-once SSE makes the duplicate harmless for
- * correctness (both bridges invalidate/patch independently); it is a
- * transport cost only, retired by the AGW-3 layout move.
+ * One stream, two sinks (both fed from the SAME onAny subscription):
+ * - cache invalidation (assignment and executor kinds → TanStack keys, §5.9);
+ * - the UI-10 execution feed ring buffer (executionFeedStore) — the page
+ *   reads the store, never opens a second EventSource.
+ * The store also mirrors the connection state for the amber «данные на
+ * HH:MM» marker. Capability-gated as before: mock/mnemos modes never open
+ * a stream (the mock has no SSE — its data moves through React Query).
  */
 export function useAgentsEvents(): void {
   const gateway = useGateway();
@@ -101,8 +97,10 @@ export function useAgentsEvents(): void {
     const stream = gateway.events();
     const unsubscribe = stream.onAny((event) => {
       applyAgentsEventToCache(queryClient, event);
+      pushExecutionEvent(event);
     });
     const unsubscribeState = stream.onStateChange((state) => {
+      setFeedStreamState(state);
       // Initial connect must NOT refetch (queries just mounted fresh); only
       // a RECOVERY — open → drop → open — does (§5.9).
       if (state === "open") {
@@ -113,6 +111,7 @@ export function useAgentsEvents(): void {
     return () => {
       unsubscribe();
       unsubscribeState();
+      setFeedStreamState("closed");
       stream.close();
     };
   }, [gateway, queryClient]);

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
-import type { AssignmentCancelledResult, AssignmentCreateInput, AssignmentCreatedResult, BoardTask } from "@/gateway/boardTypes";
+import type { AssignmentCancelledResult, AssignmentCreateInput, AssignmentCreatedResult, BoardTask, ExecutionSettingsInput } from "@/gateway/boardTypes";
 import { isAgentsMutationSource } from "@/gateway/capabilities";
 import type { MemoryGateway } from "@/gateway/MemoryGateway";
 import { useGateway } from "@/gateway/GatewayContext";
@@ -152,7 +152,33 @@ export function createAssignmentMutations(deps: AssignmentMutationDeps) {
     });
   };
 
-  return { createAssignment, cancelAssignment };
+  /**
+   * Save the default/fallback pair (`PUT /api/settings/execution`,
+   * ui-token). Amd 2 §5 gate failures (422 — not approved / disabled / not
+   * live) surface the SERVER text in the toast; success invalidates the
+   * settings key AND the queue (routing annotations derive from the pair).
+   */
+  const saveExecutionSettings = (
+    payload: ExecutionSettingsInput,
+    callbacks?: { onSettled?: () => void },
+  ): void => {
+    run({ errorTitleKey: "agents.settings.saveFailed" }, async () => {
+      try {
+        await mutations().putExecutionSettings(payload);
+        invalidate(keys.agents.settings.execution());
+        invalidate(keys.agents.assignments.all);
+        toast.push({
+          kind: "ok",
+          title: t("agents.settings.saved"),
+          detail: t("agents.settings.savedDetail"),
+        });
+      } finally {
+        callbacks?.onSettled?.();
+      }
+    });
+  };
+
+  return { createAssignment, cancelAssignment, saveExecutionSettings };
 }
 
 export type AssignmentMutations = ReturnType<typeof createAssignmentMutations>;
