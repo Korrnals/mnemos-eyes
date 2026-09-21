@@ -361,13 +361,14 @@ TTL 3 мин, code однократный, exchange привязан к IP пе�
 
 Операционные предусловия и заметки (из ревью 1.12.0):
 
-1. **Proxy-headers — условие работоспособности IP-binding.** За Traefik
-   `request.client.host` без доверенного `X-Forwarded-For` даёт IP ingress
-   для ВСЕХ клиентов: привязка code→IP вырождается, а per-IP лимит
-   exchange (30/10 мин) становится одним общим бакетом на все устройства.
-   Перед включением пейринга в прод проверить, что uvicorn видит реальный
-   client IP (`FORWARDED_ALLOW_IPS` / `--proxy-headers`); IPv6
-   privacy-адреса — отдельная заметка ниже.
+1. **Proxy-headers — ЗАКРЫТО в 1.12.1** (обнаружено live-smoke'ом 1.12.0:
+   `source_ip` писал IP ingress-пода 10.42.x.x). Фикс: uvicorn запускается
+   с `--proxy-headers` (Containerfile), `FORWARDED_ALLOW_IPS="*"` через
+   values `extraEnv`. `"*"` безопасен: NetPol чарта пускает ingress только
+   из namespace traefik (LAN-окно диагностики выключено) — спуфинг
+   X-Forwarded-For требует кластерного доступа к поду напрямую. IPv6
+   privacy-адреса (ротация адресов устройства в контуре ломает binding)
+   — заметка остаётся актуальной для клиентской волны.
 2. **Бюджет exchange 5/10 мин против поллинга.** Каждый exchange (в т.ч.
    повторный 202-poll в `scanned`) расходует per-pairing бюджет; TTL
    пейринга — 3 мин. Клиент устройства: ждать подтверждения без поллинга
