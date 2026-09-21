@@ -23,7 +23,9 @@ board (vesmaro.abyss.lab)                 laptop
 |---|---|
 | `scripts/assignment_poller.py` | сам поллер (единственный исполняемый файл) |
 | `poller.example.yaml` | пример конфига → `~/.config/mnemos-eyes/poller.yaml` (chmod 0600) |
-| `vesmaro-assignment-poller.service` | systemd unit, `Restart=always` |
+| `vesmaro-assignment-poller.service` | systemd unit (`/opt`-вариант), `Restart=always` |
+| `vesmaro-assignment-poller-user.service` | systemd **user** unit — laptop-вариант (distrobox), см. § ниже |
+| `poller-unit-launcher.sh` | хостовый лончер для user unit (пин HOME/python дистробокса) |
 | `~/.local/state/mnemos-eyes/poller-audit.jsonl` | локальный аудит-лог запусков (создаётся сам) |
 | `~/.local/state/mnemos-eyes/poller.lock` | flock-синглтон (создаётся сам) |
 
@@ -58,8 +60,39 @@ board (vesmaro.abyss.lab)                 laptop
 Разовый прогон без systemd: `VESMARO_BOARD_TOKEN=… python3
 scripts/assignment_poller.py --once` — **dry-run**: один цикл, по каждому
 queued-назначению логируется решение (было бы запущено / allowlist miss),
-без claim, без запуска детей и без мутаций борда (ребёнок, переживший
-процесс, оставил бы claim_token в никуда).
+без claim, без запуска детей и без task-мутаций борда (ребёнок,
+переживший процесс, оставил бы claim_token в никуда); сам опрос очереди
+при этом тикает присутствие исполнителя (presence-piggyback, AB-FU-3).
+
+## Laptop-вариант: user unit + distrobox (без sudo)
+
+Когда поллер живёт в distrobox-контейнере (его python/env не хочется
+мирровать на хост), supervизация — хостовым **пользовательским** юнитом:
+исполнение остаётся в контейнере, sudo не нужен. Живой катофф
+2026-09-21: рестарт-тест чист (один процесс), переживает ребут с
+`enable-linger`.
+
+```bash
+cp poller-unit-launcher.sh ~/.local/bin/ && chmod 700 ~/.local/bin/poller-unit-launcher.sh
+cp vesmaro-assignment-poller-user.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now vesmaro-assignment-poller-user
+loginctl enable-linger "$USER"        # старт до логина в десктоп (опция)
+```
+
+Лог с этого варианта — `journalctl --user -u vesmaro-assignment-poller-user`
+(не `~/.local/state/mnemos-eyes/poller.log` — файловый лог оставляли
+nohup-редиректы прошлого; имя юнита несут `-user`-суффиксом — включение
+без него на чистом хосте поднимет несуществующий юнит). Две ловушки
+distrobox-exec, которые лончер пинит (подробнее в его шапке): (1)
+exec-окружение протекает хостовым `$HOME` — все пути абсолютные, HOME
+реэкспортируется; (2) `python3` из PATH резолвится в хостовый шим
+`~/.local/bin/python3`, который перезапускает интерпретатор с чистым
+окружением — токен не доезжал; лончер зовёт абсолютный `/usr/bin/python3`
+контейнера. Рантайм-код — git-архив main в
+`~/.local/share/mnemos-eyes/bridge` (обновление: пере-архив +
+`systemctl --user restart`; состояние в `~/.local/state` вне архива).
+Катофф со старого nohup: остановить старый pid (он держит flock), затем
+`enable --now`.
 
 ## Окружение дочерних процессов
 
@@ -147,9 +180,11 @@ launch-error | start-failed | unreported`.
 
 ## Безопасность
 
-- machine-токен: только env (`VESMARO_BOARD_TOKEN`), 0600 на
-  `/etc/vesmaro/poller.env`; в конфиге, промпте и логах его нет (в промпте
-  названа только переменная окружения — значение наследуется процессом).
+- machine-токен: только env (`VESMARO_BOARD_TOKEN`), 0600 — `/opt`-вариант:
+  `/etc/vesmaro/poller.env`, laptop-вариант:
+  `~/.config/mnemos-eyes/poller.env` (container-side); в конфиге, промпте
+  и логах его нет (в промпте названа только переменная окружения —
+  значение наследуется процессом).
 - аудит-лог и launch-артефакты (envelope/stdout/stderr детей) содержат
   спеки заданий — под systemd они создаются с правами 0600: временные
   файлы через `mkstemp` (0600 всегда), аудит-лог — благодаря `UMask=0077`
