@@ -9,7 +9,7 @@
 # Install (HOST side):
 #   cp vesmaro-assignment-poller-user.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now vesmaro-assignment-poller
+#   systemctl --user enable --now vesmaro-assignment-poller-user
 #   loginctl enable-linger "$USER"   # start before desktop login (optional)
 #
 # Tokens stay in ~/.config/mnemos-eyes/poller.env (container-side home,

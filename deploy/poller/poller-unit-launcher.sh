@@ -19,7 +19,7 @@ DISTROBOX_BIN=/var/home/abyss/.local/bin/distrobox-enter
 DISTROBOX_NAME=ubuntu
 CONTAINER_BOX_HOME=/var/home/abyss/.distrobox/ubuntu/home
 exec "$DISTROBOX_BIN" -n "$DISTROBOX_NAME" -- /bin/sh -c '
-  export HOME='"$CONTAINER_BOX_HOME"';
+  export HOME="'"$CONTAINER_BOX_HOME"'";
   cd "$HOME/.local/share/mnemos-eyes/bridge" || exit 1
   set -a; . "$HOME/.config/mnemos-eyes/poller.env"; set +a
   exec /usr/bin/python3 scripts/assignment_poller.py \

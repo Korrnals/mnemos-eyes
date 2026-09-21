@@ -75,22 +75,24 @@ queued-назначению логируется решение (было бы �
 ```bash
 cp poller-unit-launcher.sh ~/.local/bin/ && chmod 700 ~/.local/bin/poller-unit-launcher.sh
 cp vesmaro-assignment-poller-user.service ~/.config/systemd/user/
-systemctl --user daemon-reload && systemctl --user enable --now vesmaro-assignment-poller
+systemctl --user daemon-reload && systemctl --user enable --now vesmaro-assignment-poller-user
 loginctl enable-linger "$USER"        # старт до логина в десктоп (опция)
 ```
 
-Лог с этого варианта — `journalctl --user -u vesmaro-assignment-poller`
+Лог с этого варианта — `journalctl --user -u vesmaro-assignment-poller-user`
 (не `~/.local/state/mnemos-eyes/poller.log` — файловый лог оставляли
-nohup-редиректы прошлого). Две ловушки distrobox-exec, которые лончер
-пинит (подробнее в его шапке): (1) exec-окружение протекает хостовым
-`$HOME` — все пути абсолютные, HOME реэкспортируется; (2) `python3` из
-PATH резолвится в хостовый шим `~/.local/bin/python3`, который
-перезапускает интерпретатор с чистым окружением — токен не доезжал;
-лончер зовёт абсолютный `/usr/bin/python3` контейнера. Рантайм-код —
-git-архив main в `~/.local/share/mnemos-eyes/bridge` (обновление:
-пере-архив + `systemctl --user restart`; состояние в `~/.local/state`
-вне архива). Катофф со старого nohup: остановить старый pid (он держит
-flock), затем `enable --now`.
+nohup-редиректы прошлого; имя юнита несут `-user`-суффиксом — включение
+без него на чистом хосте поднимет несуществующий юнит). Две ловушки
+distrobox-exec, которые лончер пинит (подробнее в его шапке): (1)
+exec-окружение протекает хостовым `$HOME` — все пути абсолютные, HOME
+реэкспортируется; (2) `python3` из PATH резолвится в хостовый шим
+`~/.local/bin/python3`, который перезапускает интерпретатор с чистым
+окружением — токен не доезжал; лончер зовёт абсолютный `/usr/bin/python3`
+контейнера. Рантайм-код — git-архив main в
+`~/.local/share/mnemos-eyes/bridge` (обновление: пере-архив +
+`systemctl --user restart`; состояние в `~/.local/state` вне архива).
+Катофф со старого nohup: остановить старый pid (он держит flock), затем
+`enable --now`.
 
 ## Окружение дочерних процессов
 
@@ -178,9 +180,11 @@ launch-error | start-failed | unreported`.
 
 ## Безопасность
 
-- machine-токен: только env (`VESMARO_BOARD_TOKEN`), 0600 на
-  `/etc/vesmaro/poller.env`; в конфиге, промпте и логах его нет (в промпте
-  названа только переменная окружения — значение наследуется процессом).
+- machine-токен: только env (`VESMARO_BOARD_TOKEN`), 0600 — `/opt`-вариант:
+  `/etc/vesmaro/poller.env`, laptop-вариант:
+  `~/.config/mnemos-eyes/poller.env` (container-side); в конфиге, промпте
+  и логах его нет (в промпте названа только переменная окружения —
+  значение наследуется процессом).
 - аудит-лог и launch-артефакты (envelope/stdout/stderr детей) содержат
   спеки заданий — под systemd они создаются с правами 0600: временные
   файлы через `mkstemp` (0600 всегда), аудит-лог — благодаря `UMask=0077`
