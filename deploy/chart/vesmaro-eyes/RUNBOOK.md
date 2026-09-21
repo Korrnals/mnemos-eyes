@@ -396,3 +396,28 @@ TTL 3 мин, code однократный, exchange привязан к IP пе�
    принимать warning); HSTS — вместе с CA-rollout, не раньше. Ритуал
    установки CA на устройство со сверкой SHA-256 fingerprint — здесь же,
    когда дойдёт до клиентской волны.
+
+## 11. helm upgrade и image.tag (конвенция деплоя)
+
+helm 3 переиспользует user-supplied values прошлых апгрейдов: если тег
+когда-то задавался `--set`, последующие `helm upgrade` молча держат
+старый тег, даже если `values.yaml` чарта уже несёт новый (инцидент
+2026-09-21, rev.39→40: формальный upgrade без смены образа — pod
+перезапустился на прежнем `1.12.3`).
+
+Конвенция: КАЖДЫЙ деплой — явный `-f values.yaml --set image.tag=<версия>`
+(или `--reset-values`, если осознанно нужны чистые дефолты чарта), и
+проверка фактического образа пода после rollout:
+
+```bash
+helm upgrade --install vesmaro-eyes deploy/chart/vesmaro-eyes \
+  -n $NS --atomic --timeout 5m \
+  -f deploy/chart/vesmaro-eyes/values.yaml \
+  --set image.tag=<версия>
+kubectl -n $NS rollout status deploy/vesmaro-eyes --timeout=180s
+kubectl get deploy vesmaro-eyes -n $NS -o jsonpath='{.spec.template.spec.containers[0].image}'   # должен совпасть с тегом
+```
+
+Версионный бамп — отдельный релизный PR (`scripts/sync-version.sh`),
+фича-PR версий не несут (урок волны #35: три конфликта из-за версионных
+строк при параллельных сессиях).
