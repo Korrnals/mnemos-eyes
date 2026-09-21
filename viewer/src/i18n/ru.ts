@@ -45,6 +45,9 @@ export const ru = {
   // that kept lying after login.
   "nav.modeReadOnly": "только чтение",
   "nav.modeActive": "сессия активна",
+  // Sidebar version label (owner feedback: «какая версия перед глазами»).
+  // {{version}} is the live server version from /api/health.
+  "nav.versionAria": "Версия приложения {{version}}",
   "shell.skipToContent": "Перейти к содержимому",
   "shell.viewFell": "Этот вид упал в колодец",
   "shell.tryAgain": "Попробовать снова",

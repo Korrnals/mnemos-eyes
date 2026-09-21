@@ -403,6 +403,9 @@ export interface BoardHealthDetail {
   readonly ok: boolean;
   readonly service: string;
   readonly board_tasks: number;
+  /** Server version (archcom C5 source) — the Sidebar version label; absent
+   * on gateways that do not expose it (mock/legacy boards). */
+  readonly app_version?: string | null;
   readonly servers: readonly BoardHealthServer[];
 }
 

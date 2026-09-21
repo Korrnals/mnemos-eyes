@@ -1547,6 +1547,10 @@ async def health() -> dict[str, Any]:
     return {
         "ok": True,
         "service": "vesmaro-eyes",
+        # Single version source (archcom C5: FastAPI(version=...)) exposed
+        # for the UI version label (owner feedback: «какая версия перед
+        # глазами» — Sidebar footer). Additive field.
+        "app_version": app.version,
         "board_tasks": sum(store.board()["counts"].values()),
         "servers": per_server,
         "groups": store.list_groups(),

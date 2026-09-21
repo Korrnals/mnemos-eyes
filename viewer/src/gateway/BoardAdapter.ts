@@ -948,6 +948,7 @@ export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {
     ok: source.ok === true,
     service: str(source.service, "vesmaro-eyes"),
     board_tasks: num(source.board_tasks),
+    app_version: typeof source.app_version === "string" ? source.app_version : null,
     servers: servers.map((row): BoardHealthServer => {
       const server = (row ?? {}) as Record<string, unknown>;
       return {
