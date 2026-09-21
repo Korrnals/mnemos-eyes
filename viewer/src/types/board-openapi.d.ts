@@ -262,6 +262,50 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/mesh/nodes": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /** Mesh Nodes */
+        readonly get: operations["mesh_nodes_api_mesh_nodes_get"];
+        readonly put?: never;
+        /** Add Mesh Node */
+        readonly post: operations["add_mesh_node_api_mesh_nodes_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/mesh/nodes/{name}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Delete Mesh Node
+         * @description Remove from the board registry. The mesh node itself is untouched.
+         */
+        readonly delete: operations["delete_mesh_node_api_mesh_nodes__name__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        /**
+         * Edit Mesh Node
+         * @description Full-spec update (create body semantics, memory-server PATCH
+         *     pattern). ``enabled`` rides here — nodes deliberately have no action
+         *     endpoint; node management is API-only, the UI is read-only.
+         */
+        readonly patch: operations["edit_mesh_node_api_mesh_nodes__name__patch"];
+        readonly trace?: never;
+    };
     readonly "/api/memories/pulse": {
         readonly parameters: {
             readonly query?: never;
@@ -647,6 +691,43 @@ export interface paths {
          *     refusal: the report is still accepted).
          */
         readonly post: operations["create_task_report_api_tasks__task_id__reports_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/reports": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Reports Feed
+         * @description Cross-task agent-report feed, freshest first (CV-6: the server side
+         *     of the Agents-domain activity stream; OPEN read like the other GET
+         *     listings — the cluster ingress is the auth boundary).
+         *
+         *     Cursor pagination: ``limit`` (default 50, hard cap 200 — silently
+         *     clamped) + ``before_id`` (rows with id strictly below it, so pages
+         *     stay stable while new reports land; the feed ends where a full-width
+         *     page comes back short). Filters: ``task_id`` exact, ``kind``
+         *     (intermediate | final — 422 on garbage). A ``task_id`` matching
+         *     nothing — including an UNKNOWN task — is an empty page (200, count 0),
+         *     not 404: here the task is a filter value, not an addressed resource
+         *     (per-task GET keeps its 404 semantics). Superseded finals are excluded
+         *     by default (the live feed shows one final per task);
+         *     ``include_superseded`` restores them flagged ``superseded``.
+         *     ``truncated`` is true when the requested limit exceeded the page cap
+         *     (silent clamp); a NON-POSITIVE limit is a 422 (``ge=1``), the numeric-
+         *     validation pattern of the cursor listings /api/memories and
+         *     /api/automation/launches.
+         */
+        readonly get: operations["reports_feed_api_reports_get"];
+        readonly put?: never;
+        readonly post?: never;
         readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
@@ -2321,6 +2402,100 @@ export interface components {
         } & {
             readonly [key: string]: unknown;
         };
+        /** MeshNodeHealthOut */
+        readonly MeshNodeHealthOut: {
+            /**
+             * Version
+             * @default
+             */
+            readonly version: string;
+            /**
+             * Node Id
+             * @default
+             */
+            readonly node_id: string;
+            /** Uptime Seconds */
+            readonly uptime_seconds?: number | null;
+            /** Core Connected */
+            readonly core_connected?: boolean | null;
+            /**
+             * Unix Socket Path
+             * @default
+             */
+            readonly unix_socket_path: string;
+            /**
+             * Peers Total
+             * @default 0
+             */
+            readonly peers_total: number;
+            /**
+             * Peers Reachable
+             * @default 0
+             */
+            readonly peers_reachable: number;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** MeshNodeOut */
+        readonly MeshNodeOut: {
+            /** Name */
+            readonly name: string;
+            /** Base Url */
+            readonly base_url: string;
+            /**
+             * Description
+             * @default
+             */
+            readonly description: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            readonly enabled: boolean;
+            /**
+             * Status
+             * @default unknown
+             */
+            readonly status: string;
+            /** Ok */
+            readonly ok?: boolean | null;
+            /** Error */
+            readonly error?: string | null;
+            readonly health?: components["schemas"]["MeshNodeHealthOut"] | null;
+            /** Probe Status */
+            readonly probe_status?: number | null;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /**
+         * MeshNodeSpec
+         * @description Create/update a mesh-node observation entry.
+         */
+        readonly MeshNodeSpec: {
+            /** Name */
+            readonly name: string;
+            /** Base Url */
+            readonly base_url: string;
+            /**
+             * Description
+             * @default
+             */
+            readonly description: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            readonly enabled: boolean;
+        };
+        /** MeshNodesOut */
+        readonly MeshNodesOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Nodes */
+            readonly nodes: readonly components["schemas"]["MeshNodeOut"][];
+        } & {
+            readonly [key: string]: unknown;
+        };
         /** MoveBody */
         readonly MoveBody: {
             /** Col */
@@ -2537,6 +2712,22 @@ export interface components {
             readonly superseded: boolean;
             /** Created At */
             readonly created_at: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** ReportsFeedOut */
+        readonly ReportsFeedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["ReportOut"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            readonly truncated: boolean;
         } & {
             readonly [key: string]: unknown;
         };
@@ -3637,6 +3828,125 @@ export interface operations {
             };
         };
     };
+    readonly mesh_nodes_api_mesh_nodes_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MeshNodesOut"];
+                };
+            };
+        };
+    };
+    readonly add_mesh_node_api_mesh_nodes_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["MeshNodeSpec"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MeshNodeOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly delete_mesh_node_api_mesh_nodes__name__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly name: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["OkNoteOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly edit_mesh_node_api_mesh_nodes__name__patch: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly name: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["MeshNodeSpec"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MeshNodeOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     readonly memory_pulse_all_api_memories_pulse_get: {
         readonly parameters: {
             readonly query?: {
@@ -4254,6 +4564,41 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["ReportCreatedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly reports_feed_api_reports_get: {
+        readonly parameters: {
+            readonly query?: {
+                readonly limit?: number;
+                readonly before_id?: number | null;
+                readonly task_id?: string;
+                readonly kind?: string;
+                readonly include_superseded?: boolean;
+            };
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ReportsFeedOut"];
                 };
             };
             /** @description Validation Error */
