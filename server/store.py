@@ -204,6 +204,74 @@ def presence_from_last_seen(last_seen: str) -> str:
     return "offline"
 
 
+# ------------------------------------------------------------- pairing (CV-7)
+# ADR 0012: QR pairing + device tokens (mnd_). The pairing code is a
+# 128-bit urlsafe single-use secret with a 3-minute TTL; the DB keeps ONLY
+# its sha256 (hash-only, ADR §5/§10.1). Device tokens share the
+# hash-only discipline (sha256, no salt — the token is 192-bit random,
+# unsalted sha256 is the ADR-ratified choice and matches executors).
+PAIRING_TTL_S = 180.0                 # one TTL for code/QR/verify (§6)
+PAIRING_VERIFY_DIGITS = 4             # anti-mistake screen check (§3.5)
+DEVICE_MAX_ACTIVE = 5                 # ≤5 active device sessions (§5)
+DEVICE_SLIDING_TTL_S = 30 * 86400.0   # sliding expiry while active (§5)
+DEVICE_HARD_TTL_S = 90 * 86400.0      # absolute cap regardless of activity
+DEVICE_TOKEN_PREFIX = "mnd_"
+PAIRING_STATES = frozenset({
+    "created", "scanned", "confirmed", "issued", "expired", "revoked",
+})
+# Pairing states that can still move (TTL-sweep candidates).
+PAIRING_LIVE_STATES = ("created", "scanned", "confirmed")
+
+
+class PairingError(Exception):
+    """Base class for pairing-lifecycle violations (ADR 0012)."""
+
+
+class PairingNotFoundError(PairingError):
+    """Unknown pairing id or code (HTTP 404 upstream — never distinguishes
+    the two on the unauthenticated exchange leg)."""
+
+
+class PairingStateError(PairingError):
+    """Illegal pairing-state transition (HTTP 409 upstream; on the exchange
+    leg the handler re-reads the row and answers by its CURRENT state)."""
+
+
+class PairingExpiredError(PairingError):
+    """Pairing past its TTL or already consumed (HTTP 410 upstream)."""
+
+
+class DeviceError(Exception):
+    """Base class for device-session violations (ADR 0012 §5)."""
+
+
+class DeviceNotFoundError(DeviceError):
+    """Unknown device id (HTTP 404 upstream)."""
+
+
+class DeviceQuotaError(DeviceError):
+    """≤5-active-device quota exhausted (HTTP 409 upstream — the owner must
+    choose explicitly; auto-eviction is FORBIDDEN by ADR §5)."""
+
+
+def _iso_in(seconds: float, now: datetime | None = None) -> str:
+    """UTC ISO stamp ``seconds`` into the future (TTL arithmetic helper)."""
+    base = now or datetime.now(timezone.utc)
+    return (base + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+
+def _iso_past(ts: str, now: datetime | None = None) -> bool:
+    """Has an ISO stamp already passed? Corrupt/empty values fail CLOSED
+    (an unparsable expiry must not resurrect a dead session)."""
+    try:
+        t = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return True
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t <= (now or datetime.now(timezone.utc))
+
+
 # --------------------------------------------------- automation (SCHED-1 S1)
 # ADR 0013 §2: scheduler & hooks — S1 is CONTRACTS ONLY (no engine, no
 # loops, no ECA — those are S2 behind the T2 gate). Automation is a
@@ -698,6 +766,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_launches_schedule_run
 ON launches (rule_id, run_at) WHERE rule_kind='schedule';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_launches_hook_event
 ON launches (rule_id, event_id) WHERE rule_kind='hook';
+-- CV-7 (ADR 0012): QR pairing requests. code_hash is sha256(code) — the
+-- code itself is NEVER stored (hash-only, §5/§10.1); it exists exactly
+-- once, in the POST /api/pairing 201 response. verify is 4 digits for the
+-- trusted-side screen check — it is NOT a secret (§3.5) but never rides
+-- SSE/notifications. source_ip is bound by the FIRST exchange (§3.1).
+-- Additive tables riding the _SCHEMA executescript — NO SEED_VERSION bump
+-- (mesh_nodes/task_assignments precedent).
+CREATE TABLE IF NOT EXISTS pairing_requests (
+    id           TEXT PRIMARY KEY,
+    code_hash    TEXT NOT NULL,
+    verify       TEXT NOT NULL,
+    state        TEXT NOT NULL DEFAULT 'created'
+                 CHECK (state IN ('created','scanned','confirmed','issued','expired','revoked')),
+    scope        TEXT NOT NULL DEFAULT 'read',
+    created_by   TEXT NOT NULL DEFAULT 'owner',
+    device_name  TEXT NOT NULL DEFAULT '',
+    source_ip    TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    scanned_at   TEXT NOT NULL DEFAULT '',
+    confirmed_at TEXT NOT NULL DEFAULT '',
+    expires_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pairing_code_hash ON pairing_requests (code_hash);
+-- CV-7 (ADR 0012 §5): paired device sessions. token_hash is sha256 of the
+-- mnd_-prefixed token — plaintext exists exactly once, in the exchange 200
+-- response. expires_at is the SLIDING 30-day clock (refreshed on every
+-- validated request); hard_expires_at is the absolute 90-day cap that
+-- activity can never push out. last_seen mirrors last_seen_at (the raw
+-- request stamp; naming parity with the executors registry).
+CREATE TABLE IF NOT EXISTS device_sessions (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    scope           TEXT NOT NULL DEFAULT 'read',
+    token_hash      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL DEFAULT '',
+    expires_at      TEXT NOT NULL DEFAULT '',
+    hard_expires_at TEXT NOT NULL,
+    state           TEXT NOT NULL DEFAULT 'active'
+                     CHECK (state IN ('active','expired','revoked')),
+    ua              TEXT NOT NULL DEFAULT '',
+    ip              TEXT NOT NULL DEFAULT '',
+    last_seen       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_device_sessions_token ON device_sessions (token_hash);
 """
 
 # WF-1 table-rebuild target (Store._rebuild_tasks_for_wf1): the full
@@ -2561,6 +2674,434 @@ class Store:
         settings lifecycle — executor.*, default.changed)."""
         with self._lock, self._conn() as db:
             self._log(db, kind, None, payload)
+
+    # ------------------------------------- pairing + devices (CV-7, ADR 0012)
+    # Every method here is serialized by self._lock and does its state
+    # transitions via CAS (UPDATE ... WHERE state=<expected>) inside the
+    # write transaction, so the single-use / one-shot guarantees hold even
+    # under concurrent exchanges (CWE-362, ADR §3.1-§3.2).
+
+    @staticmethod
+    def _pairing_public(row: sqlite3.Row) -> dict[str, Any]:
+        """UI shape of a pairing request: verify is included (ui-token leg
+        only — the API layer gates); code_hash never leaves the store."""
+        return {
+            "id": row["id"], "state": row["state"], "scope": row["scope"],
+            "device_name": row["device_name"], "source_ip": row["source_ip"],
+            "created_by": row["created_by"], "created_at": row["created_at"],
+            "scanned_at": row["scanned_at"],
+            "confirmed_at": row["confirmed_at"],
+            "expires_at": row["expires_at"], "verify": row["verify"],
+        }
+
+    @staticmethod
+    def _device_public(row: sqlite3.Row) -> dict[str, Any]:
+        """UI shape of a device session: token_hash NEVER leaves the store
+        (ADR §5 — the list must be safe to render on the trusted side)."""
+        return {
+            "id": row["id"], "name": row["name"], "scope": row["scope"],
+            "state": row["state"], "created_at": row["created_at"],
+            "last_seen_at": row["last_seen_at"],
+            "last_seen": row["last_seen"], "expires_at": row["expires_at"],
+            "hard_expires_at": row["hard_expires_at"],
+            "ua": row["ua"], "ip": row["ip"],
+        }
+
+    @staticmethod
+    def pairing_row_expired(row: sqlite3.Row | dict[str, Any]) -> bool:
+        """Effective TTL verdict: a live-state pairing past expires_at is
+        expired even before the sweep has flipped the column (the sweep
+        owns the persisted transition + SSE; reads compute it)."""
+        return (row["state"] in PAIRING_LIVE_STATES
+                and _iso_past(row["expires_at"]))
+
+    def create_pairing_request(
+        self, *, created_by: str = "owner", scope: str = "read",
+        ttl_s: float = PAIRING_TTL_S, device_name: str = "",
+    ) -> tuple[dict[str, Any], str]:
+        """Mint a pairing request (ADR 0012 §2.1). Returns (public row,
+        code) — the plaintext code exists exactly once, right here; the
+        store keeps only sha256(code). verify is 4 random digits for the
+        screen check (§3.5: anti-mistake, NOT an auth factor).
+        ``device_name`` is an optional owner-side label shown on the panel
+        BEFORE any scan; the device's first exchange overwrites it with
+        its own self-asserted name (§3.6 — that is the string the owner
+        confirms against)."""
+        code = secrets.token_urlsafe(16)          # 128-bit urlsafe
+        verify = f"{secrets.randbelow(10 ** PAIRING_VERIFY_DIGITS):0{PAIRING_VERIFY_DIGITS}d}"
+        now = datetime.now(timezone.utc)
+        pairing_id = "pr-" + secrets.token_hex(6)
+        row = {
+            "id": pairing_id,
+            "code_hash": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "verify": verify, "state": "created", "scope": scope,
+            "created_by": (created_by or "owner")[:120],
+            "device_name": (device_name or "").strip()[:64],
+            "source_ip": "",
+            "created_at": now.isoformat(timespec="seconds"),
+            "scanned_at": "", "confirmed_at": "",
+            "expires_at": _iso_in(ttl_s, now),
+        }
+        with self._lock, self._conn() as db:
+            db.execute(
+                """INSERT INTO pairing_requests
+                       (id, code_hash, verify, state, scope, created_by,
+                        device_name, source_ip, created_at, scanned_at,
+                        confirmed_at, expires_at)
+                       VALUES (:id, :code_hash, :verify, :state, :scope,
+                        :created_by, :device_name, :source_ip, :created_at,
+                        :scanned_at, :confirmed_at, :expires_at)""",
+                row,
+            )
+            self._log(db, "pairing.created", None,
+                      {"pairing_id": pairing_id, "created_by": row["created_by"],
+                       "scope": scope})
+        return dict(row), code
+
+    def get_pairing(self, pairing_id: str) -> dict[str, Any] | None:
+        """Raw row by id (caller shapes + gates); None when unknown."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def lookup_pairing_by_code(self, code: str) -> dict[str, Any] | None:
+        """Raw row matching a presented code (sha256 lookup), newest first.
+        Deliberately returns ANY state — the exchange leg must distinguish
+        404 (unknown code) from 410 (known but issued/expired/revoked).
+        Hash-indexed; constant work for garbage codes (memory-DoS guard
+        for the pairing-keyed rate limiter, ADR §3.4)."""
+        digest = hashlib.sha256((code or "").encode("utf-8")).hexdigest()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE code_hash=? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (digest,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def scan_pairing(self, pairing_id: str, *, device_name: str,
+                     source_ip: str) -> tuple[dict[str, Any], bool]:
+        """created → scanned, binding source_ip (first exchange only, §3.1)
+        and the self-asserted device_name (kept from the FIRST exchange —
+        later polls cannot rewrite the identity the owner approves).
+
+        Returns (public row, transitioned): transitioned=True only for the
+        call that won the CAS — exactly one concurrent exchange emits the
+        SSE pairing.requested; losers and repeats come back False with the
+        CURRENT row (the handler answers by its state: scanned → 202
+        idempotent without duplicate events, ADR §4; issued/revoked → 410).
+        Raises PairingNotFoundError / PairingExpiredError (404 / 410)."""
+        now = _now()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+            if row is None:
+                raise PairingNotFoundError(f"pairing {pairing_id} not found")
+            if self.pairing_row_expired(row):
+                raise PairingExpiredError("pairing TTL exceeded")
+            if row["state"] != "created":
+                # scanned (repeat poll), confirmed, issued, revoked — the
+                # handler answers by the row it re-reads below
+                return self._pairing_public(row), False
+            cur = db.execute(
+                """UPDATE pairing_requests
+                   SET state='scanned', scanned_at=?, device_name=?,
+                       source_ip=?
+                   WHERE id=? AND state='created'""",
+                (now, (device_name or "")[:64], source_ip, pairing_id))
+            if cur.rowcount != 1:  # lost the CAS — idempotent repeat
+                row = db.execute(
+                    "SELECT * FROM pairing_requests WHERE id=?",
+                    (pairing_id,)).fetchone()
+                return self._pairing_public(row), False
+            self._log(db, "pairing.scanned", None,
+                      {"pairing_id": pairing_id,
+                       "device_name": (device_name or "")[:64],
+                       "source_ip": source_ip})
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+            return self._pairing_public(row), True
+
+    def confirm_pairing(self, pairing_id: str, *,
+                        allow: bool) -> tuple[dict[str, Any], str]:
+        """Owner decision on a scanned pairing (ADR §2.4). Returns (public
+        row, outcome) with outcome ∈ {'confirmed', 'denied', 'idempotent'}:
+        scanned + allow → confirmed (CAS, 'confirmed'); scanned + deny →
+        revoked ('denied'); already confirmed/issued/revoked → 'idempotent'
+        (200, state untouched — repeat confirm never re-decides; a change
+        of mind after confirm is DELETE /api/pairing/{id}); created →
+        PairingStateError (409 — nothing was scanned yet); TTL → 410."""
+        now = _now()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+            if row is None:
+                raise PairingNotFoundError(f"pairing {pairing_id} not found")
+            if self.pairing_row_expired(row):
+                raise PairingExpiredError("pairing TTL exceeded")
+            if row["state"] == "created":
+                raise PairingStateError(
+                    "pairing has not been scanned by a device yet")
+            if row["state"] != "scanned":
+                return self._pairing_public(row), "idempotent"
+            target = "confirmed" if allow else "revoked"
+            cur = db.execute(
+                "UPDATE pairing_requests SET state=?, confirmed_at=? "
+                "WHERE id=? AND state='scanned'",
+                (target, now if allow else "", pairing_id))
+            if cur.rowcount != 1:
+                return self._pairing_public(row), "idempotent"
+            self._log(db, "pairing.confirmed" if allow else "pairing.denied",
+                      None, {"pairing_id": pairing_id})
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+            return self._pairing_public(row), (
+                "confirmed" if allow else "denied")
+
+    def cancel_pairing(self, pairing_id: str) -> tuple[dict[str, Any], bool]:
+        """Owner cancel/revoke before issued (ADR §10.2): created/scanned/
+        confirmed → revoked. Returns (public row, transitioned); revoked →
+        idempotent False; issued → PairingStateError (409 — the device
+        token exists, revoke the DEVICE instead); TTL → 410."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+            if row is None:
+                raise PairingNotFoundError(f"pairing {pairing_id} not found")
+            if self.pairing_row_expired(row):
+                raise PairingExpiredError("pairing TTL exceeded")
+            if row["state"] == "issued":
+                raise PairingStateError(
+                    "pairing already issued — revoke the device session "
+                    "(DELETE /api/devices/{id}) instead")
+            if row["state"] == "revoked":
+                return self._pairing_public(row), False
+            cur = db.execute(
+                "UPDATE pairing_requests SET state='revoked' "
+                "WHERE id=? AND state IN ('created','scanned','confirmed')",
+                (pairing_id,))
+            if cur.rowcount != 1:
+                return self._pairing_public(row), False
+            self._log(db, "pairing.revoked", None,
+                      {"pairing_id": pairing_id})
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+            return self._pairing_public(row), True
+
+    def issue_device_session(
+        self, pairing_id: str, *, ua: str = "", ip: str = "",
+    ) -> tuple[dict[str, Any], str]:
+        """One-shot token issuance on a confirmed pairing (ADR §2.5/§3.2):
+        CAS confirmed → issued + device-session INSERT in ONE transaction.
+        The CAS makes the issuance single-shot — a second exchange finds
+        `issued` and gets 410 upstream; a photo of the QR never gains
+        equal-poll rights. The ≤5-active quota is checked BEFORE the CAS:
+        a 409 leaves the pairing confirmed (retryable after the owner
+        frees a slot). Returns (public device row, mnd_-prefixed token) —
+        the plaintext token exists exactly once, right here.
+
+        The device name comes ONLY from the scan-time row: it is the
+        identity the owner saw and confirmed — a device presenting a
+        different name on the issuance exchange cannot rewrite it."""
+        token = DEVICE_TOKEN_PREFIX + secrets.token_urlsafe(24)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        now_s = now.isoformat(timespec="seconds")
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM pairing_requests WHERE id=?",
+                (pairing_id,)).fetchone()
+            if row is None:
+                raise PairingNotFoundError(f"pairing {pairing_id} not found")
+            if row["state"] in ("expired",) or self.pairing_row_expired(row):
+                raise PairingExpiredError("pairing TTL exceeded")
+            if row["state"] != "confirmed":
+                raise PairingStateError(
+                    f"pairing is {row['state']}, not confirmed")
+            active = db.execute(
+                "SELECT COUNT(*) AS n FROM device_sessions "
+                "WHERE state='active'").fetchone()["n"]
+            if active >= DEVICE_MAX_ACTIVE:
+                raise DeviceQuotaError(
+                    f"active device sessions are capped at "
+                    f"{DEVICE_MAX_ACTIVE} — revoke one (DELETE "
+                    "/api/devices/{id}) and retry the exchange; "
+                    "auto-eviction is not performed")
+            cur = db.execute(
+                "UPDATE pairing_requests SET state='issued' "
+                "WHERE id=? AND state='confirmed'",
+                (pairing_id,))
+            if cur.rowcount != 1:
+                raise PairingStateError(
+                    f"pairing is no longer confirmed (lost the issuance "
+                    f"race)")
+            name = (row["device_name"] or "unnamed device")[:64]
+            device_id = "dev-" + secrets.token_hex(6)
+            while db.execute(
+                    "SELECT 1 FROM device_sessions WHERE id=?",
+                    (device_id,)).fetchone():
+                device_id = "dev-" + secrets.token_hex(6)
+            device = {
+                "id": device_id, "name": name, "scope": row["scope"],
+                "token_hash": token_hash, "created_at": now_s,
+                "last_seen_at": now_s,
+                "expires_at": _iso_in(DEVICE_SLIDING_TTL_S, now),
+                "hard_expires_at": _iso_in(DEVICE_HARD_TTL_S, now),
+                "state": "active", "ua": (ua or "")[:200],
+                "ip": (ip or "")[:64], "last_seen": now_s,
+            }
+            db.execute(
+                """INSERT INTO device_sessions
+                       (id, name, scope, token_hash, created_at,
+                        last_seen_at, expires_at, hard_expires_at, state,
+                        ua, ip, last_seen)
+                       VALUES (:id, :name, :scope, :token_hash, :created_at,
+                        :last_seen_at, :expires_at, :hard_expires_at,
+                        :state, :ua, :ip, :last_seen)""",
+                device)
+            self._log(db, "pairing.issued", None, {
+                "pairing_id": pairing_id, "device_id": device_id,
+                # hash tail identifies the token version in the audit
+                # trail without exposing material (executor precedent)
+                "token_id": token_hash[-8:],
+            })
+            return self._device_public_from(device), token
+
+    @staticmethod
+    def _device_public_from(device: dict[str, Any]) -> dict[str, Any]:
+        """_device_public for a just-minted dict (no Row at hand)."""
+        return {k: v for k, v in device.items() if k != "token_hash"}
+
+    def list_devices(self) -> list[dict[str, Any]]:
+        """All device sessions, public shape (no token hashes), oldest
+        first — the owner list is small and stable-ordered."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM device_sessions ORDER BY created_at, id"
+            ).fetchall()
+        return [self._device_public(r) for r in rows]
+
+    def revoke_device(self, device_id: str) -> tuple[dict[str, Any], bool] | None:
+        """Revoke a device session (terminal — only a new pairing restores
+        access, ADR §5). Returns (public row, transitioned); already
+        revoked/expired → (row, False) idempotent; None when unknown."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM device_sessions WHERE id=?",
+                (device_id,)).fetchone()
+            if row is None:
+                return None
+            cur = db.execute(
+                "UPDATE device_sessions SET state='revoked' "
+                "WHERE id=? AND state='active'",
+                (device_id,))
+            transitioned = cur.rowcount == 1
+            if transitioned:
+                self._log(db, "device.revoked", None, {
+                    "device_id": device_id,
+                    "token_id": row["token_hash"][-8:]})
+                row = db.execute(
+                    "SELECT * FROM device_sessions WHERE id=?",
+                    (device_id,)).fetchone()
+        return self._device_public(row), transitioned
+
+    def validate_device_token(
+        self, token: str, *, ua: str = "", ip: str = "",
+    ) -> dict[str, Any] | None:
+        """Device-token check (ADR §5): sha256 the presented token, index
+        lookup, constant-time compare. Revoked / hard-TTL-passed /
+        sliding-TTL-lapsed tokens answer None (401 upstream) and are
+        lazily flipped to state='expired' when the clock says so. A valid
+        active token slides expires_at forward (30 d) and ticks
+        last_seen/ua/ip — one write per authenticated request, the
+        executor presence-tick pattern."""
+        if not token.startswith(DEVICE_TOKEN_PREFIX):
+            return None
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        now_s = now.isoformat(timespec="seconds")
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM device_sessions WHERE token_hash=?",
+                (digest,)).fetchone()
+            if row is None or not hmac.compare_digest(
+                    row["token_hash"], digest):
+                return None
+            if row["state"] == "revoked":
+                return None
+            if (_iso_past(row["hard_expires_at"], now)
+                    or _iso_past(row["expires_at"], now)):
+                if row["state"] == "active":
+                    db.execute(
+                        "UPDATE device_sessions SET state='expired' "
+                        "WHERE id=? AND state='active'", (row["id"],))
+                return None
+            if row["state"] != "active":
+                return None
+            db.execute(
+                """UPDATE device_sessions
+                   SET last_seen_at=?, last_seen=?, expires_at=?, ua=?, ip=?
+                   WHERE id=? AND state='active'""",
+                (now_s, now_s, _iso_in(DEVICE_SLIDING_TTL_S, now),
+                 (ua or "")[:200], (ip or "")[:64], row["id"]))
+            return self._device_public(row)
+
+    def expire_stale_pairings(self) -> list[dict[str, Any]]:
+        """TTL sweep, pairing side (ADR §10.3 pairing.expired): flip live
+        pairings past expires_at to expired. Returns the transitioned rows
+        (caller emits SSE + notification). CAS per row — a pairing that
+        moved (confirmed→issued) between scan and write is skipped."""
+        now = _now()
+        transitioned: list[dict[str, Any]] = []
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM pairing_requests WHERE state IN "
+                "('created','scanned','confirmed')").fetchall()
+            for row in rows:
+                if not _iso_past(row["expires_at"]):
+                    continue
+                cur = db.execute(
+                    "UPDATE pairing_requests SET state='expired' "
+                    "WHERE id=? AND state IN ('created','scanned','confirmed')",
+                    (row["id"],))
+                if cur.rowcount == 1:
+                    self._log(db, "pairing.expired", None,
+                              {"pairing_id": row["id"]})
+                    transitioned.append(self._pairing_public(row))
+        return transitioned
+
+    def expire_stale_devices(self) -> list[dict[str, Any]]:
+        """TTL sweep, device side: active sessions whose SLIDING or HARD
+        expiry passed flip to expired (the sliding clock only moves on
+        activity — a lapsed session is dead, the device must re-pair).
+        No SSE: the dictionary has no device.* kinds and pairing.* is
+        pairing-scoped (ADR §10.3); revocation events carry device ids,
+        expiry does not. Returns transitioned rows (caller logs)."""
+        now = datetime.now(timezone.utc)
+        transitioned: list[dict[str, Any]] = []
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM device_sessions WHERE state='active'"
+            ).fetchall()
+            for row in rows:
+                if not (_iso_past(row["expires_at"], now)
+                        or _iso_past(row["hard_expires_at"], now)):
+                    continue
+                cur = db.execute(
+                    "UPDATE device_sessions SET state='expired' "
+                    "WHERE id=? AND state='active'", (row["id"],))
+                if cur.rowcount == 1:
+                    self._log(db, "device.expired", None,
+                              {"device_id": row["id"]})
+                    transitioned.append(self._device_public(row))
+        return transitioned
 
     # ------------------------------------------------ automation (SCHED-1 S1)
     # ADR 0013 §2: rule CRUD + journal + manual run-now. NO engine, NO

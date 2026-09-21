@@ -216,10 +216,13 @@ def validate_memory_url(raw: str) -> str:
 
 # ------------------------------------------------------------------- masking
 # Patterns scrubbed before any text reaches the server_log (SEC-2).
+# mnd_ (device tokens, ADR 0012) is masked from day one — the SEC-2 lesson:
+# a secret prefix ships WITH its masking rule, never after the first leak.
 _SECRET_PATTERNS = (
     (re.compile(r"plain:\S+"), "plain:<redacted>"),
     (re.compile(r"(?i)bearer\s+[a-z0-9._~+/\-]+=*"), "Bearer <redacted>"),
     (re.compile(r"\bmnk_[A-Za-z0-9._\-]+"), "mnk_<redacted>"),
+    (re.compile(r"\bmnd_[A-Za-z0-9._\-]+"), "mnd_<redacted>"),
 )
 
 
