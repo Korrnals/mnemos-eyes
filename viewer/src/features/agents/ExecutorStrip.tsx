@@ -14,6 +14,15 @@ import { ACTIVE_ASSIGNMENT_STATES } from "./assignmentStatus";
  * slot stays EMPTY (§4.4 — geometry reserved, no decorative blobs).
  * Presence and assignment life never collapse (§2.1 two-clock rule): an
  * offline chip may well sit above a running row.
+ *
+ * UNKNOWN ≠ offline (AGW-3 review P3-1): without the meta contract the
+ * presence is null — the chip renders NEUTRAL (hollow dot, «присутствие
+ * неизвестно»), never a guessed state.
+ *
+ * Entrance timing (§3.2 «entrance полосы ≤3 чипов, 200ms», AGW-3 review
+ * P3-9 reading): 200 ms PER CHIP (fade duration), staggered 0/70/140 ms —
+ * three chips complete inside ~340 ms wall-clock (delay + duration);
+ * reduced motion users get no transition at all (motion-safe).
  */
 
 /** Semantic aliases only (§3.2 — no new colours): iris / warning / muted. */
@@ -22,12 +31,15 @@ const PRESENCE_DOT: Record<string, string> = {
   stale: "bg-warning",
   // Offline is a HOLLOW dot — shape carries the meaning with the colour.
   offline: "border border-border bg-transparent",
+  // Unknown: the same hollow shape, muted ring — visibly NOT a verdict.
+  unknown: "border border-border-subtle bg-transparent",
 };
 
 const PRESENCE_TEXT: Record<string, string> = {
   online: "text-foreground-secondary",
   stale: "text-foreground-secondary",
   offline: "text-foreground-muted",
+  unknown: "text-foreground-muted",
 };
 
 export function ExecutorStrip({
@@ -36,6 +48,8 @@ export function ExecutorStrip({
   assignments,
   selectedId,
   onSelect,
+  loading = false,
+  error = false,
 }: {
   executors: readonly ExecutorItem[];
   meta: ExecutorListMeta | undefined;
@@ -43,17 +57,42 @@ export function ExecutorStrip({
   assignments: readonly AssignmentItem[];
   selectedId: string | null;
   onSelect: (executorId: string | null) => void;
+  /** Registry loading — a skeleton, NOT the poller empty state. */
+  loading?: boolean;
+  /** Registry failed — an error line, NOT the poller empty state. */
+  error?: boolean;
 }) {
   const t = useT();
   const now = useValidationNow();
-  // Entrance ≤3 chips staggered inside 200 ms (§3.2 Motion); reduced-motion
-  // users see the strip appear with no transition (motion-safe gate).
+  // Entrance stagger (see the docblock timing note).
   const [entered, setEntered] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setEntered(true), 0);
     return () => clearTimeout(timer);
   }, []);
 
+  if (loading) {
+    // Static placeholders — NO ambient pulse (§3.2 Motion forbids ambient
+    // animation; skeletons here are geometry, not motion).
+    return (
+      <div
+        role="status"
+        aria-label={t("agents.strip.label")}
+        className="flex min-h-16 items-center gap-1.5 rounded-md border border-border-subtle px-3"
+      >
+        <span className="h-8 w-40 rounded-md bg-elevated/60" />
+        <span className="h-8 w-40 rounded-md bg-elevated/60" />
+        <span className="h-8 w-40 rounded-md bg-elevated/60" />
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <p role="alert" className="min-h-16 py-3 text-sm text-error">
+        {t("agents.strip.error")}
+      </p>
+    );
+  }
   if (executors.length === 0) {
     return (
       <div
@@ -88,13 +127,18 @@ export function ExecutorStrip({
             ? t("agents.strip.transportMesh")
             : t("agents.strip.transportLocal");
         const pulseAge =
-          ageS !== null
+          ageS !== null && presence !== null
             ? formatPulseAge(ageS, {
                 minutes: t("agents.age.unitMinutes"),
                 hours: t("agents.age.unitHours"),
                 days: t("agents.age.unitDays"),
               })
             : "";
+        const presenceKey = presence ?? "unknown";
+        const capabilities =
+          executor.capabilities.length > 0
+            ? executor.capabilities.join(", ")
+            : t("agents.executor.noCapabilities");
         return (
           <li key={executor.id}>
             <button
@@ -104,6 +148,7 @@ export function ExecutorStrip({
               title={[
                 executor.name,
                 executor.harness,
+                capabilities,
                 transport,
                 `${t("agents.strip.lastSeen")}: ${pulseAge || t("agents.executor.neverSeen")}`,
                 t("agents.identity.tooltip"),
@@ -123,13 +168,13 @@ export function ExecutorStrip({
               <span aria-hidden="true" className="size-6 shrink-0 rounded-full border border-dashed border-border-subtle" />
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="flex items-center gap-1.5">
-                  {/* Presence dot: colour + shape (hollow offline); the label
-                   * below is the SR text (WCAG 1.4.1). */}
+                  {/* Presence dot: colour + shape (hollow offline/unknown);
+                   * the label below is the SR text (WCAG 1.4.1). */}
                   <span
                     aria-hidden="true"
                     className={
                       "size-2 shrink-0 rounded-full " +
-                      (PRESENCE_DOT[presence ?? "offline"] ?? PRESENCE_DOT.offline)
+                      (PRESENCE_DOT[presenceKey] ?? PRESENCE_DOT.unknown)
                     }
                   />
                   <span className="max-w-40 truncate font-medium">{executor.name}</span>
@@ -143,15 +188,17 @@ export function ExecutorStrip({
                 <span
                   className={
                     "font-mono text-xs " +
-                    (PRESENCE_TEXT[presence ?? "offline"] ?? PRESENCE_TEXT.offline)
+                    (PRESENCE_TEXT[presenceKey] ?? PRESENCE_TEXT.unknown)
                   }
                 >
                   <span className="sr-only">
-                    {presence === "online"
+                    {presenceKey === "online"
                       ? t("agents.presence.online")
-                      : presence === "stale"
+                      : presenceKey === "stale"
                         ? t("agents.presence.stale")
-                        : t("agents.presence.offline")}
+                        : presenceKey === "offline"
+                          ? t("agents.presence.offline")
+                          : t("agents.presence.unknown")}
                     {pulseAge ? ` · ${pulseAge}` : ""}
                   </span>
                   <span aria-hidden="true">{pulseAge}</span>

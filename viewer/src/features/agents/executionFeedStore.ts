@@ -30,6 +30,8 @@ export const FEED_CAP = 200;
 export interface FeedItem {
   /** Stable id (kind + subject + receipt seq). */
   readonly id: string;
+  /** Numeric receipt sequence — the freshness/tie-break key (AGW-3 P2-2). */
+  readonly seq: number;
   readonly kind:
     | "assignment.created"
     | "assignment.claimed"
@@ -65,9 +67,10 @@ export function pushFeedItem(
   return next.length > cap ? next.slice(next.length - cap) : next;
 }
 
-/** Newest-first presentation order (stable: receipt seq breaks ties). */
+/** Newest-first presentation order (numeric receipt seq breaks ties —
+ * string ids would order "10" before "9"). */
 export function sortFeed(items: readonly FeedItem[]): FeedItem[] {
-  return [...items].sort((a, b) => b.ts.localeCompare(a.ts) || b.id.localeCompare(a.id));
+  return [...items].sort((a, b) => b.ts.localeCompare(a.ts) || b.seq - a.seq);
 }
 
 type Listener = () => void;
@@ -113,6 +116,7 @@ export function feedItemFromEvent(
     const kind = typeof report.kind === "string" ? report.kind : "intermediate";
     return {
       id: `report-${event.task_id}-${ts}-${seq}`,
+      seq,
       kind: "report",
       ts,
       taskId: event.task_id,
@@ -133,6 +137,7 @@ export function feedItemFromEvent(
   const assignmentState = typeof assignment.state === "string" ? assignment.state : "";
   return {
     id: `${event.kind}-${assignmentId}-${seq}`,
+    seq,
     kind: event.kind,
     ts: new Date(receivedAt).toISOString(),
     taskId: event.task_id,

@@ -9,9 +9,11 @@ import {
 } from "./reaperThresholds";
 
 /**
- * Amber/countdown boundary arithmetic (spec §3.1) against the server-mirror
- * thresholds — the constants themselves are pinned here so a silent change
- * to reaperThresholds.ts cannot drift unnoticed against store.py.
+ * Honest timing semantics (AGW-3 review P1-1/P2-1/P3-3): amber ONLY on a
+ * real breach; the queued 30-min boundary is NOTIFICATION-ONLY (the row
+ * never expires — store.py "state stays queued"); an unstamped claim gets
+ * no arithmetic at all. The server-mirror constants are pinned so a drift
+ * against store.py cannot slip by unnoticed.
  */
 
 const NOW = Date.parse("2026-09-19T09:00:00+00:00");
@@ -50,24 +52,27 @@ describe("reaperThresholds — the server mirror (store.py)", () => {
   });
 });
 
-describe("assignmentRowTiming — claimed (no start)", () => {
-  it("neutral mid-life, amber in the near-reaper window, amber after the breach", () => {
-    // 200 s in: 400 s to the reaper — comfortably neutral.
+describe("assignmentRowTiming — claimed (P2-1: breach-only amber)", () => {
+  it("mid-life: neutral, the countdown stays as NEUTRAL text", () => {
     const fresh = assignmentRowTiming(
       assignment({ state: "claimed", claimed_at: ago(200) }),
       NOW,
     );
     expect(fresh.warning).toBe(false);
     expect(fresh.countdownS).toBe(400);
+    expect(fresh.queuedHint).toBe(false);
+  });
 
-    // 301 s in: 299 s left — inside the urgent window («приближение»).
+  it("the near-reaper window (5 min to go) is STILL neutral — no preventive amber", () => {
     const urgent = assignmentRowTiming(
-      assignment({ state: "claimed", claimed_at: ago(CLAIM_NO_START_AFTER_S - 299) }),
+      assignment({ state: "claimed", claimed_at: ago(CLAIM_NO_START_AFTER_S - 60) }),
       NOW,
     );
-    expect(urgent.warning).toBe(true);
+    expect(urgent.warning).toBe(false); // P2-1: only the breach ambers
+    expect(urgent.countdownS).toBe(60);
+  });
 
-    // Breached: >10 min without a start — amber + overdue countdown.
+  it("BREACH: >10 min without a start — amber + overdue countdown", () => {
     const breached = assignmentRowTiming(
       assignment({ state: "claimed", claimed_at: ago(CLAIM_NO_START_AFTER_S + 1) }),
       NOW,
@@ -75,10 +80,23 @@ describe("assignmentRowTiming — claimed (no start)", () => {
     expect(breached.warning).toBe(true);
     expect(breached.countdownS).toBe(-1); // «истёк — ждёт жнеца» copy branch
   });
+
+  it("NO claim stamp → no arithmetic at all (P3-3: the server never reaps these)", () => {
+    const unstamped = assignmentRowTiming(
+      assignment({ state: "claimed", claimed_at: null, created_at: ago(9999) }),
+      NOW,
+    );
+    expect(unstamped).toEqual({
+      ageS: null,
+      countdownS: null,
+      warning: false,
+      queuedHint: false,
+    });
+  });
 });
 
 describe("assignmentRowTiming — running (pulse)", () => {
-  it("neutral pulse under 2 min, amber beyond; countdown to the 30-min reaper", () => {
+  it("neutral pulse under 2 min, amber beyond; countdown to the reaper", () => {
     const fresh = assignmentRowTiming(
       assignment({ state: "running", heartbeat_at: ago(PULSE_STALE_AFTER_S - 1) }),
       NOW,
@@ -92,40 +110,51 @@ describe("assignmentRowTiming — running (pulse)", () => {
     );
     expect(stale.warning).toBe(true);
   });
-
-  it("the near-reaper window is amber even with a fresh pulse", () => {
-    // Pulse 25 min old: not stale by the 2-min rule, but only 5 min to the
-    // reaper — «приближение к жнецу» turns the countdown urgent (spec §3.1).
-    const near = assignmentRowTiming(
-      assignment({ state: "running", heartbeat_at: ago(1500) }),
-      NOW,
-    );
-    expect(near.warning).toBe(true);
-    expect(near.countdownS).toBe(300);
-  });
 });
 
-describe("assignmentRowTiming — queued and terminal", () => {
-  it("queued stays neutral; the countdown appears only near the 30-min reaper", () => {
-    const calm = assignmentRowTiming(assignment({ state: "queued" }), NOW + 60_000);
-    expect(calm.warning).toBe(false);
-    expect(calm.countdownS).toBeNull(); // hidden — nothing urgent
+describe("assignmentRowTiming — queued (P1-1: notify-only, never expires)", () => {
+  it("young queue: plain age, no countdown, no hint, no amber", () => {
+    const calm = assignmentRowTiming(
+      assignment({ state: "queued", created_at: ago(60) }),
+      NOW,
+    );
+    expect(calm).toEqual({ ageS: 60, countdownS: null, warning: false, queuedHint: false });
+  });
 
+  it("nearing 30 min: the NEUTRAL notify hint appears — NO countdown, NO amber", () => {
     const near = assignmentRowTiming(
       assignment({ state: "queued", created_at: ago(QUEUED_REAP_AFTER_S - 240) }),
       NOW,
     );
-    expect(near.warning).toBe(true);
-    expect(near.countdownS).toBe(240);
+    expect(near.warning).toBe(false);
+    expect(near.countdownS).toBeNull(); // there is nothing to expire
+    expect(near.queuedHint).toBe(true);
   });
 
+  it("PAST the 30-min boundary: STILL no amber — the row waits, it does not die", () => {
+    const past = assignmentRowTiming(
+      assignment({ state: "queued", created_at: ago(QUEUED_REAP_AFTER_S + 3600) }),
+      NOW,
+    );
+    expect(past.warning).toBe(false);
+    expect(past.countdownS).toBeNull();
+    expect(past.queuedHint).toBe(true); // the hint stays honest forever
+  });
+});
+
+describe("assignmentRowTiming — terminal", () => {
   it("terminal rows carry no timing (the finish stamp is the fact)", () => {
     for (const state of ["done", "failed", "cancelled", "expired"] as const) {
       const timing = assignmentRowTiming(
         assignment({ state, finished_at: ago(60) }),
         NOW,
       );
-      expect(timing).toEqual({ ageS: null, countdownS: null, warning: false });
+      expect(timing).toEqual({
+        ageS: null,
+        countdownS: null,
+        warning: false,
+        queuedHint: false,
+      });
     }
   });
 });

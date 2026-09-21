@@ -71,15 +71,16 @@ export function routingReasonKey(reason: string): TranslationKey {
 
 /**
  * The timestamp one state's age line counts from (spec §3.1): queued ages
- * from creation, claimed from the claim, running from the LAST PULSE
- * (heartbeat, started as the fallback); terminal rows have no age line.
+ * from creation, claimed from the CLAIM STAMP ALONE (no stamp — no age:
+ * the server never reaps an unstamped claim, P3-3), running from the LAST
+ * PULSE (heartbeat, started as the fallback); terminal rows have no age.
  */
 export function ageAnchorOf(row: AssignmentItem): string | null {
   switch (row.state) {
     case "queued":
       return row.created_at || null;
     case "claimed":
-      return row.claimed_at || row.created_at || null;
+      return row.claimed_at || null;
     case "running":
       return row.heartbeat_at || row.started_at || row.claimed_at || null;
     default:

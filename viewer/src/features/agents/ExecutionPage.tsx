@@ -146,10 +146,13 @@ export function ExecutionPage() {
     [activeRows, queuedRows, terminalRows, terminalCollapsed],
   );
 
-  // j/k walk the displayed rows; typing surfaces keep their keys.
+  // j/k walk the displayed rows; typing surfaces keep their keys; the
+  // drawer owns the keyboard while it is open (review P3-9 — j/k would
+  // fight the drawer's own Esc/Tab handling otherwise).
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "j" && event.key !== "k") return;
+      if (drawerRow !== null) return;
       const target = event.target as HTMLElement | null;
       if (
         target &&
@@ -169,7 +172,7 @@ export function ExecutionPage() {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [displayed.length]);
+  }, [displayed.length, drawerRow]);
 
   const restart = (row: AssignmentItem): void => {
     // Retry opens the FAILED attempt's task sheet, pre-filled verbatim —
@@ -205,13 +208,17 @@ export function ExecutionPage() {
         ) : null}
       </header>
 
-      {/* Layer 1: the presence strip (§1.1 — the one bold element). */}
+      {/* Layer 1: the presence strip (§1.1 — the one bold element). Loading
+       * and error show their own honest states — never the poller empty
+       * hint (review P3-4). */}
       <ExecutorStrip
         executors={executorItems}
         meta={executors.data?.meta}
         assignments={assignments.data?.items ?? []}
         selectedId={executorFilter}
         onSelect={setExecutorFilter}
+        loading={executors.isPending}
+        error={executors.isError}
       />
 
       {/* Filters: state chips + specialist (client) + text search. */}

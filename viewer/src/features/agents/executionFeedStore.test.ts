@@ -83,6 +83,7 @@ describe("pushFeedItem / sortFeed — cap and interleaving", () => {
     for (let index = 0; index < FEED_CAP + 25; index += 1) {
       items = pushFeedItem(items, {
         id: `row-${index}`,
+        seq: index + 1,
         kind: "assignment.created",
         ts: new Date(RECEIVED + index * 1000).toISOString(),
         taskId: `T-${index}`,
@@ -106,6 +107,24 @@ describe("pushFeedItem / sortFeed — cap and interleaving", () => {
       "assignment.claimed", // receipt 09:00 beats the report's 08:58
       "report",
     ]);
+  });
+
+  it("breaks equal-ts ties by the NUMERIC seq — never string ids (P3-8)", () => {
+    const at = "2026-09-19T09:00:00+00:00";
+    const row = (seq: number) => ({
+      id: `assignment.created-9-${seq}`,
+      seq,
+      kind: "assignment.created" as const,
+      ts: at,
+      taskId: "TB-1",
+      assignmentId: "9",
+      actor: null,
+      state: "queued",
+      terminal: false,
+      body: null,
+    });
+    // Same ts, seq 9 vs 10: numeric order must hold ("10" < "9" as strings).
+    expect(sortFeed([row(9), row(10)]).map((item) => item.seq)).toEqual([10, 9]);
   });
 });
 

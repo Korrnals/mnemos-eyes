@@ -37,22 +37,21 @@ export function ExecutionFeedPanel() {
   // Which row ids are still inside the fresh window (flash-fade driver).
   const [freshIds, setFreshIds] = useState<readonly string[]>([]);
   const [lastTerminal, setLastTerminal] = useState<string | null>(null);
-  const seenCountRef = useRef(snapshot.items.length);
+  // AGW-3 review P2-2: freshness is detected by the numeric receipt SEQ,
+  // never by buffer length — once the ring saturates (FEED_CAP) the length
+  // stops growing, but seq keeps climbing and new rows still flash/speak.
+  const seenSeqRef = useRef(0);
 
   useEffect(() => {
     return subscribeFeed(() => setSnapshot(readFeed()));
   }, []);
 
-  // New rows (buffer GROWTH only) get the highlight for FRESH_MS — visual
-  // tint only, rows never move (§3.2); terminal newcomers also go aloud.
+  // Rows with seq ABOVE the last seen one are new (visual tint only, rows
+  // never move, §3.2); terminal newcomers also go aloud.
   useEffect(() => {
-    const previous = seenCountRef.current;
-    if (snapshot.items.length <= previous) {
-      seenCountRef.current = snapshot.items.length;
-      return;
-    }
-    const newest = snapshot.items.slice(previous);
-    seenCountRef.current = snapshot.items.length;
+    const newest = snapshot.items.filter((item) => item.seq > seenSeqRef.current);
+    if (newest.length === 0) return;
+    seenSeqRef.current = snapshot.items.reduce((max, item) => Math.max(max, item.seq), 0);
     setFreshIds(newest.map((item) => item.id));
     const terminal = newest.find((item) => item.terminal);
     if (terminal) setLastTerminal(feedLine(terminal, t, lang));

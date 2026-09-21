@@ -176,13 +176,11 @@ export function buildRoutes(): RouteObject[] {
 
         // Агенты domain (AGW-3, spec 2026-09-19 §1): the root is an ALIAS —
         // replace-redirect to the execution view (no overview dashboard:
-        // «кто чем занят прямо сейчас»). The layout route owns the domain
-        // SSE bridge; /agents/specialists and /agents/harnesses slot in as
-        // sibling children when their waves land (nothing here excludes them).
-        {
-          path: "/agents",
-          element: <Navigate to="/agents/execution" replace />,
-        },
+        // «кто чем занят прямо сейчас»). ONE route object (review P3-7 —
+        // the former duplicate path is gone): the layout owns the domain
+        // SSE bridge, the index child redirects to the execution view, and
+        // /agents/specialists + /agents/harnesses slot in as sibling
+        // children when their waves land (nothing here excludes them).
         {
           path: "/agents",
           element: (
@@ -190,7 +188,10 @@ export function buildRoutes(): RouteObject[] {
               <AgentsLayout />
             </Page>
           ),
-          children: [{ path: "execution", element: <AgentsExecutionPage /> }],
+          children: [
+            { index: true, element: <Navigate to="/agents/execution" replace /> },
+            { path: "execution", element: <AgentsExecutionPage /> },
+          ],
         },
 
         // Система domain (temporary honest home for the legacy views).

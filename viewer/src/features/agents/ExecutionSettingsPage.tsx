@@ -46,7 +46,12 @@ export function ExecutionSettingsPage() {
   const items = executors.data?.items ?? [];
   const meta = executors.data?.meta;
 
-  /** Server gate mirror (§2.3): a default must be selectable RIGHT NOW. */
+  /**
+   * Server gate mirror (§2.3; review P3-6: the `_validate_default_executor`
+   * gate demands STRICTLY online — stale blocks too): a default must be
+   * approved, enabled, online NOW and travel local-poll. Unknown presence
+   * (no meta) reads as not-selectable — never a guess.
+   */
   const selectableReason = (id: string): string | null => {
     const row = items.find((candidate) => candidate.id === id);
     if (!row) return null;
@@ -54,8 +59,19 @@ export function ExecutionSettingsPage() {
     if (row.state === "revoked") return t("agents.executor.revokedReason");
     if (!row.enabled) return t("agents.executor.disabledReason");
     const presence = presenceFromLastSeen(row.last_seen, meta, now);
-    if (presence === "offline" || presence === null) {
+    if (presence !== "online") {
       const ageS = lastSeenAgeS(row.last_seen, now);
+      if (presence === "stale") {
+        return ageS !== null
+          ? t("agents.executor.staleReason", {
+              age: formatPulseAge(ageS, {
+                minutes: t("agents.age.unitMinutes"),
+                hours: t("agents.age.unitHours"),
+                days: t("agents.age.unitDays"),
+              }),
+            })
+          : t("agents.executor.staleShort");
+      }
       return ageS !== null
         ? t("agents.executor.offlineReason", {
             age: formatPulseAge(ageS, {
@@ -79,7 +95,11 @@ export function ExecutionSettingsPage() {
       fallback_executor: fallbackIdShown,
       scope: "",
     };
-    mutations.saveExecutionSettings(payload, { onSettled: () => setSaving(false) });
+    // Review P3-6b: `dirty` pins the local selects ONLY on a successful
+    // save — a 422 (gate refusal) leaves the form on the loaded values.
+    mutations.saveExecutionSettings(payload, {
+      onSettled: () => setSaving(false),
+    });
     setDirty(true);
   };
 

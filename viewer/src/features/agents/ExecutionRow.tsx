@@ -14,7 +14,7 @@ import {
   formatAge,
   routingReasonKey,
 } from "./assignmentStatus";
-import { assignmentRowTiming, timingCountdownMinutes } from "./assignmentTiming";
+import { assignmentRowTiming, queuedHintMinutes, timingCountdownMinutes } from "./assignmentTiming";
 import { AssignmentStateBadge } from "./AssignmentStateBadge";
 
 /**
@@ -121,15 +121,13 @@ export function ExecutionRow({
         )}
 
         <span className="ml-auto flex items-center gap-2">
-          {/* Mono age/heartbeat; amber only on a real breach (§2.1). */}
+          {/* Mono age/heartbeat; amber ONLY on a real breach (§2.1) — the
+           * queued notify-boundary hint stays neutral (server truth: the
+           * row never expires). */}
           <span
             className={
               "whitespace-nowrap font-mono text-xs " +
-              (timing.warning
-                ? "text-warning"
-                : terminal
-                  ? "text-foreground-muted"
-                  : "text-foreground-muted")
+              (timing.warning ? "text-warning" : "text-foreground-muted")
             }
           >
             {terminal
@@ -140,12 +138,17 @@ export function ExecutionRow({
                 ? t(ageLabelKey(row.state), {
                     age: `${age.display} ${t(age.unitKey)}`,
                   })
-                : ""}
+                : row.state === "claimed"
+                  ? t("agents.timing.noClaimStamp")
+                  : ""}
             {countdownMin !== null
               ? ` · ${t("agents.timing.expiresIn", { minutes: countdownMin })}`
               : ""}
             {row.state === "claimed" && timing.warning && timing.countdownS !== null && timing.countdownS <= 0
               ? ` · ${t("agents.timing.reapOverdue")}`
+              : ""}
+            {timing.queuedHint
+              ? ` · ${t("agents.timing.queuedNotifyHint", { minutes: queuedHintMinutes(row, now) })}`
               : ""}
           </span>
 
