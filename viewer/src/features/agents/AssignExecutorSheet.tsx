@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { BoardTask, ExecutorItem } from "@/gateway/boardTypes";
 import { resolveRoutingAnnotation } from "@/gateway/routing";
 import { useI18n, useT } from "@/i18n";
@@ -187,9 +187,12 @@ function AssignExecutorForm({
   return (
     <>
       <DialogTitle>{t("agents.sheet.title")}</DialogTitle>
-      <p className="-mt-2 text-xs text-foreground-muted">
+      {/* AGW-2 review P3-3: the visible subtitle IS the DialogDescription —
+       * Radix links it via aria-describedby (no console warning, richer SR);
+       * one text, no sr-only duplicate. */}
+      <DialogDescription className="-mt-2 text-xs text-foreground-muted">
         {t("agents.sheet.subtitle", { id: task.id })}
-      </p>
+      </DialogDescription>
 
         {/* Step 1: specialist (free entry + datalist of known roles — the
          * API has no specialist directory, the board union IS the candidate

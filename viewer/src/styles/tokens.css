@@ -70,7 +70,11 @@
   --color-confidence-dim: #e8c98a;
 
   --color-success: #1d6e48;
-  --color-warning: #946018;
+  /* AGW-2 review P2-1: one step darker than the old #946018 — the /15 badge
+   * tint (terminal `expired`, spec §3.1) needs ≥4.5:1 and #946018 gave 4.34;
+   * #8a5a17 gives 4.77 on the tint, 5.22 on elevated, 5.90 on white (the
+   * pure-surface uses only improved — verified in tokens.test.ts). */
+  --color-warning: #8a5a17;
   --color-error: #8a2020;
   --color-info: #1a8a96;
 

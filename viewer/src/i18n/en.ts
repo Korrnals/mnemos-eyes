@@ -595,6 +595,7 @@ export const en: Record<TranslationKey, string> = {
   "agents.identity.tooltip": "Identity declared by the executor, never verified by the server",
   "agents.routing.resolvedRow": "route: {{name}} · {{reason}}",
   "agents.routing.unmatchedRow": "waiting for an executor",
+  "agents.routing.waitsOffline": "waiting for an executor (offline {{age}})",
   "agents.routing.previewLabel": "Route preview",
   "agents.routing.previewResolved": "{{name}} · {{reason}}",
   "agents.routing.previewUnmatched":

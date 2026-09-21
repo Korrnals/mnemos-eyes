@@ -606,6 +606,7 @@ export const ru = {
   "agents.identity.tooltip": "Личность заявлена исполнителем, сервером не проверена",
   "agents.routing.resolvedRow": "маршрут: {{name}} · {{reason}}",
   "agents.routing.unmatchedRow": "ждёт исполнителя",
+  "agents.routing.waitsOffline": "ждёт исполнителя (офлайн {{age}})",
   "agents.routing.previewLabel": "Превью маршрута",
   "agents.routing.previewResolved": "{{name}} · {{reason}}",
   "agents.routing.previewUnmatched":

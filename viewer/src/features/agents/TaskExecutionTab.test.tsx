@@ -79,7 +79,7 @@ function allStates(): AssignmentItem[] {
       state: "failed",
       finished_at: "2026-09-19T06:00:00+00:00",
       note: "boom",
-      routing: { resolved: "exec-copilot-revoked", reason: "explicit" },
+      routing: { resolved: "exec-mesh-qa", reason: "explicit" },
     }),
     assignment({
       id: 6,
@@ -91,7 +91,7 @@ function allStates(): AssignmentItem[] {
       id: 7,
       state: "expired",
       finished_at: "2026-09-19T04:00:00+00:00",
-      routing: { resolved: "exec-old-poller", reason: "auto" },
+      routing: { resolved: "exec-mesh-qa", reason: "auto" },
     }),
   ];
 }
@@ -195,6 +195,26 @@ describe("TaskExecutionTab — state matrix + identity + routing (renderToString
     // Unmatched renders exactly once (the queued row; terminal null-routing
     // rows would also fall back — this fixture gives them real routes).
     expect(html.match(/waiting for an executor/g)).toHaveLength(1);
+  });
+
+  it("P3-1 (SSR shape): an offline-resolved route carries the wait chip (no age pre-tick)", async () => {
+    // renderToString runs before the shared 1 Hz ticker subscribes (now=0),
+    // so the age is honestly absent — the chip itself must already be there.
+    const client = await makeClient([
+      assignment({
+        id: 9,
+        state: "queued",
+        routing: { resolved: "exec-old-poller", reason: "global-default" },
+      }),
+    ]);
+    const task = await tb10(new MockAdapter({ latency: false }));
+    const html = renderToString(
+      <Providers client={client}>
+        <TaskExecutionTab task={task} />
+      </Providers>,
+    );
+    expect(html).toContain("route: zcode@old-laptop");
+    expect((html.match(/waiting for an executor/g) ?? []).length).toBe(1); // the chip
   });
 
   it("actions: cancel only on active rows, retry only on failed/expired", async () => {

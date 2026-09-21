@@ -63,8 +63,9 @@ export function TaskExecutionTab({ task }: { task: BoardTask }) {
   const items = [...(assignments.data?.items ?? [])].sort(assignmentOrder);
   const active = items.find((row) => ACTIVE_ASSIGNMENT_STATES.includes(row.state));
   const accepts = taskAcceptsAssignments(task);
+  const executorRows = executors.data?.items ?? [];
   const executorName = (id: string): string =>
-    (executors.data?.items ?? []).find((row) => row.id === id)?.name ?? id;
+    executorRows.find((row) => row.id === id)?.name ?? id;
 
   const openFreshSheet = (): void => {
     setPrefill(null);
@@ -146,7 +147,7 @@ export function TaskExecutionTab({ task }: { task: BoardTask }) {
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                 {identityChip(row, executorName, t)}
-                {routingSignature(row, executorName, t)}
+                {routingSignature(row, executorName, executorRows, now, t)}
                 <span className="ml-auto flex items-center gap-1">
                   {ACTIVE_ASSIGNMENT_STATES.includes(row.state) ? (
                     <Button
@@ -242,22 +243,47 @@ function identityChip(
   return null;
 }
 
-/** «резолвится к X (правило)» / «ждёт исполнителя» — server annotation. */
+/**
+ * «резолвится к X (правило)» / «ждёт исполнителя» — server annotation.
+ * AGW-2 review P3-1: when the route RESOLVES but into a not-online executor
+ * (the owner's offline default — no silent substitution), the row carries
+ * the WAIT chip with the offline age — the fact-side twin of the sheet's
+ * previewWaits note. Presence and row life stay separate facts (§2.1).
+ */
 function routingSignature(
   row: AssignmentItem,
   executorName: (id: string) => string,
+  executorRows: readonly { id: string; last_seen: string; presence: string }[],
+  now: number,
   t: ReturnType<typeof useT>,
 ) {
   const routing = row.routing;
   if (!routing || routing.resolved === null) {
     return <span className="text-foreground-muted">{t("agents.routing.unmatchedRow")}</span>;
   }
+  const executor = executorRows.find((candidate) => candidate.id === routing.resolved);
+  // The registry row is the authoritative presence; an id gone from the
+  // registry reads as not-online (deleted executors keep their pins).
+  const offline = !executor || executor.presence !== "online";
+  const age =
+    offline && executor && now > 0 ? formatAge(executor.last_seen, now) : null;
   return (
-    <span className="text-foreground-secondary">
-      {t("agents.routing.resolvedRow", {
-        name: executorName(routing.resolved),
-        reason: t(routingReasonKey(routing.reason)),
-      })}
+    <span className="flex flex-wrap items-center gap-x-2 text-foreground-secondary">
+      <span>
+        {t("agents.routing.resolvedRow", {
+          name: executorName(routing.resolved),
+          reason: t(routingReasonKey(routing.reason)),
+        })}
+      </span>
+      {offline ? (
+        <span className="rounded-sm border border-border px-1.5 py-0.5 text-xs text-foreground-secondary">
+          {age
+            ? t("agents.routing.waitsOffline", {
+                age: `${age.display} ${t(age.unitKey)}`,
+              })
+            : t("agents.routing.unmatchedRow")}
+        </span>
+      ) : null}
     </span>
   );
 }
