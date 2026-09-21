@@ -232,6 +232,9 @@ export class MockAdapter implements MemoryGateway {
       ok: true,
       service: "vesmaro-eyes",
       board_tasks: MOCK_TRACES.length,
+      // The mock gateway serves no live server: honest absence — the Sidebar
+      // version label hides when the field is absent.
+      app_version: null,
       servers: [
         {
           name: "mock-store",

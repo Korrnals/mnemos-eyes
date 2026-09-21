@@ -451,6 +451,8 @@ describe("BoardAdapter wire contract", () => {
       ok: true,
       service: "vesmaro-eyes",
       board_tasks: 11,
+      // legacy corpus (no app_version yet) → honest null
+      app_version: null,
       servers: [
         {
           name: "stub-store",

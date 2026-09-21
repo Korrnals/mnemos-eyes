@@ -614,7 +614,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.12.1", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.12.2", lifespan=lifespan)
 
 # ------------------------------------- device-token scope guard (ADR 0012 §5)
 # The single scope middleware for PREFIX-CLASSIFIED tokens, standing
@@ -1547,6 +1547,10 @@ async def health() -> dict[str, Any]:
     return {
         "ok": True,
         "service": "vesmaro-eyes",
+        # Single version source (archcom C5: FastAPI(version=...)) exposed
+        # for the UI version label (owner feedback: «какая версия перед
+        # глазами» — Sidebar footer). Additive field.
+        "app_version": app.version,
         "board_tasks": sum(store.board()["counts"].values()),
         "servers": per_server,
         "groups": store.list_groups(),

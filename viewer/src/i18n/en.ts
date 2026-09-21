@@ -40,6 +40,8 @@ export const en: Record<TranslationKey, string> = {
   // Session-aware mode line (fix/login-feedback) — see ru.ts.
   "nav.modeReadOnly": "read-only",
   "nav.modeActive": "session active",
+  // Sidebar version label (owner feedback) — see ru.ts.
+  "nav.versionAria": "App version {{version}}",
   "shell.skipToContent": "Skip to content",
   "shell.viewFell": "This view fell into the well",
   "shell.tryAgain": "Try again",
