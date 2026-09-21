@@ -49,4 +49,11 @@ EXPOSE 8080
 HEALTHCHECK --interval=60s --timeout=12s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=10).status==200 else 1)"
 
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8080"]
+# --proxy-headers: behind the k3s traefik ingress the socket peer is the
+# ingress pod, not the client — without this, client-IP keyed controls
+# (pairing source-IP binding, per-IP rate limits) see one shared address.
+# Whom to trust is scoped by FORWARDED_ALLOW_IPS (values.yaml extraEnv):
+# "*" is safe because the chart NetPol admits ingress traffic from the
+# traefik namespace only (the LAN diagnostics window ships disabled).
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8080", \
+     "--proxy-headers"]
