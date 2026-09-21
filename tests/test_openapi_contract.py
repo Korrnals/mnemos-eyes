@@ -57,6 +57,8 @@ class TestSchemasPresent:
         "AutomationSettingsBody", "RuleDeletedOut",
         # W5 (ROADMAP-v2 §5): mesh nodes as observable entities
         "MeshNodeOut", "MeshNodesOut", "MeshNodeHealthOut", "MeshNodeSpec",
+        # CV-6 Wave 1b (Agents §5): cross-task report feed for codegen
+        "ReportsFeedOut",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)

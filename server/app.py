@@ -558,7 +558,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.11.4", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.11.5", lifespan=lifespan)
 
 # --------------------------------------------------- security headers (Ф0a)
 # АРХКОМ-3 decision 13 / security verdict §5.2: on EVERY response — CSP,
@@ -955,6 +955,18 @@ class ReportsOut(_ApiModel):
     task_id: str
     count: int
     items: list[ReportOut]
+
+
+# CV-6 (Agents §5): cross-task report feed — same row shape as ReportsOut
+# minus the addressed task_id (the feed spans tasks; a per-item task_id
+# rides inside every ReportOut row).
+class ReportsFeedOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[ReportOut]
+    # uniform cursor canon (§11, as MemoryListOut/LaunchesOut): true when
+    # the requested limit was silently capped at the page cap.
+    truncated: bool = False
 
 
 # Agent-bridge assignment contract (ADR 0009 phase 1). The public
@@ -2602,7 +2614,10 @@ async def create_task_report(task_id: str, body: ReportCreate,
     _notify_and_broadcast(
         "work", f"{task_id}: отчёт агента ({body.kind})",
         report["body"][:120], task_id,
-        {"kind": "report", "task_id": task_id,
+        # actor = declared identity (ADR 0009 §8: unverified self-assertion).
+        # Agents spec §5 p.7: one uniform actor field across execution
+        # events — this closes the kind:"report" gap. Additive field.
+        {"kind": "report", "task_id": task_id, "actor": body.agent,
          "report": {**report, "body": report["body"][:200]}},
     )
     return {"ok": True, "report": report, "superseded": superseded_ids}
@@ -2616,6 +2631,49 @@ async def list_task_reports(task_id: str) -> ReportsOut:
         raise HTTPException(404, "task not found")
     return {"ok": True, "task_id": task_id,
             "count": len(reports), "items": reports}
+
+
+# Cross-task feed page size (CV-6). Above the cap the limit is silently
+# clamped — board convention (GET /api/archive), not a 422: a live feed
+# must tolerate an aggressive client asking for everything.
+_REPORTS_FEED_PAGE_CAP = 200
+
+
+@app.get("/api/reports")
+async def reports_feed(
+    limit: int = Query(50, ge=1),
+    before_id: int | None = None,
+    task_id: str = "",
+    kind: str = "",
+    include_superseded: bool = False,
+) -> ReportsFeedOut:
+    """Cross-task agent-report feed, freshest first (CV-6: the server side
+    of the Agents-domain activity stream; OPEN read like the other GET
+    listings — the cluster ingress is the auth boundary).
+
+    Cursor pagination: ``limit`` (default 50, hard cap 200 — silently
+    clamped) + ``before_id`` (rows with id strictly below it, so pages
+    stay stable while new reports land; the feed ends where a full-width
+    page comes back short). Filters: ``task_id`` exact, ``kind``
+    (intermediate | final — 422 on garbage). A ``task_id`` matching
+    nothing — including an UNKNOWN task — is an empty page (200, count 0),
+    not 404: here the task is a filter value, not an addressed resource
+    (per-task GET keeps its 404 semantics). Superseded finals are excluded
+    by default (the live feed shows one final per task);
+    ``include_superseded`` restores them flagged ``superseded``.
+    ``truncated`` is true when the requested limit exceeded the page cap
+    (silent clamp); a NON-POSITIVE limit is a 422 (``ge=1``), the numeric-
+    validation pattern of the cursor listings /api/memories and
+    /api/automation/launches."""
+    if kind and kind not in REPORT_KINDS:
+        raise HTTPException(422, f"unknown report kind: {kind}")
+    truncated = limit > _REPORTS_FEED_PAGE_CAP
+    limit = min(limit, _REPORTS_FEED_PAGE_CAP)
+    items = store.list_recent_reports(
+        task_id=task_id or None, kind=kind or None, limit=limit,
+        before_id=before_id, include_superseded=include_superseded)
+    return {"ok": True, "count": len(items), "items": items,
+            "truncated": truncated}
 
 
 # -------------------------------------------------- assignments (ADR 0009 Ф1)
