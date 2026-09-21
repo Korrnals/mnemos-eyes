@@ -327,6 +327,9 @@ export type ScheduleRunResult = Schemas["ScheduleRunOut"];
 /** One hook rule — board `HookOut` schema. */
 export type HookRule = Schemas["HookOut"];
 
+/** One condition clause — board `ConditionItem` schema (strict, no free text). */
+export type ConditionItem = Schemas["ConditionItem"];
+
 /** Hook create payload — board `HookCreate` schema. */
 export type HookCreateInput = Schemas["HookCreate"];
 

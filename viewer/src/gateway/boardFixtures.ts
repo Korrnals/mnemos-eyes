@@ -1084,14 +1084,27 @@ export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
   global_kill_switch: false,
   daily_cap: 50,
   daily_used: 0,
-  // Seed for the future condition form: fields/ops/values come from the
-  // server, never hardcoded — replaced by the real meta when the wave lands.
+  // condition_meta mirrors the SERVER shape (store.automation_condition_meta):
+  // fields/ops/values_hint + the hook whitelists — the form is BUILT from it,
+  // never from UI constants.
   condition_meta: {
-    task_col: {
-      ops: ["eq", "ne"],
-      values: ["backlog", "validating", "open", "in-progress", "blocked", "resolved", "done"],
+    fields: ["task_col", "task_priority"],
+    ops: ["eq", "ne"],
+    values_hint: {
+      task_col: [
+        "backlog",
+        "validating",
+        "open",
+        "in-progress",
+        "blocked",
+        "resolved",
+        "done",
+      ],
+      task_priority: ["low", "normal", "high", "critical"],
     },
-    task_priority: { ops: ["eq", "ne"], values: ["low", "normal", "high", "critical"] },
+    events: ["assignment.created", "assignment.failed", "task.created", "task.updated"],
+    actions: ["create_assignment", "notify"],
+    source_origins: ["machine", "server", "ui"],
   },
   rules: {
     schedules: { total: 2, enabled: 1 },

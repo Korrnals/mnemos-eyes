@@ -24,9 +24,22 @@ import type {
   AssignmentCreatedResult,
   AssignmentListParams,
   AssignmentsPage,
+  AutomationStatus,
   ExecutionSettings,
   ExecutionSettingsInput,
   ExecutorsPage,
+  HookCreateInput,
+  HookPatchInput,
+  HookRule,
+  HooksPage,
+  LaunchesPage,
+  LaunchesParams,
+  RuleDeletedAck,
+  ScheduleCreateInput,
+  SchedulePatchInput,
+  ScheduleRule,
+  ScheduleRunResult,
+  SchedulesPage,
 } from "./boardTypes";
 import type { InboxParams } from "./BoardAdapter";
 
@@ -199,5 +212,63 @@ export function isAgentsMutationSource(
     typeof (gateway as Partial<AgentsMutationSource>).cancelAssignment === "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).putExecutionSettings ===
       "function"
+  );
+}
+
+/**
+ * SCHED-1 automation read surface (ADR 0013 §8 — capability-gated on the
+ * S1 API): status (with the condition meta-dictionary), both rule lists
+ * and the launch journal. Structural like every guard — mnemos mode has
+ * none of it and the section renders its honest unsupported state.
+ */
+export interface AutomationSource {
+  automationStatus(signal?: AbortSignal): Promise<AutomationStatus>;
+  listSchedules(signal?: AbortSignal): Promise<SchedulesPage>;
+  listHooks(signal?: AbortSignal): Promise<HooksPage>;
+  listLaunches(
+    params?: LaunchesParams,
+    signal?: AbortSignal,
+  ): Promise<LaunchesPage>;
+}
+
+export type AutomationGateway = MemoryGateway & AutomationSource;
+
+export function isAutomationSource(gateway: MemoryGateway): gateway is AutomationGateway {
+  return (
+    typeof (gateway as Partial<AutomationSource>).automationStatus === "function" &&
+    typeof (gateway as Partial<AutomationSource>).listSchedules === "function" &&
+    typeof (gateway as Partial<AutomationSource>).listHooks === "function" &&
+    typeof (gateway as Partial<AutomationSource>).listLaunches === "function"
+  );
+}
+
+/**
+ * SCHED-1 automation MUTATION surface (ADR 0013 §8): all ui-token class on
+ * the wire; without a token the section stays visible with DISABLED
+ * mutations and one honest explanation line.
+ */
+export interface AutomationMutationSource {
+  createSchedule(payload: ScheduleCreateInput): Promise<ScheduleRule>;
+  patchSchedule(ruleId: number, patch: SchedulePatchInput): Promise<ScheduleRule>;
+  deleteSchedule(ruleId: number): Promise<RuleDeletedAck>;
+  /** «Запустить сейчас» — the manual trigger (ADR 0013 §2: the owner's hand). */
+  runScheduleNow(ruleId: number): Promise<ScheduleRunResult>;
+  createHook(payload: HookCreateInput): Promise<HookRule>;
+  patchHook(ruleId: number, patch: HookPatchInput): Promise<HookRule>;
+  deleteHook(ruleId: number): Promise<RuleDeletedAck>;
+}
+
+export type AutomationMutationGateway = MemoryGateway &
+  AutomationSource &
+  AutomationMutationSource;
+
+export function isAutomationMutationSource(
+  gateway: MemoryGateway,
+): gateway is AutomationMutationGateway {
+  return (
+    typeof (gateway as Partial<AutomationMutationSource>).createSchedule === "function" &&
+    typeof (gateway as Partial<AutomationMutationSource>).runScheduleNow === "function" &&
+    typeof (gateway as Partial<AutomationMutationSource>).createHook === "function" &&
+    typeof (gateway as Partial<AutomationMutationSource>).deleteHook === "function"
   );
 }

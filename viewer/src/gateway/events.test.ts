@@ -320,6 +320,44 @@ describe("parseBoardEvent — executor.* presence family (AGW-1)", () => {
   });
 });
 
+describe("parseBoardEvent — automation.rule.* family (SCHED-1, ADR 0013 §4)", () => {
+  const RULE = { id: 1, name: "утренний съём статуса TB-1", enabled: true };
+
+  it("parses created/updated/toggled/deleted with rule_kind + row (+changes)", () => {
+    const created = parseEvent(
+      JSON.stringify({ kind: "automation.rule.created", rule_kind: "schedule", rule: RULE }),
+    );
+    if (created.kind !== "automation.rule.created") return;
+    expect(created.rule_kind).toBe("schedule");
+    expect(created.rule.name).toBe("утренний съём статуса TB-1");
+    expect("changes" in created).toBe(false); // created carries no audit
+
+    const toggled = parseEvent(
+      JSON.stringify({
+        kind: "automation.rule.toggled",
+        rule_kind: "hook",
+        rule: { ...RULE, enabled: false },
+        changes: { enabled: [true, false] },
+      }),
+    );
+    if (toggled.kind !== "automation.rule.toggled") return;
+    expect(toggled.rule_kind).toBe("hook");
+    expect(toggled.changes).toEqual({ enabled: [true, false] });
+  });
+
+  it("classifies frames without the family or the row as malformed", () => {
+    expect(
+      parseIgnored('{"kind":"automation.rule.created","rule":{"id":1}}').reason,
+    ).toBe("malformed-payload"); // no rule_kind
+    expect(
+      parseIgnored('{"kind":"automation.rule.deleted","rule_kind":"schedule"}').reason,
+    ).toBe("malformed-payload"); // no rule row
+    expect(
+      parseIgnored('{"kind":"automation.rule.enabled","rule_kind":"x","rule":{}}').reason,
+    ).toBe("unknown-kind"); // enabled/disabled are NOT kinds — toggled is one
+  });
+});
+
 describe("parseBoardEvent — additive-only evolution rules", () => {
   it("silently classifies unknown kinds (client MUST ignore them)", () => {
     const result = parseIgnored('{"kind":"future.kind","payload":{}}');

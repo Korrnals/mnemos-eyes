@@ -113,6 +113,7 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
     sections: [
       { to: "/system/status", key: "nav.status", icon: Activity, end: true },
       { to: "/system/settings", key: "nav.systemSettings", icon: Settings },
+      { to: "/system/automation", key: "nav.systemAutomation", icon: Workflow },
       { to: "/system/sessions", key: "nav.sessions", icon: Users },
       { to: "/system/traces", key: "nav.traces", icon: Layers, end: true },
     ],
@@ -168,6 +169,8 @@ export function crumbsFor(pathname: string): Crumb[] {
       return [SYSTEM_CRUMB, { key: "nav.status" }];
     case "/system/settings":
       return [SYSTEM_CRUMB, { key: "nav.systemSettings" }];
+    case "/system/automation":
+      return [SYSTEM_CRUMB, { key: "nav.systemAutomation" }];
     case "/agents/execution":
       return [AGENTS_CRUMB, { key: "nav.agentsExecution" }];
     case "/system/sessions":

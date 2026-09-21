@@ -77,6 +77,11 @@ const ExecutionSettingsPage = lazy(() =>
     default: m.ExecutionSettingsPage,
   })),
 );
+const AutomationPage = lazy(() =>
+  import("@/features/automation/AutomationPage").then((m) => ({
+    default: m.AutomationPage,
+  })),
+);
 
 /**
  * The route table as data (redesign concept §2.1 / ADR 0011 Ф1) — consumed by
@@ -204,6 +209,16 @@ export function buildRoutes(): RouteObject[] {
           element: (
             <Page>
               <ExecutionSettingsPage />
+            </Page>
+          ),
+        },
+        // Automation (SCHED-1-UI, ADR 0013 §8): rules + journal + manual
+        // run-now; engine honestly off in S1.
+        {
+          path: "/system/automation",
+          element: (
+            <Page>
+              <AutomationPage />
             </Page>
           ),
         },

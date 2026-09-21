@@ -37,6 +37,12 @@ export const STALE_TIMES = {
   agentsExecutors: 15_000,
   /** AGW-1 default-executor settings — owner-rare writes */
   agentsSettings: 60_000,
+  /** SCHED-1 automation: rule mutations are rare, SSE rule.* syncs */
+  automationRules: 30_000,
+  /** SCHED-1 engine status — the banner truth; cheap, never stale for long */
+  automationStatus: 30_000,
+  /** SCHED-1 launch journal — append-only, cursor pages */
+  automationLaunches: 30_000,
 } as const;
 
 export const GC_TIMES = {
@@ -55,6 +61,9 @@ export const GC_TIMES = {
   agentsAssignments: 5 * 60_000,
   agentsExecutors: 60_000,
   agentsSettings: 10 * 60_000,
+  automationRules: 5 * 60_000,
+  automationStatus: 5 * 60_000,
+  automationLaunches: 5 * 60_000,
 } as const;
 
 /**

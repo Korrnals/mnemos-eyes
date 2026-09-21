@@ -3,6 +3,7 @@ import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { BoardTask, ExecutorItem } from "@/gateway/boardTypes";
+import { KNOWN_HARNESSES } from "@/gateway/harnesses";
 import { resolveRoutingAnnotation } from "@/gateway/routing";
 import { useI18n, useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
@@ -28,21 +29,6 @@ import { useAssignmentMutations } from "./useAssignmentMutations";
  * - executor identity is declared-unverified (spec §2.2) — every tooltip
  *   says so; the task row's chip repeats it on the fact itself.
  */
-
-/** Server `Store.KNOWN_HARNESSES` mirror (create 422s unknown values with
- * the authoritative list in the message — drift surfaces honestly). */
-const KNOWN_HARNESSES = [
-  "zcode",
-  "hermes",
-  "pi",
-  "copilot",
-  "claude-code",
-  "cursor",
-  "aider",
-  "continue",
-  "cline",
-  "windsurf",
-] as const;
 
 export interface AssignPrefill {
   readonly specialist: string;

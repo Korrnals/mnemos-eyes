@@ -89,6 +89,17 @@ export const keys = {
       execution: () => ["agents", "settings", "execution"] as const,
     },
   },
+  // SCHED-1-UI automation (ADR 0013): engine status (with the condition
+  // meta-dictionary), the two rule lists, the launch journal. rule.* SSE
+  // is a FAMILY-sync signal — one prefix covers both rule kinds.
+  automation: {
+    all: ["automation"] as const,
+    status: () => ["automation", "status"] as const,
+    schedules: () => ["automation", "schedules"] as const,
+    hooks: () => ["automation", "hooks"] as const,
+    launches: (params: { limit?: number; cursor?: string } = {}) =>
+      ["automation", "launches", params] as const,
+  },
 } as const;
 
 /** Convenience key types for hook signatures. */
@@ -112,3 +123,7 @@ export type SessionDetailKey = ReturnType<typeof keys.sessions.detail>;
 export type AgentsAssignmentsKey = ReturnType<typeof keys.agents.assignments.list>;
 export type ExecutorsListKey = ReturnType<typeof keys.agents.executors.list>;
 export type ExecutionSettingsKey = ReturnType<typeof keys.agents.settings.execution>;
+export type AutomationStatusKey = ReturnType<typeof keys.automation.status>;
+export type AutomationSchedulesKey = ReturnType<typeof keys.automation.schedules>;
+export type AutomationHooksKey = ReturnType<typeof keys.automation.hooks>;
+export type AutomationLaunchesKey = ReturnType<typeof keys.automation.launches>;

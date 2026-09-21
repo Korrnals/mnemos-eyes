@@ -22,6 +22,10 @@ import type { BoardTask } from "./boardTypes";
  * events fire on TRANSITION only (per-heartbeat events are forbidden §11);
  * `stale` deliberately has no kind — clients render ages from GET + a local
  * ticker, SSE is only the change notification.
+ *
+ * SCHED-1-UI addition (ADR 0013 §4): the automation-rule family
+ * `automation.rule.created/updated/toggled/deleted` — one event per rule
+ * mutation, a single list-sync signal for both rule families.
  */
 export type EventSourceFactory = (url: string) => EventSource;
 
@@ -176,6 +180,22 @@ export interface BoardEventMap {
     readonly kind: "executor.deleted";
     readonly notification?: BoardNotification;
   };
+  // Automation-rule kinds (SCHED-1, ADR 0013 §4 — the ui-contract §11
+  // reserve, emitters live in the CRUD routes via `_broadcast_rule_event`):
+  // one event per mutation; `toggled` is the pure {enabled} kill-switch
+  // flip, `updated` anything else, `changes` carries the old→new audit.
+  "automation.rule.created": AutomationRuleEvent & {
+    readonly kind: "automation.rule.created";
+  };
+  "automation.rule.updated": AutomationRuleEvent & {
+    readonly kind: "automation.rule.updated";
+  };
+  "automation.rule.toggled": AutomationRuleEvent & {
+    readonly kind: "automation.rule.toggled";
+  };
+  "automation.rule.deleted": AutomationRuleEvent & {
+    readonly kind: "automation.rule.deleted";
+  };
 }
 
 export interface AssignmentEvent {
@@ -207,6 +227,22 @@ export interface ExecutorEvent {
   readonly state: string;
   /** Presence-transition timestamp — present on online/offline only. */
   readonly last_seen_at?: string;
+}
+
+/**
+ * Automation-rule event payload (SCHED-1, ADR 0013 §4): `{kind, rule_kind,
+ * rule, changes?}` — one event per mutation. `rule_kind` is "schedule" or
+ * "hook"; `rule` is the full post-mutation row; `changes` (updated/
+ * deleted only) maps field → [old, new]. Clients treat the FAMILY as a
+ * single list-sync signal (АРХКОМ-5 FE verdict): invalidate, don't diff.
+ */
+export interface AutomationRuleEvent {
+  /** Which rule family mutated: "schedule" | "hook". */
+  readonly rule_kind: string;
+  /** The rule row after the mutation (post-delete: its final snapshot). */
+  readonly rule: Readonly<Record<string, unknown>>;
+  /** old→new audit pairs (updated/toggled/deleted; absent on created). */
+  readonly changes?: Readonly<Record<string, unknown>>;
 }
 
 /** Every kind the dictionary names (known kinds). */
@@ -327,6 +363,24 @@ export function parseBoardEvent(raw: string): ParsedBoardEvent {
     case "executor.updated":
     case "executor.deleted":
       return parseExecutorEvent(parsed, kind);
+    case "automation.rule.created":
+    case "automation.rule.updated":
+    case "automation.rule.toggled":
+    case "automation.rule.deleted":
+      // Wire shape fixed by `_broadcast_rule_event`: the family + the row
+      // are mandatory; the audit `changes` rides along when present.
+      if (typeof parsed.rule_kind !== "string" || !isRecord(parsed.rule)) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          rule_kind: parsed.rule_kind,
+          rule: parsed.rule,
+          ...(isRecord(parsed.changes) ? { changes: parsed.changes } : {}),
+        },
+      };
     default:
       return ignored("unknown-kind", kind);
   }
