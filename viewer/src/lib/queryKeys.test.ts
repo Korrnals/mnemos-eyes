@@ -35,7 +35,23 @@ describe("queryKeys", () => {
       keys.traces.all[0],
       keys.sessions.all[0],
       keys.clusters.all[0],
+      keys.agents.all[0],
+      keys.tasks.all[0],
     ];
     expect(new Set(roots).size).toBe(roots.length);
+  });
+
+  it("builds agents keys: assignments scoped by params, executors/settings stable", () => {
+    expect(keys.agents.assignments.list({ state: "queued" })).toEqual([
+      "agents",
+      "assignments",
+      "list",
+      { state: "queued" },
+    ]);
+    expect(keys.agents.assignments.list()).toEqual(["agents", "assignments", "list", {}]);
+    expect(keys.agents.executors.list()).toEqual(["agents", "executors", "list"]);
+    expect(keys.agents.settings.execution()).toEqual(["agents", "settings", "execution"]);
+    // The assignments prefix covers every filtered variant (SSE invalidation).
+    expect(keys.agents.assignments.all).toEqual(["agents", "assignments"]);
   });
 });

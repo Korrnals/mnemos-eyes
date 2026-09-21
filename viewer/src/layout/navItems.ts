@@ -12,10 +12,12 @@ import {
   ListTodo,
   Search,
   ServerCog,
+  Settings,
   Tag,
   Users,
   Layers,
   Bot,
+  Workflow,
 } from "lucide-react";
 import type { TranslationKey } from "@/i18n";
 
@@ -87,8 +89,19 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
       { to: "/tasks/archive", key: "nav.taskArchive", icon: Archive, end: true },
     ],
   },
-  // Phase-4 slots (agents / stores — ARCH-2 Ф4 and the registry wave).
-  { to: "/agents", key: "nav.agents", icon: Bot, soonKey: "nav.soonAgents" },
+  // Agents domain (AGW-3, spec 2026-09-19 §1): live — the domain root is
+  // the execution alias; specialists/harnesses sections arrive with their
+  // waves (the route structure already accepts them).
+  {
+    to: "/agents",
+    linkTo: "/agents/execution",
+    key: "nav.agents",
+    icon: Bot,
+    sections: [
+      { to: "/agents/execution", key: "nav.agentsExecution", icon: Workflow, end: true },
+    ],
+  },
+  // Phase-4 slot (stores — the registry wave).
   { to: "/stores", key: "nav.stores", icon: Database, soonKey: "nav.soonStores" },
   {
     to: "/system",
@@ -99,6 +112,8 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
     icon: ServerCog,
     sections: [
       { to: "/system/status", key: "nav.status", icon: Activity, end: true },
+      { to: "/system/settings", key: "nav.systemSettings", icon: Settings },
+      { to: "/system/automation", key: "nav.systemAutomation", icon: Workflow },
       { to: "/system/sessions", key: "nav.sessions", icon: Users },
       { to: "/system/traces", key: "nav.traces", icon: Layers, end: true },
     ],
@@ -133,6 +148,7 @@ export interface Crumb {
 const MEMORY_CRUMB: Crumb = { to: "/memory", key: "nav.memory" };
 const SYSTEM_CRUMB: Crumb = { to: "/system", key: "nav.system" };
 const TASKS_CRUMB: Crumb = { to: "/tasks", key: "nav.tasks" };
+const AGENTS_CRUMB: Crumb = { to: "/agents", key: "nav.agents" };
 
 /**
  * Breadcrumb trail for a pathname (level 2–3 pages; the root has none).
@@ -151,6 +167,12 @@ export function crumbsFor(pathname: string): Crumb[] {
       return [MEMORY_CRUMB, { key: "nav.tags" }];
     case "/system/status":
       return [SYSTEM_CRUMB, { key: "nav.status" }];
+    case "/system/settings":
+      return [SYSTEM_CRUMB, { key: "nav.systemSettings" }];
+    case "/system/automation":
+      return [SYSTEM_CRUMB, { key: "nav.systemAutomation" }];
+    case "/agents/execution":
+      return [AGENTS_CRUMB, { key: "nav.agentsExecution" }];
     case "/system/sessions":
       return [SYSTEM_CRUMB, { key: "nav.sessions" }];
     case "/system/traces":

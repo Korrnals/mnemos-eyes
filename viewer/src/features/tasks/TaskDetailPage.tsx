@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { FileText, History, Layers, PencilLine, Play, ScrollText } from "lucide-react";
+import { Cog, FileText, History, Layers, PencilLine, Play, ScrollText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton, TableRowSkeleton } from "@/components/skeletons/Skeletons";
+import { TaskExecutionTab } from "@/features/agents/TaskExecutionTab";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { TaskHistory, TaskMemories } from "@/gateway/boardTypes";
@@ -43,6 +44,9 @@ const TASK_TABS = [
   { id: "history", key: "tasks.tabHistory" as const, icon: History },
   { id: "memory", key: "tasks.tabMemory" as const, icon: Layers },
   { id: "details", key: "tasks.tabDetails" as const, icon: FileText },
+  // AGW-2 (spec §2.4): the execution depth of the task — assignments queue,
+  // «Взять в работу», cancel/retry. Deep link target of the card badge.
+  { id: "execution", key: "tasks.tabExecution" as const, icon: Cog },
 ] as const;
 
 type TaskTabId = (typeof TASK_TABS)[number]["id"];
@@ -243,6 +247,7 @@ export function TaskDetailPage() {
         {tab === "history" ? <HistoryTab taskId={id} lang={lang} /> : null}
         {tab === "memory" ? <MemoryTab taskId={id} lang={lang} /> : null}
         {tab === "details" ? <DetailsTab taskId={id} lang={lang} /> : null}
+        {tab === "execution" ? <TaskExecutionTab task={current} /> : null}
       </div>
     </TaskDetailShell>
   );

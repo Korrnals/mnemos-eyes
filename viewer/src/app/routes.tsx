@@ -1,4 +1,5 @@
 import { lazy } from "react";
+import { Navigate } from "react-router";
 import type { RouteObject } from "react-router";
 import { Shell } from "@/layout/Shell";
 import { SearchPage } from "@/features/search/SearchPage"; // eager — only eagerly loaded chunk (§3)
@@ -64,6 +65,22 @@ const TaskArchivePage = lazy(() =>
 );
 const TasksLayout = lazy(() =>
   import("@/features/tasks/TasksLayout").then((m) => ({ default: m.TasksLayout })),
+);
+const AgentsLayout = lazy(() =>
+  import("@/features/agents/AgentsLayout").then((m) => ({ default: m.AgentsLayout })),
+);
+const AgentsExecutionPage = lazy(() =>
+  import("@/features/agents/ExecutionPage").then((m) => ({ default: m.ExecutionPage })),
+);
+const ExecutionSettingsPage = lazy(() =>
+  import("@/features/agents/ExecutionSettingsPage").then((m) => ({
+    default: m.ExecutionSettingsPage,
+  })),
+);
+const AutomationPage = lazy(() =>
+  import("@/features/automation/AutomationPage").then((m) => ({
+    default: m.AutomationPage,
+  })),
 );
 
 /**
@@ -157,12 +174,52 @@ export function buildRoutes(): RouteObject[] {
           ],
         },
 
+        // Агенты domain (AGW-3, spec 2026-09-19 §1): the root is an ALIAS —
+        // replace-redirect to the execution view (no overview dashboard:
+        // «кто чем занят прямо сейчас»). ONE route object (review P3-7 —
+        // the former duplicate path is gone): the layout owns the domain
+        // SSE bridge, the index child redirects to the execution view, and
+        // /agents/specialists + /agents/harnesses slot in as sibling
+        // children when their waves land (nothing here excludes them).
+        {
+          path: "/agents",
+          element: (
+            <Page>
+              <AgentsLayout />
+            </Page>
+          ),
+          children: [
+            { index: true, element: <Navigate to="/agents/execution" replace /> },
+            { path: "execution", element: <AgentsExecutionPage /> },
+          ],
+        },
+
         // Система domain (temporary honest home for the legacy views).
         {
           path: "/system/status",
           element: (
             <Page>
               <StatusPage />
+            </Page>
+          ),
+        },
+        // Owner settings (AGW-3): minimal shell page — one live section
+        // («Исполнение»); further sections join as sibling blocks.
+        {
+          path: "/system/settings",
+          element: (
+            <Page>
+              <ExecutionSettingsPage />
+            </Page>
+          ),
+        },
+        // Automation (SCHED-1-UI, ADR 0013 §8): rules + journal + manual
+        // run-now; engine honestly off in S1.
+        {
+          path: "/system/automation",
+          element: (
+            <Page>
+              <AutomationPage />
             </Page>
           ),
         },

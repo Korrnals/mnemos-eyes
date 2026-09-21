@@ -1,14 +1,15 @@
 import { Link } from "react-router";
-import { ArrowRight, Search, Files, Tag } from "lucide-react";
+import { ArrowRight, Bot, Search, Files, Tag } from "lucide-react";
 import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { isBoardHealthSource, isPulseSource } from "@/gateway/capabilities";
+import { isAutomationSource, isBoardHealthSource, isPulseSource } from "@/gateway/capabilities";
 import type { BoardHealthServer } from "@/gateway/boardTypes";
 import { useGateway } from "@/gateway/GatewayContext";
 import { usePulse, useBoardHealth } from "@/hooks/usePulse";
 import { PulseFeed } from "@/features/memory-pulse/PulseFeed";
+import { useAutomationStatus } from "@/features/automation/useAutomation";
 import { useSessionControl } from "@/features/ui-token/useSessionControl";
 import { useT } from "@/i18n";
 
@@ -26,9 +27,17 @@ export function OverviewPage() {
   const sessionControl = useSessionControl();
   const pulseCapable = isPulseSource(gateway);
   const healthCapable = isBoardHealthSource(gateway);
+  const automationCapable = isAutomationSource(gateway);
   // Top of the recency feed — the "what just happened" strip (limit 5).
   const pulse = usePulse({ scope: "all", limit: 5 });
   const health = useBoardHealth();
+  // SCHED-1-UI: the Agents block's auto-launch line — the server's OWN
+  // daily_used counter (non-manual launches today; provably 0 while the
+  // engine is off — the line then does not render, anti-dashification).
+  const automation = useAutomationStatus();
+  const autoLaunchesToday = automation.data?.daily_used ?? 0;
+  const showAgentsLine =
+    automationCapable && automation.isSuccess && autoLaunchesToday > 0;
 
   const showStores =
     healthCapable && !(health.isSuccess && health.data.servers.length === 0);
@@ -68,6 +77,29 @@ export function OverviewPage() {
           hint={t("overview.tagsHintLink")}
         />
       </nav>
+
+      {/* Agents block (SCHED-1-UI, ADR 0013 §8): the auto-launches line ONLY
+       * when the server's own counter says launches happened today — a
+       * zero-count block does not render (no counters for the sake of it). */}
+      {showAgentsLine ? (
+        <section aria-labelledby="overview-agents" className="space-y-3">
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 id="overview-agents" className="text-lg font-semibold text-foreground">
+              {t("nav.agents")}
+            </h2>
+            <Link
+              to="/agents/execution"
+              className="inline-flex min-h-6 items-center gap-1 text-sm text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+            >
+              <Bot className="size-4" aria-hidden="true" />
+              {t("overview.agentsAll")}
+            </Link>
+          </div>
+          <p className="text-sm text-foreground-secondary">
+            {t("overview.autoLaunchesToday", { count: autoLaunchesToday })}
+          </p>
+        </section>
+      ) : null}
 
       {showStores ? (
         <section aria-labelledby="overview-stores" className="space-y-3">

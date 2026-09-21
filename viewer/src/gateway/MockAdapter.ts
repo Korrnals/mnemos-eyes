@@ -1,25 +1,60 @@
 import type { MemoryGateway } from "./MemoryGateway";
 import type { InboxParams } from "./BoardAdapter";
+import { resolveRoutingAnnotation } from "./routing";
 import { ApiError } from "@/lib/errors";
 import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
   MOCK_ARCHIVED_TASK,
+  MOCK_ASSIGNMENTS,
+  MOCK_AUTOMATION_STATUS,
   MOCK_BOARD,
+  MOCK_EXECUTORS,
+  MOCK_EXECUTORS_META,
+  MOCK_EXECUTION_SETTINGS,
   MOCK_HISTORY,
+  MOCK_HOOKS,
   MOCK_INBOX,
+  MOCK_LAUNCHES,
   MOCK_REPORTS,
+  MOCK_SCHEDULES,
   MOCK_TASK_MEMORIES,
   MOCK_TASKS,
 } from "./boardFixtures";
 import type {
   ArchivePage,
   ArchiveParams,
+  AssignmentCancelledResult,
+  AssignmentCreateInput,
+  AssignmentCreatedResult,
+  AssignmentItem,
+  AssignmentLifecycleState,
+  AssignmentListParams,
+  AssignmentsPage,
+  AutomationStatus,
   BoardHealthDetail,
   BoardSummary,
+  ExecutionSettings,
+  ExecutionSettingsInput,
+  ExecutorItem,
+  ExecutorsPage,
+  HookCreateInput,
+  HookPatchInput,
+  HookRule,
+  HooksPage,
   InboxRefreshResult,
+  LaunchRow,
+  LaunchesPage,
+  LaunchesParams,
   MemoryPulse,
   MemoryPulseItem,
   PulseParams,
+  RoutingAnnotation,
+  RuleDeletedAck,
+  ScheduleCreateInput,
+  SchedulePatchInput,
+  ScheduleRule,
+  ScheduleRunResult,
+  SchedulesPage,
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
@@ -49,6 +84,10 @@ const DEFAULT_SEARCH_LIMIT = 20;
 const DEFAULT_TRACE_LIMIT = 50;
 /** Default wire limit for agent recall. */
 const DEFAULT_RECALL_LIMIT = 5;
+/** Default wire page size for the automation launch journal (server mirror). */
+const DEFAULT_LAUNCH_LIMIT = 50;
+/** Launch journal page cap (server `_AUTOMATION_PAGE_CAP` mirror). */
+const LAUNCH_PAGE_CAP = 200;
 
 /** BE-12 content window: tasks older than this are 423-locked without force. */
 const LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -97,6 +136,20 @@ export class MockAdapter implements MemoryGateway {
   private inboxItems: TaskInboxEntry[];
   private nextTaskNo = 1;
 
+  // --- AGW-1 mutable agents state (same clone-per-instance discipline) --------
+  private assignments: AssignmentItem[];
+  private executors: ExecutorItem[];
+  private executionSettings: ExecutionSettings;
+  /** Per-project defaults (board_meta `default_executor:project:<slug>`
+   * mirror) — modelled through PUT /settings/execution with a project scope. */
+  private executionProjectDefaults: Record<string, string> = {};
+  private schedules: ScheduleRule[];
+  private hooks: HookRule[];
+  private launches: LaunchRow[];
+  private nextAssignmentNo = 1;
+  private nextRuleNo = 1;
+  private nextLaunchNo = 1;
+
   constructor(options: MockAdapterOptions = {}) {
     this.latency = options.latency ?? { minMs: 80, maxMs: 200 };
     // Fixed seed → identical latency sequences across runs.
@@ -105,6 +158,18 @@ export class MockAdapter implements MemoryGateway {
     this.tasks = MOCK_TASKS.map((task) => ({ ...task }));
     this.archivedTasks = [{ ...MOCK_ARCHIVED_TASK }];
     this.inboxItems = MOCK_INBOX.items.map((item) => ({ ...item }));
+    this.assignments = MOCK_ASSIGNMENTS.map((assignment) => ({ ...assignment }));
+    this.executors = MOCK_EXECUTORS.map((executor) => ({ ...executor }));
+    this.executionSettings = { ...MOCK_EXECUTION_SETTINGS };
+    this.schedules = MOCK_SCHEDULES.map((rule) => ({ ...rule }));
+    this.hooks = MOCK_HOOKS.map((rule) => ({ ...rule }));
+    this.launches = MOCK_LAUNCHES.map((row) => ({ ...row }));
+    // Fresh ids never collide with the corpus rows.
+    this.nextAssignmentNo =
+      Math.max(0, ...MOCK_ASSIGNMENTS.map((assignment) => assignment.id)) + 1;
+    this.nextRuleNo =
+      Math.max(0, ...MOCK_SCHEDULES.map((r) => r.id), ...MOCK_HOOKS.map((r) => r.id)) + 1;
+    this.nextLaunchNo = Math.max(0, ...MOCK_LAUNCHES.map((r) => r.id)) + 1;
   }
 
   async search(params: SearchParams, signal?: AbortSignal): Promise<SearchResult[]> {
@@ -621,6 +686,556 @@ export class MockAdapter implements MemoryGateway {
     };
   }
 
+  // --- AGW-1 agents domain (wire mirrors of the board routes; no auth wall) ----
+  // The mock is the dev playground, so the ui-token gate is absent — but the
+  // CREATE/CANCEL gates answer honestly (404/422/409) so the Ф3 UI error
+  // branches are exercisable. Presence stays a static corpus snapshot: the
+  // mock never recomputes it (the real server computes per GET).
+
+  /**
+   * Assignment queue. Wire parity: state/task_id filter server-side,
+   * executor_id does NOT filter (presence piggyback only) — executor
+   * filtering is the client's job over the full projection.
+   */
+  async listAssignments(
+    params: AssignmentListParams = {},
+    signal?: AbortSignal,
+  ): Promise<AssignmentsPage> {
+    await this.delay(signal);
+    const items = this.assignments
+      .filter((row) => !params.state || row.state === params.state)
+      .filter((row) => !params.task_id || row.task_id === params.task_id)
+      .map((row) => ({ ...row }));
+    return { ok: true, count: items.length, items };
+  }
+
+  async createAssignment(
+    payload: AssignmentCreateInput,
+    signal?: AbortSignal,
+  ): Promise<AssignmentCreatedResult> {
+    await this.delay(signal);
+    const assignment = this.createAssignmentRow(
+      payload.task_id,
+      payload.specialist,
+      payload.harness,
+      payload.executor_id ?? "",
+      "owner",
+    );
+    return { ok: true, assignment: { ...assignment } };
+  }
+
+  async cancelAssignment(
+    assignmentId: number,
+    reason = "",
+    signal?: AbortSignal,
+  ): Promise<AssignmentCancelledResult> {
+    await this.delay(signal);
+    const index = this.assignments.findIndex((row) => row.id === assignmentId);
+    if (index < 0) {
+      throw new ApiError(404, `assignment ${assignmentId} not found`, {
+        url: `mock:/api/assignments/${assignmentId}/cancel`,
+      });
+    }
+    const current = this.assignments[index];
+    if (!ACTIVE_ASSIGNMENT_STATES.includes(current.state)) {
+      throw new ApiError(
+        409,
+        `assignment ${assignmentId} is ${current.state} — only queued/claimed/running can be cancelled`,
+        { url: `mock:/api/assignments/${assignmentId}/cancel` },
+      );
+    }
+    const cancelled: AssignmentItem = {
+      ...current,
+      state: "cancelled",
+      claimed_by: "owner",
+      note: reason,
+      finished_at: this.stamp(),
+    };
+    this.assignments[index] = cancelled;
+    // The task column returns to open when the attempt had moved it
+    // (mirrors finish_assignment's in-progress → open return).
+    const task = this.tasks.find((row) => row.id === cancelled.task_id);
+    let moved: string[] = [];
+    if (task && task.col === "in-progress") {
+      moved = ["in-progress", "open"];
+      const restored: BoardTask = {
+        ...task,
+        col: "open",
+        status: "open",
+        updated_at: this.stamp(),
+      };
+      replaceInPlace(this.tasks, restored);
+      return {
+        ok: true,
+        assignment: { ...cancelled },
+        task: { ...restored },
+        moved,
+        report: null,
+      };
+    }
+    return {
+      ok: true,
+      assignment: { ...cancelled },
+      task: task ? { ...task } : null,
+      moved,
+      report: null,
+    };
+  }
+
+  /** Registry projection with the server-owned presence TTL meta. */
+  async listExecutors(signal?: AbortSignal): Promise<ExecutorsPage> {
+    await this.delay(signal);
+    return {
+      ok: true,
+      count: this.executors.length,
+      items: this.executors.map((executor) => ({ ...executor })),
+      meta: MOCK_EXECUTORS_META,
+    };
+  }
+
+  async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {
+    await this.delay(signal);
+    return { ...this.executionSettings };
+  }
+
+  /**
+   * Amd 2 §5 gates, mock-honest subset: a default must be a KNOWN,
+   * approved, enabled executor. The live-heartbeat (online) and
+   * local-poll gates are relaxed — mock presence is a static corpus
+   * snapshot, so requiring "online now" would freeze the playground.
+   * Scope mirror (server `_execution_settings_keys`): '' is the global
+   * pair; 'project:<slug>' writes ONLY the project default (fallback is
+   * global-scope — 422 when combined), and the project default joins the
+   * routing chain one tier above the global one.
+   */
+  async putExecutionSettings(
+    payload: ExecutionSettingsInput,
+    signal?: AbortSignal,
+  ): Promise<ExecutionSettings> {
+    await this.delay(signal);
+    const scope = (payload.scope ?? "").trim();
+    if (payload.fallback_executor && scope) {
+      throw new ApiError(422, "fallback executor is global-scope only", {
+        url: "mock:/api/settings/execution",
+      });
+    }
+    for (const executorId of [payload.default_executor, payload.fallback_executor]) {
+      if (!executorId) continue; // '' clears the slot
+      const row = this.executors.find((executor) => executor.id === executorId);
+      if (!row) {
+        throw new ApiError(422, `unknown executor: ${executorId}`, {
+          url: "mock:/api/settings/execution",
+        });
+      }
+      if (row.state !== "approved" || !row.enabled) {
+        throw new ApiError(
+          422,
+          `executor ${executorId} is ${row.state}${row.enabled ? "" : ", disabled"} — a default must be approved and enabled`,
+          { url: "mock:/api/settings/execution" },
+        );
+      }
+    }
+    if (scope) {
+      // Project scope: the default slot only — the global pair is untouched.
+      if (payload.default_executor) {
+        this.executionProjectDefaults[scope] = payload.default_executor;
+      } else {
+        delete this.executionProjectDefaults[scope];
+      }
+    } else {
+      this.executionSettings = {
+        ok: true,
+        default_executor: payload.default_executor,
+        fallback_executor: payload.fallback_executor,
+        scope,
+      };
+    }
+    return {
+      ok: true,
+      default_executor: payload.default_executor,
+      fallback_executor: payload.fallback_executor,
+      scope,
+    };
+  }
+
+  // --- SCHED-1 automation (ADR 0013 S1: CRUD + journal + manual run-now) -------
+
+  async automationStatus(signal?: AbortSignal): Promise<AutomationStatus> {
+    await this.delay(signal);
+    // Derived from live rule state like the server; engine stays the honest
+    // S1 constant (no loop exists to report live).
+    const schedulesEnabled = this.schedules.filter((rule) => rule.enabled).length;
+    const hooksEnabled = this.hooks.filter((rule) => rule.enabled).length;
+    return {
+      ...MOCK_AUTOMATION_STATUS,
+      rules: {
+        schedules: { total: this.schedules.length, enabled: schedulesEnabled },
+        hooks: { total: this.hooks.length, enabled: hooksEnabled },
+      },
+    };
+  }
+
+  async listSchedules(signal?: AbortSignal): Promise<SchedulesPage> {
+    await this.delay(signal);
+    return {
+      ok: true,
+      count: this.schedules.length,
+      items: this.schedules.map((rule) => ({ ...rule })),
+    };
+  }
+
+  async createSchedule(
+    payload: ScheduleCreateInput,
+    signal?: AbortSignal,
+  ): Promise<ScheduleRule> {
+    await this.delay(signal);
+    // Server mirror (store.py SCHEDULE_TRIGGER_KINDS validation): unknown
+    // trigger kinds are a 422 with the allowed list — the mock must not
+    // hide wire drift (review SCHED-1-UI P1).
+    if (!SCHEDULE_TRIGGER_KINDS.includes(payload.trigger_kind)) {
+      throw new ApiError(
+        422,
+        `unknown trigger_kind: '${payload.trigger_kind}'; allowed: ${SCHEDULE_TRIGGER_KINDS.slice().sort()}`,
+        { url: "mock:/api/automation/schedules" },
+      );
+    }
+    assertUniqueRuleName(payload.name, this.schedules, this.hooks, "mock:/api/automation/schedules");
+    const rule: ScheduleRule = {
+      ...payload,
+      id: this.nextRuleNo++,
+      // Creation is DISABLED — enablement is a separate audited PATCH.
+      enabled: false,
+      window_from: payload.window_from ?? null,
+      window_to: payload.window_to ?? null,
+      next_run_at: this.stamp(), // computed server-side from now
+      last_run_at: null,
+      created_by: "owner",
+      created_at: this.stamp(),
+      updated_at: this.stamp(),
+    };
+    this.schedules.push(rule);
+    return { ...rule };
+  }
+
+  async patchSchedule(
+    ruleId: number,
+    patch: SchedulePatchInput,
+    signal?: AbortSignal,
+  ): Promise<ScheduleRule> {
+    await this.delay(signal);
+    const index = this.schedules.findIndex((rule) => rule.id === ruleId);
+    if (index < 0) {
+      throw notFoundRule(ruleId, "schedule", "mock:/api/automation/schedules");
+    }
+    const current = this.schedules[index];
+    const next: ScheduleRule = {
+      ...current,
+      ...(patch.name != null ? { name: patch.name } : {}),
+      ...(patch.target_kind != null ? { target_kind: patch.target_kind } : {}),
+      ...(patch.task_id != null ? { task_id: patch.task_id } : {}),
+      ...(patch.specialist != null ? { specialist: patch.specialist } : {}),
+      ...(patch.harness != null ? { harness: patch.harness } : {}),
+      ...(patch.executor_id != null ? { executor_id: patch.executor_id } : {}),
+      ...(patch.trigger_kind != null ? { trigger_kind: patch.trigger_kind } : {}),
+      ...(patch.trigger_value != null ? { trigger_value: patch.trigger_value } : {}),
+      ...(patch.window_from !== undefined ? { window_from: patch.window_from ?? null } : {}),
+      ...(patch.window_to !== undefined ? { window_to: patch.window_to ?? null } : {}),
+      ...(patch.max_runs_per_day != null ? { max_runs_per_day: patch.max_runs_per_day } : {}),
+      ...(patch.cooldown_s != null ? { cooldown_s: patch.cooldown_s } : {}),
+      ...(patch.enabled != null ? { enabled: patch.enabled } : {}),
+      // Every effective patch recomputes the schedule clock from now.
+      next_run_at: patch.enabled === true ? this.stamp() : current.next_run_at,
+      updated_at: this.stamp(),
+    };
+    this.schedules[index] = next;
+    return { ...next };
+  }
+
+  async deleteSchedule(ruleId: number, signal?: AbortSignal): Promise<RuleDeletedAck> {
+    await this.delay(signal);
+    const index = this.schedules.findIndex((rule) => rule.id === ruleId);
+    if (index < 0) {
+      throw notFoundRule(ruleId, "schedule", "mock:/api/automation/schedules");
+    }
+    // Soft-disable retention (ADR 0013 §2): the row stays, the name holds.
+    this.schedules[index] = {
+      ...this.schedules[index],
+      enabled: false,
+      next_run_at: null,
+      updated_at: this.stamp(),
+    };
+    return { ok: true, note: "soft-disabled and retained (retention)" };
+  }
+
+  async runScheduleNow(
+    ruleId: number,
+    signal?: AbortSignal,
+  ): Promise<ScheduleRunResult> {
+    await this.delay(signal);
+    const rule = this.schedules.find((row) => row.id === ruleId);
+    if (!rule) {
+      throw notFoundRule(ruleId, "schedule", `mock:/api/automation/schedules/${ruleId}/run`);
+    }
+    const runAt = this.stamp();
+    try {
+      // Manual run-now goes through the same create path as POST
+      // /api/assignments with created_by='owner' (ADR 0013 §2).
+      const assignment = this.createAssignmentRow(
+        rule.task_id,
+        rule.specialist,
+        rule.harness,
+        rule.executor_id,
+        "owner",
+      );
+      const launchId = this.appendLaunch(rule, runAt, "launched", "", assignment.id);
+      this.schedules = this.schedules.map((row) =>
+        row.id === rule.id ? { ...row, last_run_at: runAt, updated_at: this.stamp() } : row,
+      );
+      return {
+        ok: true,
+        decision: "launched",
+        reason: "",
+        assignment_id: assignment.id,
+        launch_id: launchId,
+        run_at: runAt,
+      };
+    } catch (error) {
+      // Refused attempts still journal a skipped row (gate honesty).
+      if (error instanceof ApiError) {
+        this.appendLaunch(rule, runAt, "skipped", `${error.status}: ${error.message}`, null);
+      }
+      throw error;
+    }
+  }
+
+  async listHooks(signal?: AbortSignal): Promise<HooksPage> {
+    await this.delay(signal);
+    return {
+      ok: true,
+      count: this.hooks.length,
+      items: this.hooks.map((rule) => ({ ...rule })),
+    };
+  }
+
+  async createHook(payload: HookCreateInput, signal?: AbortSignal): Promise<HookRule> {
+    await this.delay(signal);
+    assertUniqueRuleName(payload.name, this.schedules, this.hooks, "mock:/api/automation/hooks");
+    const rule: HookRule = {
+      ...payload,
+      id: this.nextRuleNo++,
+      enabled: false, // creation is disabled; enablement is a PATCH
+      condition: [...(payload.condition ?? [])],
+      source_allowlist: [...(payload.source_allowlist ?? [])],
+      action_payload: { ...(payload.action_payload ?? {}) },
+      created_by: "owner",
+      created_at: this.stamp(),
+      updated_at: this.stamp(),
+    };
+    this.hooks.push(rule);
+    return { ...rule };
+  }
+
+  async patchHook(
+    ruleId: number,
+    patch: HookPatchInput,
+    signal?: AbortSignal,
+  ): Promise<HookRule> {
+    await this.delay(signal);
+    const index = this.hooks.findIndex((rule) => rule.id === ruleId);
+    if (index < 0) {
+      throw notFoundRule(ruleId, "hook", "mock:/api/automation/hooks");
+    }
+    const current = this.hooks[index];
+    const next: HookRule = {
+      ...current,
+      ...(patch.name != null ? { name: patch.name } : {}),
+      ...(patch.on != null ? { on: patch.on } : {}),
+      ...(patch.condition != null ? { condition: [...patch.condition] } : {}),
+      ...(patch.source_allowlist != null
+        ? { source_allowlist: [...patch.source_allowlist] }
+        : {}),
+      ...(patch.action != null ? { action: patch.action } : {}),
+      ...(patch.action_payload != null ? { action_payload: { ...patch.action_payload } } : {}),
+      ...(patch.cooldown_s != null ? { cooldown_s: patch.cooldown_s } : {}),
+      ...(patch.budget != null ? { budget: patch.budget } : {}),
+      ...(patch.enabled != null ? { enabled: patch.enabled } : {}),
+      updated_at: this.stamp(),
+    };
+    this.hooks[index] = next;
+    return { ...next };
+  }
+
+  async deleteHook(ruleId: number, signal?: AbortSignal): Promise<RuleDeletedAck> {
+    await this.delay(signal);
+    const index = this.hooks.findIndex((rule) => rule.id === ruleId);
+    if (index < 0) {
+      throw notFoundRule(ruleId, "hook", "mock:/api/automation/hooks");
+    }
+    this.hooks[index] = {
+      ...this.hooks[index],
+      enabled: false,
+      updated_at: this.stamp(),
+    };
+    return { ok: true, note: "soft-disabled and retained (retention)" };
+  }
+
+  /** Launch journal page: filters + the uniform cursor contract (ADR 0011 §11). */
+  async listLaunches(
+    params: LaunchesParams = {},
+    signal?: AbortSignal,
+  ): Promise<LaunchesPage> {
+    await this.delay(signal);
+    if (params.kind && params.kind !== "schedule" && params.kind !== "hook") {
+      throw new ApiError(422, `invalid kind: ${params.kind}`, {
+        url: "mock:/api/automation/launches",
+      });
+    }
+    if (
+      params.decision &&
+      !["launched", "skipped", "missed"].includes(params.decision)
+    ) {
+      throw new ApiError(422, `invalid decision: ${params.decision}`, {
+        url: "mock:/api/automation/launches",
+      });
+    }
+    const rows = this.launches
+      .filter((row) => !params.rule_id || row.rule_id === params.rule_id)
+      .filter((row) => !params.kind || row.rule_kind === params.kind)
+      .filter((row) => !params.decision || row.decision === params.decision)
+      // attempted_at DESC with the unique id tiebreak (wire contract).
+      .sort(
+        (a, b) => b.attempted_at.localeCompare(a.attempted_at) || b.id - a.id,
+      );
+    const requested = params.limit ?? DEFAULT_LAUNCH_LIMIT;
+    const truncated = requested > LAUNCH_PAGE_CAP;
+    const limit = Math.min(requested, LAUNCH_PAGE_CAP);
+    const offset = decodeLaunchCursor(params.cursor);
+    const page = rows.slice(offset, offset + limit);
+    const total = rows.length;
+    return {
+      ok: true,
+      count: page.length,
+      total,
+      items: page.map((row) => ({ ...row })),
+      next_cursor:
+        offset + page.length < total ? encodeLaunchCursor(offset + page.length) : null,
+      truncated,
+    };
+  }
+
+  /**
+   * Shared creation path (POST /api/assignments + run-now): validates the
+   * create gates (404 unknown / 422 archived-terminal / 409 ≤1-active),
+   * then queues the row with a freshly computed routing annotation.
+   */
+  private createAssignmentRow(
+    taskId: string,
+    specialist: string,
+    harness: string,
+    executorId: string,
+    createdBy: string,
+  ): AssignmentItem {
+    const task =
+      this.tasks.find((row) => row.id === taskId) ??
+      this.archivedTasks.find((row) => row.id === taskId);
+    if (!task) {
+      throw new ApiError(404, `task '${taskId}' not found`, {
+        url: "mock:/api/assignments",
+      });
+    }
+    if (task.archived === 1 || task.col === "done" || task.col === "resolved") {
+      throw new ApiError(
+        422,
+        `task '${taskId}' is ${task.archived === 1 ? "archived" : "terminal"} — assignments need an active task`,
+        { url: "mock:/api/assignments" },
+      );
+    }
+    const activeHolds = this.assignments.some(
+      (row) =>
+        row.task_id === taskId && ACTIVE_ASSIGNMENT_STATES.includes(row.state),
+    );
+    if (activeHolds) {
+      throw new ApiError(
+        409,
+        `task '${taskId}' already holds an active assignment (≤1 invariant)`,
+        { url: "mock:/api/assignments" },
+      );
+    }
+    const id = this.nextAssignmentNo++;
+    const assignment: AssignmentItem = {
+      id,
+      task_id: taskId,
+      specialist,
+      harness,
+      state: "queued",
+      created_by: createdBy,
+      claimed_by: null,
+      note: "",
+      // Fingerprint only — the spec snapshot itself never leaves the server.
+      spec_hash: `m${id.toString(16).padStart(4, "0")}c0rp5`,
+      executor_id: executorId,
+      claimed_by_executor: "",
+      created_at: this.stamp(),
+      claimed_at: null,
+      started_at: null,
+      heartbeat_at: null,
+      finished_at: null,
+      topics: [...task.mnemos_tags],
+      routing: this.resolveRouting(executorId, specialist, task.specialists, task.project),
+    };
+    this.assignments.push(assignment);
+    return { ...assignment };
+  }
+
+  /**
+   * Routing mirror (Amd 2 §5 tier chain): delegated to the shared pure
+   * resolver (gateway/routing.ts) over the mock's live registry + settings —
+   * the same implementation the AssignExecutorSheet preview uses, so dev
+   * mode and the preview can never drift apart. The project-default tier
+   * reads the mock's per-project settings (PUT with a project scope).
+   */
+  private resolveRouting(
+    pin: string,
+    specialist: string,
+    taskSpecialists: readonly string[],
+    project: string,
+  ): RoutingAnnotation {
+    return resolveRoutingAnnotation({
+      pin,
+      specialist,
+      taskSpecialists,
+      executors: this.executors,
+      projectDefault: this.executionProjectDefaults[`project:${project}`] ?? "",
+      globalDefault: this.executionSettings.default_executor,
+    });
+  }
+
+  /** Append one journal row for a manual trigger (the only S1 origin). */
+  private appendLaunch(
+    rule: ScheduleRule,
+    runAt: string,
+    decision: "launched" | "skipped",
+    reason: string,
+    assignmentId: number | null,
+  ): number {
+    const launchId = this.nextLaunchNo++;
+    this.launches.push({
+      id: launchId,
+      rule_id: rule.id,
+      rule_kind: "schedule",
+      rule_name: rule.name,
+      run_at: runAt,
+      event_id: null,
+      trigger: "manual",
+      origin: "ui",
+      decision,
+      reason,
+      assignment_id: assignmentId,
+      attempted_at: this.stamp(),
+    });
+    return launchId;
+  }
+
   /** Deterministic wire-format timestamp for mutation-created rows. */
   private stamp(): string {
     return new Date(this.now()).toISOString().replace("Z", "+00:00");
@@ -754,6 +1369,63 @@ const CONTENT_FIELDS = [
   "memory_ids",
   "mnemos_tags",
 ] as const;
+
+// --- AGW-1 wire mirrors (server constants; the mock never invents them) --------
+
+/** ADR 0009 states that hold the ≤1-active invariant (store mirror). */
+const ACTIVE_ASSIGNMENT_STATES: readonly AssignmentLifecycleState[] = [
+  "queued",
+  "claimed",
+  "running",
+];
+
+/** SCHED-1 S1 AC: rule names are unique across BOTH rule kinds (422 mirror). */
+function assertUniqueRuleName(
+  name: string,
+  schedules: readonly ScheduleRule[],
+  hooks: readonly HookRule[],
+  url: string,
+): void {
+  const taken =
+    schedules.some((rule) => rule.name === name) ||
+    hooks.some((rule) => rule.name === name);
+  if (taken) {
+    throw new ApiError(422, `rule name '${name}' is already taken`, { url });
+  }
+}
+
+/** Server `SCHEDULE_TRIGGER_KINDS` mirror (store.py — {interval, time-of-day}). */
+const SCHEDULE_TRIGGER_KINDS: readonly string[] = ["interval", "time-of-day"];
+
+/** Honest 404 for unknown automation rule ids. */
+function notFoundRule(ruleId: number, kind: string, url: string): ApiError {
+  return new ApiError(404, `${kind} rule ${ruleId} not found`, { url });
+}
+
+/** Opaque launch-cursor scheme (server `_encode_launch_cursor` mirror). */
+function encodeLaunchCursor(offset: number): string {
+  return btoa(JSON.stringify({ v: 1, offset }));
+}
+
+/** Decode a cursor this mock issued; anything else is a 422 (wire mirror). */
+function decodeLaunchCursor(cursor: string | undefined): number {
+  if (!cursor) return 0;
+  try {
+    const data: unknown = JSON.parse(atob(cursor));
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      (data as { v?: unknown }).v === 1 &&
+      typeof (data as { offset?: unknown }).offset === "number" &&
+      (data as { offset: number }).offset >= 0
+    ) {
+      return (data as { offset: number }).offset;
+    }
+  } catch {
+    // fall through to the 422 below
+  }
+  throw new ApiError(422, "invalid cursor", { url: "mock:/api/automation/launches" });
+}
 
 /** Recompute the per-column counts (board-projection `counts`). */
 function countByColumn(tasks: readonly BoardTask[]): Record<string, number> {

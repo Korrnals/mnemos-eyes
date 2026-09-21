@@ -1,6 +1,15 @@
 import type {
   ArchivePage,
+  AssignmentItem,
+  AssignmentsPage,
+  AutomationStatus,
   BoardSummary,
+  ExecutionSettings,
+  ExecutorItem,
+  ExecutorsPage,
+  HookRule,
+  LaunchRow,
+  ScheduleRule,
   TaskHistory,
   TaskInbox,
   TaskMemories,
@@ -23,6 +32,12 @@ import type { BoardTask } from "./boardTypes";
  * backlog, two validating — one past the 24h window and archcom-flagged,
  * the sweep's output), one task with 3 reports (superseded final), one with
  * memory links, plus one archived row for the archive page.
+ *
+ * AGW-1 agents corpus (same reference point): executors cover presence
+ * online/stale/offline × transports local-poll/mesh-r4 × ladder states;
+ * assignments cover all 7 lifecycle states and every routing outcome;
+ * SCHED-1 automation carries rules + a manual-only launch journal (S1: no
+ * engine exists, non-manual launches are provably zero).
  */
 
 const TASK_COLUMNS = [
@@ -586,5 +601,543 @@ export const MOCK_ARCHIVE: ArchivePage = {
         updated_at: "2026-09-18T20:00:00+00:00",
       },
     ],
+  },
+};
+
+// --- AGW-1 agents domain (ARCH-9, ADR 0009 Amd 2; spec 2026-09-19) -------------
+// Same corpus discipline as the task fixtures: reference point
+// 2026-09-19T09:00:00+00:00, no Date.now/Math.random. Presence is a STATIC
+// snapshot (the real server computes it from last_seen per GET — the mock
+// never recomputes, it serves what the corpus recorded). The projection
+// carries NO claim_token and NO spec_snapshot — only the spec_hash
+// fingerprint (contract, not fixture choice).
+
+/**
+ * Executor registry corpus. Coverage: presence online/stale/offline ×
+ * transports local-poll/mesh-r4 × ladder states pending/approved/revoked;
+ * capabilities are owner-declared allowlist mappings (spec §0), the L0
+ * bootstrap executor (exec-old-poller) deliberately carries none.
+ */
+export const MOCK_EXECUTORS: ExecutorItem[] = [
+  {
+    id: "exec-laptop-zcode",
+    name: "zcode@laptop",
+    harness: "zcode",
+    host: "laptop",
+    transport: "local-poll",
+    capabilities: ["@GCW: Senior Frontend Developer", "@GCW: Tech Lead"],
+    version: "1.11.3",
+    enabled: true,
+    state: "approved",
+    last_seen: "2026-09-19T08:59:30+00:00",
+    presence: "online",
+    registered_at: "2026-09-18T09:00:00+00:00",
+    updated_at: "2026-09-19T08:00:00+00:00",
+  },
+  {
+    id: "exec-laptop-hermes",
+    name: "hermes@laptop",
+    harness: "hermes",
+    host: "laptop",
+    transport: "local-poll",
+    capabilities: ["@GCW: Senior System Engineer"],
+    version: "0.4.1",
+    enabled: true,
+    state: "approved",
+    // 5 min before the corpus point — inside the stale corridor (2–10 min).
+    last_seen: "2026-09-19T08:55:00+00:00",
+    presence: "stale",
+    registered_at: "2026-09-17T14:20:00+00:00",
+    updated_at: "2026-09-18T10:00:00+00:00",
+  },
+  {
+    id: "exec-mesh-qa",
+    name: "zcode@mesh-2",
+    harness: "zcode",
+    host: "mesh-2",
+    transport: "mesh-r4",
+    capabilities: ["@GCW: Senior QA Engineer"],
+    version: "1.11.3",
+    enabled: true,
+    state: "approved",
+    last_seen: "2026-09-19T08:58:00+00:00",
+    presence: "online",
+    registered_at: "2026-09-16T11:30:00+00:00",
+    updated_at: "2026-09-19T07:45:00+00:00",
+  },
+  {
+    id: "exec-old-poller",
+    name: "zcode@old-laptop",
+    harness: "zcode",
+    host: "old-laptop",
+    transport: "local-poll",
+    // L0 bootstrap shape: no owner-declared capabilities (auto-tier worker).
+    capabilities: [],
+    version: "1.10.0",
+    enabled: true,
+    state: "approved",
+    // 3 h silent — beyond the 10 min offline bound.
+    last_seen: "2026-09-19T06:00:00+00:00",
+    presence: "offline",
+    registered_at: "2026-09-15T08:00:00+00:00",
+    updated_at: "2026-09-15T08:00:00+00:00",
+  },
+  {
+    id: "exec-copilot-pending",
+    name: "copilot@new-host",
+    harness: "copilot",
+    host: "new-host",
+    transport: "mesh-r4",
+    capabilities: [],
+    version: "0.9.0",
+    enabled: false,
+    state: "pending",
+    // Pending executors MAY tick — the owner sees liveness before approving.
+    last_seen: "2026-09-19T08:59:00+00:00",
+    presence: "online",
+    registered_at: "2026-09-19T08:40:00+00:00",
+    updated_at: "2026-09-19T08:40:00+00:00",
+  },
+  {
+    id: "exec-copilot-revoked",
+    name: "copilot@old-host",
+    harness: "copilot",
+    host: "old-host",
+    transport: "local-poll",
+    capabilities: ["@GCW: Senior Security Engineer"],
+    version: "0.8.2",
+    enabled: false,
+    state: "revoked",
+    last_seen: "2026-09-18T18:00:00+00:00",
+    presence: "offline",
+    registered_at: "2026-09-14T12:00:00+00:00",
+    updated_at: "2026-09-18T18:05:00+00:00",
+  },
+];
+
+/**
+ * Registry page meta — the server-owned presence contract travelling WITH
+ * the data (spec §5.1): online ≤ 120 s, stale ≤ 600 s, sweeper every 60 s.
+ * Prod constants recorded in the corpus; the UI reads, never hardcodes.
+ */
+export const MOCK_EXECUTORS_META: ExecutorsPage["meta"] = {
+  presence: { online_max_age_s: 120, stale_max_age_s: 600 },
+  sweeper_interval_s: 60,
+};
+
+export const MOCK_EXECUTORS_PAGE: ExecutorsPage = {
+  ok: true,
+  count: MOCK_EXECUTORS.length,
+  items: MOCK_EXECUTORS.map((executor) => ({ ...executor })),
+  meta: MOCK_EXECUTORS_META,
+};
+
+/**
+ * Assignment queue corpus — all 7 lifecycle states, plus queued rows
+ * covering the distinct routing outcomes (specialist / explicit pin /
+ * unmatched wait / global default; claimed/running add the auto tier).
+ * claimed_by strings are DECLARED identities (unverified, spec §2.2).
+ */
+export const MOCK_ASSIGNMENTS: AssignmentItem[] = [
+  {
+    id: 101,
+    task_id: "TB-1",
+    specialist: "@GCW: Senior Frontend Developer",
+    harness: "zcode",
+    state: "queued",
+    created_by: "owner",
+    claimed_by: null,
+    note: "",
+    spec_hash: "b6f4a1c2d3e4",
+    executor_id: "",
+    claimed_by_executor: "",
+    created_at: "2026-09-19T08:30:00+00:00",
+    claimed_at: null,
+    started_at: null,
+    heartbeat_at: null,
+    finished_at: null,
+    topics: ["project:mnemos-eyes", "topic:ui"],
+    routing: { resolved: "exec-laptop-zcode", reason: "specialist" },
+  },
+  {
+    id: 102,
+    task_id: "TB-3",
+    specialist: "@GCW: Senior QA Engineer",
+    harness: "zcode",
+    state: "queued",
+    created_by: "owner",
+    claimed_by: null,
+    note: "",
+    spec_hash: "9d2e7b8a1f0c",
+    // Explicit pin — the only tier enforced at claim (Amd 2 §5).
+    executor_id: "exec-mesh-qa",
+    claimed_by_executor: "",
+    created_at: "2026-09-19T08:41:00+00:00",
+    claimed_at: null,
+    started_at: null,
+    heartbeat_at: null,
+    finished_at: null,
+    topics: ["project:mnemos-eyes"],
+    routing: { resolved: "exec-mesh-qa", reason: "explicit" },
+  },
+  {
+    id: 103,
+    task_id: "TB-5",
+    specialist: "@GCW: Senior Frontend Developer",
+    harness: "hermes",
+    state: "queued",
+    created_by: "automation",
+    claimed_by: null,
+    note: "создано правилом «ночной чек»",
+    spec_hash: "0a5c9e3b7d21",
+    executor_id: "",
+    claimed_by_executor: "",
+    created_at: "2026-09-19T07:05:00+00:00",
+    claimed_at: null,
+    started_at: null,
+    heartbeat_at: null,
+    finished_at: null,
+    topics: ["project:mnemos-eyes", "topic:sse"],
+    // No eligible route — the honest «ждёт исполнителя» chip (spec §2.3).
+    routing: { resolved: null, reason: "unmatched" },
+  },
+  {
+    id: 104,
+    task_id: "TB-12",
+    specialist: "@GCW: SRE/DevOps",
+    harness: "zcode",
+    state: "queued",
+    created_by: "owner",
+    claimed_by: null,
+    note: "",
+    spec_hash: "c81b6f2a4e90",
+    executor_id: "",
+    claimed_by_executor: "",
+    created_at: "2026-09-19T08:50:00+00:00",
+    claimed_at: null,
+    started_at: null,
+    heartbeat_at: null,
+    finished_at: null,
+    topics: ["project:vesmaro", "topic:workflow"],
+    routing: { resolved: "exec-laptop-zcode", reason: "global-default" },
+  },
+  {
+    id: 105,
+    task_id: "T6",
+    specialist: "@GCW: Senior Frontend Developer",
+    harness: "zcode",
+    state: "claimed",
+    created_by: "owner",
+    // Declared identity — executor-claimed, server-unverified.
+    claimed_by: "zcode:laptop",
+    note: "",
+    spec_hash: "e7d3a8f1b6c4",
+    executor_id: "",
+    claimed_by_executor: "exec-laptop-zcode",
+    created_at: "2026-09-19T08:20:00+00:00",
+    // 16 min before the corpus point — feeds the >10 min no-start amber.
+    claimed_at: "2026-09-19T08:44:00+00:00",
+    started_at: null,
+    heartbeat_at: null,
+    finished_at: null,
+    topics: ["project:mnemos-eyes"],
+    routing: { resolved: "exec-laptop-zcode", reason: "specialist" },
+  },
+  {
+    id: 106,
+    task_id: "TB-11",
+    specialist: "@GCW: Senior Frontend Developer",
+    harness: "zcode",
+    state: "running",
+    created_by: "owner",
+    claimed_by: "zcode:laptop",
+    note: "",
+    spec_hash: "1f0b9c5e2a8d",
+    executor_id: "",
+    claimed_by_executor: "exec-laptop-zcode",
+    created_at: "2026-09-19T08:10:00+00:00",
+    claimed_at: "2026-09-19T08:35:00+00:00",
+    started_at: "2026-09-19T08:40:00+00:00",
+    // Fresh pulse — 90 s before the corpus point (inside the 2 min bound).
+    heartbeat_at: "2026-09-19T08:58:30+00:00",
+    finished_at: null,
+    topics: ["project:mnemos", "topic:design"],
+    routing: { resolved: "exec-laptop-zcode", reason: "auto" },
+  },
+  {
+    id: 107,
+    task_id: "TB-6",
+    specialist: "@GCW: Senior QA Engineer",
+    harness: "zcode",
+    state: "done",
+    created_by: "owner",
+    claimed_by: "zcode:mesh-2",
+    note: "финальный отчёт записан (final, id 3)",
+    spec_hash: "4c2d7e9a1b5f",
+    executor_id: "",
+    claimed_by_executor: "exec-mesh-qa",
+    created_at: "2026-09-19T06:00:00+00:00",
+    claimed_at: "2026-09-19T06:05:00+00:00",
+    started_at: "2026-09-19T06:07:00+00:00",
+    heartbeat_at: "2026-09-19T07:50:00+00:00",
+    finished_at: "2026-09-19T08:05:00+00:00",
+    topics: ["project:mnemos-eyes", "topic:qa"],
+    routing: { resolved: "exec-mesh-qa", reason: "specialist" },
+  },
+  {
+    id: 108,
+    task_id: "RB-2",
+    specialist: "@GCW: Senior Security Engineer",
+    harness: "copilot",
+    state: "failed",
+    created_by: "owner",
+    claimed_by: "copilot:old-host",
+    note: "причина из fail-отчёта: publish-токен без org → 403",
+    spec_hash: "6a8e1d3f0c7b",
+    executor_id: "",
+    claimed_by_executor: "exec-copilot-revoked",
+    created_at: "2026-09-18T15:00:00+00:00",
+    claimed_at: "2026-09-18T15:02:00+00:00",
+    started_at: "2026-09-18T15:05:00+00:00",
+    heartbeat_at: "2026-09-18T17:40:00+00:00",
+    finished_at: "2026-09-18T17:55:00+00:00",
+    topics: ["project:mnemos", "topic:security"],
+    routing: { resolved: null, reason: "unmatched" },
+  },
+  {
+    id: 109,
+    task_id: "TB-7",
+    specialist: "@GCW: Architectural Committee",
+    harness: "zcode",
+    state: "cancelled",
+    created_by: "owner",
+    claimed_by: null,
+    note: "владелец отменил: дубликат запуска",
+    spec_hash: "2b7f4c9a1e6d",
+    executor_id: "",
+    claimed_by_executor: "",
+    created_at: "2026-09-19T05:00:00+00:00",
+    claimed_at: null,
+    started_at: null,
+    heartbeat_at: null,
+    finished_at: "2026-09-19T05:10:00+00:00",
+    topics: ["project:mnemos"],
+    routing: { resolved: null, reason: "unmatched" },
+  },
+  {
+    id: 110,
+    task_id: "TB-13",
+    specialist: "@GCW: Senior QA Engineer",
+    harness: "zcode",
+    state: "expired",
+    created_by: "automation",
+    claimed_by: "zcode:old-laptop",
+    note: "reaper: 30 мин без пульса",
+    spec_hash: "8e0c3b7d5f2a",
+    executor_id: "",
+    claimed_by_executor: "exec-old-poller",
+    created_at: "2026-09-19T03:00:00+00:00",
+    claimed_at: "2026-09-19T03:10:00+00:00",
+    started_at: "2026-09-19T03:15:00+00:00",
+    heartbeat_at: "2026-09-19T04:00:00+00:00",
+    finished_at: "2026-09-19T04:30:00+00:00",
+    topics: ["project:mnemos-eyes"],
+    routing: { resolved: null, reason: "unmatched" },
+  },
+];
+
+export const MOCK_ASSIGNMENTS_PAGE: AssignmentsPage = {
+  ok: true,
+  count: MOCK_ASSIGNMENTS.length,
+  items: MOCK_ASSIGNMENTS.map((assignment) => ({ ...assignment })),
+};
+
+/** Default-executor pair (Amd 2 §5): the laptop poller routes, mesh backs. */
+export const MOCK_EXECUTION_SETTINGS: ExecutionSettings = {
+  ok: true,
+  default_executor: "exec-laptop-zcode",
+  fallback_executor: "exec-mesh-qa",
+  scope: "",
+};
+
+// --- SCHED-1 automation fixtures (ADR 0013; S1 = contracts, no engine) --------
+
+export const MOCK_SCHEDULES: ScheduleRule[] = [
+  {
+    id: 1,
+    name: "утренний съём статуса TB-1",
+    enabled: true,
+    target_kind: "task",
+    task_id: "TB-1",
+    specialist: "@GCW: Senior Frontend Developer",
+    harness: "zcode",
+    executor_id: "",
+    trigger_kind: "time-of-day",
+    trigger_value: "09:00",
+    window_from: null,
+    window_to: null,
+    max_runs_per_day: 1,
+    cooldown_s: 3600,
+    next_run_at: "2026-09-20T09:00:00+00:00",
+    last_run_at: "2026-09-19T09:00:00+00:00",
+    created_by: "owner",
+    created_at: "2026-09-18T12:00:00+00:00",
+    updated_at: "2026-09-18T12:00:00+00:00",
+  },
+  {
+    id: 2,
+    name: "ночной чек спек-драйф TB-5",
+    // Soft-deleted retention row (ADR 0013 §2): listed, disabled, name held.
+    enabled: false,
+    target_kind: "task",
+    task_id: "TB-5",
+    specialist: "@GCW: Senior Frontend Developer",
+    harness: "hermes",
+    executor_id: "",
+    trigger_kind: "interval",
+    trigger_value: "PT12H",
+    window_from: "23:00",
+    window_to: "07:00",
+    max_runs_per_day: 2,
+    cooldown_s: 3600,
+    next_run_at: null,
+    last_run_at: "2026-09-19T03:00:00+00:00",
+    created_by: "owner",
+    created_at: "2026-09-17T10:00:00+00:00",
+    updated_at: "2026-09-19T04:00:00+00:00",
+  },
+];
+
+export const MOCK_HOOKS: HookRule[] = [
+  {
+    id: 1,
+    name: "уведомить о провале исполнения",
+    enabled: true,
+    on: "assignment.failed",
+    condition: [],
+    source_allowlist: ["ui", "server", "machine"],
+    action: "notify",
+    action_payload: {},
+    cooldown_s: 300,
+    budget: 4,
+    created_by: "owner",
+    created_at: "2026-09-18T09:00:00+00:00",
+    updated_at: "2026-09-18T09:00:00+00:00",
+  },
+  {
+    id: 2,
+    name: "черновик поручения при блокировке",
+    enabled: false,
+    on: "task.updated",
+    condition: [{ field: "task_col", op: "eq", value: "blocked" }],
+    source_allowlist: ["ui", "server"],
+    action: "create_assignment",
+    action_payload: { specialist: "@GCW: Tech Lead", harness: "zcode" },
+    cooldown_s: 1800,
+    budget: 2,
+    created_by: "owner",
+    created_at: "2026-09-18T15:30:00+00:00",
+    updated_at: "2026-09-19T06:00:00+00:00",
+  },
+];
+
+/**
+ * Launch journal corpus. S1 honesty (ADR 0013 §2): no engine exists, so
+ * every row is a MANUAL trigger (origin ui) — non-manual launches are
+ * provably zero, and the skipped row records a refused 409 attempt.
+ */
+export const MOCK_LAUNCHES: LaunchRow[] = [
+  {
+    id: 2,
+    rule_id: 1,
+    rule_kind: "schedule",
+    rule_name: "утренний съём статуса TB-1",
+    run_at: "2026-09-19T09:05:00+00:00",
+    event_id: null,
+    trigger: "manual",
+    origin: "ui",
+    decision: "skipped",
+    reason: "409: активное поручение уже держит задачу TB-1",
+    assignment_id: null,
+    attempted_at: "2026-09-19T09:05:01+00:00",
+  },
+  {
+    id: 1,
+    rule_id: 1,
+    rule_kind: "schedule",
+    rule_name: "утренний съём статуса TB-1",
+    run_at: "2026-09-19T09:00:00+00:00",
+    event_id: null,
+    trigger: "manual",
+    origin: "ui",
+    decision: "launched",
+    reason: "",
+    assignment_id: 101,
+    attempted_at: "2026-09-19T09:00:01+00:00",
+  },
+];
+
+/** Status projection — engine false is the honest S1 constant (no loop). */
+export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
+  ok: true,
+  engine: false,
+  global_kill_switch: false,
+  daily_cap: 50,
+  daily_used: 0,
+  // condition_meta mirrors the SERVER dictionaries VERBATIM
+  // (store.RULE_CONDITION_FIELD_ENUMS / HOOK_EVENT_WHITELIST): fields with
+  // closed enums get values_hint; project/specialist/executor_id are
+  // free-form (null); harness joins through KNOWN_HARNESSES. The form is
+  // BUILT from it, never from UI constants (review SCHED-1-UI P2-1).
+  condition_meta: {
+    fields: [
+      "col",
+      "env",
+      "executor_id",
+      "harness",
+      "priority",
+      "project",
+      "specialist",
+      "state",
+      "status",
+      "transport",
+    ],
+    ops: ["eq", "ne"],
+    values_hint: {
+      col: ["backlog", "validating", "open", "in-progress", "blocked", "resolved", "done"],
+      env: ["cluster", "laptop", "local", "cloud", "unknown"],
+      executor_id: null,
+      harness: [
+        "zcode",
+        "hermes",
+        "pi",
+        "copilot",
+        "claude-code",
+        "cursor",
+        "aider",
+        "continue",
+        "cline",
+        "windsurf",
+      ],
+      priority: ["critical", "high", "normal", "low"],
+      project: null,
+      specialist: null,
+      state: ["queued", "claimed", "running", "done", "failed", "cancelled", "expired"],
+      status: ["blocked", "done", "in-progress", "open", "resolved", "withdrawn"],
+      transport: ["local-poll", "mesh-r4"],
+    },
+    events: [
+      "task.moved",
+      "assignment.failed",
+      "assignment.expired",
+      "task.validation-timeout",
+      "executor.offline",
+    ],
+    actions: ["create_assignment", "notify"],
+    source_origins: ["machine", "server", "ui"],
+  },
+  rules: {
+    schedules: { total: 2, enabled: 1 },
+    hooks: { total: 2, enabled: 1 },
   },
 };

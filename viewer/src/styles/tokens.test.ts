@@ -184,6 +184,70 @@ describe("reduced-motion overrides (design-system.md §7)", () => {
   });
 });
 
+// --- badge-tint contrast (WCAG 1.4.3; AGW-2 review P2-1) -----------------------
+//
+// The semantic badges render `bg-<token>/15 text-<token>` over the theme's
+// WELL surface (cards/rows). Terminal assignment badges must clear 4.5:1
+// (spec §3.1), so the warning pair is regression-locked with the real WCAG
+// arithmetic — tint = 15% token over the well background, alpha-composited.
+
+/** Parse one hex color out of a theme block. */
+function tokenHex(block: string, token: string): [number, number, number] {
+  const match = block.match(new RegExp(`${token}:\\s*#([0-9a-f]{6})`, "i"));
+  expect(match, `${token} present in the block`).not.toBeNull();
+  const hex = match![1];
+  return [
+    parseInt(hex.slice(0, 2), 16),
+    parseInt(hex.slice(2, 4), 16),
+    parseInt(hex.slice(4, 6), 16),
+  ];
+}
+
+/** WCAG relative luminance. */
+function luminance([r, g, b]: [number, number, number]): number {
+  const channel = (value: number): number => {
+    const srgb = value / 255;
+    return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** Alpha-composite a 15% token tint over an opaque surface. */
+function tint15(fg: [number, number, number], bg: [number, number, number]) {
+  return fg.map((value, index) => 0.15 * value + 0.85 * bg[index]) as [
+    number,
+    number,
+    number,
+  ];
+}
+
+function contrast(a: [number, number, number], b: [number, number, number]): number {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+describe("warning badge contrast — /15 tint over the theme well (spec §3.1 ≥4.5)", () => {
+  it("light: #8a5a17 on the tint clears AA (the P2-1 regression lock)", () => {
+    const well = tokenHex(lightBlock, "--color-bg-well");
+    const warning = tokenHex(lightBlock, "--color-warning");
+    // The fix itself: one step darker than the failing #946018 (4.34).
+    expect(warning).toEqual([0x8a, 0x5a, 0x17]);
+    expect(contrast(warning, tint15(warning, well))).toBeGreaterThanOrEqual(4.5);
+    // Pure surfaces must not degrade either (both improved vs #946018).
+    const elevated = tokenHex(lightBlock, "--color-bg-elevated");
+    expect(contrast(warning, well)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(warning, elevated)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("dark: #b8852a on the tint stays AA (unchanged by the fix)", () => {
+    const well = tokenHex(darkBlock, "--color-bg-well");
+    const warning = tokenHex(darkBlock, "--color-warning");
+    expect(warning).toEqual([0xb8, 0x85, 0x2a]);
+    expect(contrast(warning, tint15(warning, well))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 describe("self-hosted fonts (T4)", () => {
   it("stacks the self-hosted variable families ahead of the static names", () => {
     expect(tokensCss).toMatch(/--font-ui:\s*"Inter Variable", "Inter"/);
