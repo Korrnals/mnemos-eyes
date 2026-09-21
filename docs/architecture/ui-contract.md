@@ -219,6 +219,28 @@ hash в payload, если понадобится). Транспортное ог
 `assignment.created` существующим путём create_assignment — БЕЗ
 `scheduler.launched`: ручной запуск не автомитика (ADR 0013 §2).
 
+### Словарь `pairing.*` (CV-7 / ADR 0012 — эмиттеры в этой же фазе)
+
+Домен QR-пейринга и device-сессий. Серверные эмиттеры вводятся волной
+CV-7 (та же фаза, что и это резервирование — правило `assignment.*`,
+урок gap `kind:"report"`). Payload-инвариант (ADR 0012 §3.3, блокирующий):
+в payload НИКОГДА нет `code`, `verify` (цифр) и `device_token` —
+`/api/events` неаутентифицирован, LAN-стрим не должен видеть секреты
+пейринга; verify — только `GET /api/pairing/{id}` под ui-token и ответ
+exchange самому устройству. `device_name` — self-asserted («unverified»,
+ADR 0009 §8); UI обязан рендерить его как текст.
+
+| kind | Payload (v1) | Эмиттер | Клиент |
+| --- | --- | --- | --- |
+| `pairing.requested` | `pairing_id: str, device_name?: str` + `notification` (факт) | POST `/api/pairing/exchange` при `created→scanned` (ровно один раз — повторные exchange идемпотентны без события) | до UI-волны пейринга не обрабатывается |
+| `pairing.confirmed` | `pairing_id: str, device_name?: str` + `notification` | POST `/api/pairing/{id}/confirm` (`allow=true`, переход `scanned→confirmed`) | до UI-волны пейринга не обрабатывается |
+| `pairing.revoked` | `pairing_id: str` \| `device_id: str` (ровно один из двух) + `notification` | DELETE `/api/pairing/{id}`; confirm `allow=false`; DELETE `/api/devices/{id}` (ревок device-сессии) | до UI-волны пейринга не обрабатывается |
+| `pairing.expired` | `pairing_id: str` + `notification` | TTL-sweep (3 мин, in-process цикл по образцу reaper) | до UI-волны пейринга не обрабатывается |
+
+Транспортное ограничение то же, что у `assignment.*`: SSE — уведомление,
+не источник правды; после (re)connect клиент пере-fetch
+`GET /api/pairing/{id}` / `GET /api/devices`.
+
 ### Встроенные объекты
 
 - `Task`: `id`, `col` (`open|in-progress|blocked|resolved|done`),

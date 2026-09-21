@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fnmatch
 import hmac
 import json
 import logging
@@ -49,6 +50,8 @@ from .store import (
     REAP_QUEUED_AFTER_S,
     AutomationError,
     AutomationValidationError,
+    DEVICE_TOKEN_PREFIX,
+    DeviceQuotaError,
     EXECUTOR_TRANSPORTS,
     ExecutorConflictError,
     ExecutorError,
@@ -58,6 +61,9 @@ from .store import (
     InvalidTransitionError,
     PRESENCE_ONLINE_S,
     PRESENCE_STALE_S,
+    PairingExpiredError,
+    PairingNotFoundError,
+    PairingStateError,
     REPORT_KINDS,
     RuleNotFoundError,
     Store,
@@ -447,6 +453,53 @@ async def _validation_sweeper() -> None:
             _validation_sweep_log.exception("validation sweep tick failed")
 
 
+# --------------------------------------- pairing TTL sweep (CV-7, ADR 0012 §6)
+# One TTL for code/QR/verify (3 min). The sweep flips live pairings past
+# expires_at to `expired` and emits SSE pairing.expired + notification;
+# it also expires device sessions whose sliding (30 d, no activity) or
+# hard (90 d) clock ran out (no SSE — the §11 dictionary has no device.*
+# kinds; the device learns via 401 on its next request).
+_PAIRING_SWEEP_INTERVAL_S = 60.0
+_PAIRING_SWEEP_START_STAGGER_S = 45.0   # never tick in lockstep with the reaper
+_pairing_sweep_log = logging.getLogger("vesmaro.pairing-sweep")
+
+
+def _pairing_sweep_once() -> dict[str, int]:
+    """One synchronous sweep pass — no sleeps, directly testable (the
+    reaper-tick pattern). Notifications say the FACT only: no code, no
+    verify digits, no tokens (payload audit, ADR §3.3)."""
+    pairings = store.expire_stale_pairings()
+    for row in pairings:
+        _notify_and_broadcast(
+            "system", "Пейринг истёк",
+            f"пейринг {row['id']} истёк по TTL — начните заново", None,
+            {"kind": "pairing.expired", "pairing_id": row["id"]})
+        _pairing_sweep_log.info("pairing expired id=%s", row["id"])
+    devices = store.expire_stale_devices()
+    for row in devices:
+        _pairing_sweep_log.info(
+            "device session expired id=%s name=%s", row["id"], row["name"])
+    if pairings or devices:
+        _pairing_sweep_log.info(
+            "pairing sweep pass: pairings_expired=%d devices_expired=%d",
+            len(pairings), len(devices))
+    return {"pairings_expired": len(pairings),
+            "devices_expired": len(devices)}
+
+
+async def _pairing_sweeper() -> None:
+    """Background loop (pattern: _assignment_reaper): every 60 s call
+    _pairing_sweep_once. A tick failure is logged with the traceback and
+    never kills the loop."""
+    await asyncio.sleep(_PAIRING_SWEEP_START_STAGGER_S)
+    while True:
+        try:
+            _pairing_sweep_once()
+        except Exception:
+            _pairing_sweep_log.exception("pairing sweep tick failed")
+        await asyncio.sleep(_PAIRING_SWEEP_INTERVAL_S)
+
+
 # Routing resolution chain (Amd 2 §5), computed per GET — stored nowhere
 # (no staleness). Tiers: explicit pin → assignment.specialist capability
 # match → task.specialists match → project default → global default →
@@ -544,12 +597,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     presence_task = asyncio.create_task(_presence_sweeper())
     # ---- WF-1: validation sweep (24h timeout → archcom branch).
     validation_task = asyncio.create_task(_validation_sweeper())
+    # ---- CV-7 (ADR 0012 §6): pairing/device TTL sweep (staggered).
+    pairing_sweep_task = asyncio.create_task(_pairing_sweeper())
     yield
     task.cancel()
     inbox_task.cancel()
     reaper_task.cancel()
     presence_task.cancel()
     validation_task.cancel()
+    pairing_sweep_task.cancel()
 
 
 COLUMN_RU = {
@@ -558,7 +614,65 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.11.5", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.12.0", lifespan=lifespan)
+
+# ------------------------------------- device-token scope guard (ADR 0012 §5)
+# The single scope middleware for PREFIX-CLASSIFIED tokens, standing
+# BEFORE every handler-level guard (_guard_write / _guard_ui_write see
+# only non-device bearers). Today exactly one prefix exists: mnd_ =
+# device. mnu_/mnm_ join this same table when the ui/machine prefixes
+# roll out. Non-prefixed bearers pass through UNTOUCHED — the deployed
+# ui/machine tokens (including the owner's systemd poller riding
+# VESMARO_BOARD_TOKEN) keep their existing validation legs byte-for-byte;
+# prefix classification only ADDS the device class.
+#
+# Semantics (ADR §5 table + §10.4):
+#   - route not in the class table → 403: the token's CLASS has no rights
+#     there. A VALID device token on a mutation is 403, never 401 — the
+#     token authenticates fine, the scope does not cover the route.
+#   - route allowed → validate (hash-only lookup, sliding 30 d / hard
+#     90 d TTL, revoke kill-switch); failure → 401.
+# Comparison discipline: classification is prefix-only (no secret
+# material); the digest compare inside the store is constant-time.
+# Registered BEFORE add_security_headers so the header middleware stays
+# outermost and every 401/403 answered here still carries CSP/nosniff.
+_DEVICE_ALLOWED_ROUTES = (
+    "/api/tasks*",     # board/task/history/reports/inbox reads (ADR §10.4)
+    "/api/memories*",  # memory listings/cards/pulse reads
+    "/api/events",     # SSE stream
+    "/api/health",
+)
+
+
+@app.middleware("http")
+async def device_scope_guard(request: Request, call_next):
+    """Classify bearers by token prefix (ADR 0012 §5). Everything not
+    starting with ``Bearer mnd_`` rides the existing guards unchanged."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith(f"Bearer {DEVICE_TOKEN_PREFIX}"):
+        return await call_next(request)
+    path = request.url.path
+    allowed = request.method == "GET" and any(
+        fnmatch.fnmatch(path, p) for p in _DEVICE_ALLOWED_ROUTES)
+    if not allowed:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "device tokens are read-only (scope v0: "
+                               "read); pairing and device management "
+                               "require the ui token"})
+    device = store.validate_device_token(
+        auth[len("Bearer "):].strip(),
+        ua=request.headers.get("User-Agent", ""),
+        ip=request.client.host if request.client else "",
+    )
+    if device is None:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "device token is invalid, expired or revoked"})
+    # identity for downstream handlers/audit; nothing reads it in v0 reads
+    request.state.device = device
+    return await call_next(request)
+
 
 # --------------------------------------------------- security headers (Ф0a)
 # АРХКОМ-3 decision 13 / security verdict §5.2: on EVERY response — CSP,
@@ -4121,6 +4235,385 @@ def _report_identity_mismatch(executor: dict[str, Any] | None,
     covers = ((name_tokens and name_tokens <= declared)
               or (harness_tokens and harness_tokens <= declared))
     return not covers
+
+
+# ------------------------------------------- QR pairing + devices (CV-7, ADR 0012)
+# Server side of the LAN-direct pairing protocol (§2): the trusted side
+# creates + confirms (ui-token, fail-closed 503 while unconfigured — the
+# _guard_ui_write pattern), the device only ever presents the single-use
+# code on the unauthenticated exchange leg. Security invariants baked in
+# here (§3, all blocking): verify digits NEVER ride SSE or stored
+# notifications (payload audit); token issuance is one-shot (the store
+# CASes confirmed→issued); the first exchange binds the pairing to the
+# client IP; device tokens are read-only by the scope middleware above.
+_PAIRING_CREATE_RATE_LIMIT = 3          # creations per client ...
+_PAIRING_CREATE_RATE_WINDOW = 600.0    # ... per sliding 10 min (§3.4)
+_pairing_create_limiter = RateLimiter(
+    limit=_PAIRING_CREATE_RATE_LIMIT, window=_PAIRING_CREATE_RATE_WINDOW)
+_PAIRING_CONFIRM_RATE_LIMIT = 3         # confirms per client ...
+_PAIRING_CONFIRM_RATE_WINDOW = 600.0    # ... per sliding 10 min
+_pairing_confirm_limiter = RateLimiter(
+    limit=_PAIRING_CONFIRM_RATE_LIMIT, window=_PAIRING_CONFIRM_RATE_WINDOW)
+_PAIRING_EXCHANGE_RATE_LIMIT = 5        # exchange attempts per pairing ...
+_PAIRING_EXCHANGE_RATE_WINDOW = 600.0   # ... per sliding 10 min (§3.4)
+_pairing_exchange_limiter = RateLimiter(
+    limit=_PAIRING_EXCHANGE_RATE_LIMIT, window=_PAIRING_EXCHANGE_RATE_WINDOW)
+# Global per-IP budget for the UNAUTHENTICATED pairing surface (§3.4
+# "глобальный per-IP лимит на /api/pairing/*"). Scoped to /api/pairing/
+# exchange on purpose: every other /api/pairing* route is ui-token-gated
+# with its own limiter, and folding them into one per-IP bucket would let
+# the owner's own panel starve the device leg.
+_PAIRING_IP_RATE_LIMIT = 30
+_PAIRING_IP_RATE_WINDOW = 600.0
+_pairing_ip_limiter = RateLimiter(
+    limit=_PAIRING_IP_RATE_LIMIT, window=_PAIRING_IP_RATE_WINDOW)
+
+
+class PairingCreateBody(BaseModel):
+    """Optional owner-side label; the device's self-asserted name at
+    exchange is what the owner actually confirms (§3.6). Cap 64 chars —
+    rendered as text downstream (stored-XSS prophylaxis)."""
+    device_name: str = Field(default="", max_length=64)
+
+
+class PairingExchangeBody(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    device_name: str = Field(default="", max_length=64)
+
+
+class PairingConfirmBody(BaseModel):
+    allow: bool
+
+
+class PairingCreatedOut(_ApiModel):
+    ok: bool
+    pairing_id: str
+    code: str            # the ONLY place the code ever appears (§2.1)
+    verify: str
+    expires_at: str
+    state: str = "created"
+
+
+class PairingStatusOut(_ApiModel):
+    ok: bool
+    pairing_id: str
+    state: str
+    verify: str          # trusted side's only source of the digits (§3.3)
+    device_name: str = ""
+    source_ip: str = ""
+    scope: str = "read"
+    created_at: str = ""
+    scanned_at: str = ""
+    confirmed_at: str = ""
+    expires_at: str = ""
+
+
+class PairingExchangeAwaitingOut(_ApiModel):
+    ok: bool
+    status: str          # "awaiting_confirmation"
+    pairing_id: str
+    state: str
+    verify: str          # device-side screen check (§3.5 — not a secret)
+
+
+class PairingIssuedOut(_ApiModel):
+    ok: bool
+    device_id: str
+    device_token: str    # the ONLY place the mnd_ token ever appears (§2.5)
+    scope: str
+    expires_at: str
+    hard_expires_at: str
+
+
+class PairingConfirmOut(_ApiModel):
+    ok: bool
+    pairing_id: str
+    state: str
+    outcome: str         # confirmed | denied | idempotent
+
+
+class DeviceOut(_ApiModel):
+    """Public device session — token_hash never leaves the store."""
+    id: str
+    name: str
+    scope: str
+    state: str
+    created_at: str
+    last_seen_at: str = ""
+    last_seen: str = ""
+    expires_at: str = ""
+    hard_expires_at: str = ""
+    ua: str = ""
+    ip: str = ""
+
+
+class DevicesOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[DeviceOut]
+
+
+class DeviceRevokedOut(_ApiModel):
+    ok: bool
+    device: DeviceOut
+
+
+def _pairing_state_of(row: dict[str, Any]) -> str:
+    """Effective state for status reads: a live pairing past its TTL
+    reports expired even before the sweep persists it."""
+    return "expired" if Store.pairing_row_expired(row) else row["state"]
+
+
+@app.post("/api/pairing", status_code=201)
+async def create_pairing(body: PairingCreateBody,
+                         request: Request) -> PairingCreatedOut:
+    """Start a pairing (ui-token; ADR 0012 §2.1). 201 returns the code
+    (128-bit urlsafe, single-use, TTL 3 min) and the 4 verify digits —
+    the code appears in exactly one response body, this one. Rate 3 per
+    10 min per client (§3.4). Fail-closed 503 while the ui token is not
+    configured (no pairing on a tokenless board)."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _pairing_create_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"pairing creation rate limit exceeded "
+            f"({_PAIRING_CREATE_RATE_LIMIT} per "
+            f"{_PAIRING_CREATE_RATE_WINDOW:.0f}s per client)",
+        )
+    row, code = store.create_pairing_request(
+        created_by="owner", device_name=body.device_name.strip())
+    return {"ok": True, "pairing_id": row["id"], "code": code,
+            "verify": row["verify"], "expires_at": row["expires_at"],
+            "state": row["state"]}
+
+
+@app.post("/api/pairing/exchange", response_model=None,
+          responses={200: {"model": PairingIssuedOut},
+                     202: {"model": PairingExchangeAwaitingOut}})
+async def exchange_pairing(body: PairingExchangeBody,
+                           request: Request):
+    """The device leg (NO auth — the single-use code IS the credential;
+    ADR 0012 §2.3/§2.5). Poll semantics:
+
+    - created → scanned: binds the client IP (§3.1, first exchange only)
+      and the self-asserted device_name, emits SSE pairing.requested,
+      answers 202 {status: awaiting_confirmation, verify};
+    - scanned (repeat): 202 identically, NO duplicate SSE (§4);
+    - confirmed (first): 200 {device_id, device_token (mnd_…), scope,
+      expires_at} — issuance is one-shot (store CAS); the code is spent,
+      every later exchange gets 410;
+    - unknown code → 404; TTL-passed/expired/issued/revoked → 410;
+    - a different client IP → 403 + a security notification (§3.1).
+
+    Rate: 5 per 10 min keyed on pairing_id AFTER a successful code lookup
+    (§3.4 — garbage codes must not grow the limiter's key space), plus a
+    global per-IP budget on this endpoint."""
+    # fail-closed: a board without a configured ui token does not pair
+    if not UI_WRITE_TOKEN:
+        raise HTTPException(
+            503,
+            "pairing is disabled: no ui token configured (fail-closed; "
+            "set VESMARO_UI_TOKEN or VESMARO_BOARD_TOKEN to enable)",
+        )
+    client_ip = request.client.host if request.client else "unknown"
+    if not _pairing_ip_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"pairing exchange rate limit exceeded "
+            f"({_PAIRING_IP_RATE_LIMIT} per "
+            f"{_PAIRING_IP_RATE_WINDOW:.0f}s per client)",
+        )
+    row = store.lookup_pairing_by_code(body.code.strip())
+    if row is None:
+        raise HTTPException(404, "unknown pairing code")
+    if not _pairing_exchange_limiter.acquire(row["id"]):
+        raise HTTPException(
+            429,
+            f"pairing exchange rate limit exceeded "
+            f"({_PAIRING_EXCHANGE_RATE_LIMIT} per "
+            f"{_PAIRING_EXCHANGE_RATE_WINDOW:.0f}s per pairing)",
+        )
+    if row["source_ip"] and row["source_ip"] != client_ip:
+        # §3.1: the pairing is bound to the first exchange's IP — a second
+        # presenter loses NOW (no equal chances on issuance, CWE-362). The
+        # dictionary has no kind for this signal, so the owner-facing fact
+        # rides a plain system notification (fact only — no digits).
+        _notify_and_broadcast(
+            "system", "Пейринг: код предъявлен с чужого IP",
+            f"пейринг {row['id']}: код показан с {client_ip}, а привязан "
+            f"к {row['source_ip']} — запрос отклонён")
+        raise HTTPException(
+            403, "pairing code is bound to another client IP")
+    state = _pairing_state_of(row)
+    if state == "expired":
+        raise HTTPException(410, "pairing expired — start a new one")
+    if state == "issued":
+        raise HTTPException(410, "pairing code already used")
+    if state == "revoked":
+        raise HTTPException(410, "pairing revoked")
+    if state == "created":
+        try:
+            pub, transitioned = store.scan_pairing(
+                row["id"], device_name=body.device_name.strip(),
+                source_ip=client_ip)
+        except PairingExpiredError as exc:
+            raise HTTPException(410, "pairing expired — start a new one") from exc
+        if pub["source_ip"] and pub["source_ip"] != client_ip:
+            # §3.1: the row above was read before the scan race resolved —
+            # the winner bound the pairing to its own IP under the store
+            # lock; a foreign loser answers 403 here, never a borrowed 202
+            raise HTTPException(
+                403, "pairing code is bound to another client IP")
+        if transitioned:
+            # exactly one concurrent exchange lands here (store CAS) —
+            # repeats and losers answer 202 without re-emitting (§4)
+            _notify_and_broadcast(
+                "system", "Пейринг: запрос подключения",
+                f"устройство «{pub['device_name'] or 'без имени'}» "
+                f"отсканировало QR (пейринг {pub['id']})", None,
+                {"kind": "pairing.requested", "pairing_id": pub["id"],
+                 "device_name": pub["device_name"]})
+        return JSONResponse(status_code=202, content={
+            "ok": True, "status": "awaiting_confirmation",
+            "pairing_id": pub["id"], "state": pub["state"],
+            "verify": pub["verify"]})
+    if state == "scanned":
+        pub = store.get_pairing(row["id"])
+        if pub["source_ip"] and pub["source_ip"] != client_ip:
+            # same §3.1 re-check: the top-of-handler row predates any
+            # concurrent scan binding — answer from the CURRENT row
+            raise HTTPException(
+                403, "pairing code is bound to another client IP")
+        return JSONResponse(status_code=202, content={
+            "ok": True, "status": "awaiting_confirmation",
+            "pairing_id": pub["id"], "state": pub["state"],
+            "verify": pub["verify"]})
+    # state == "confirmed": one-shot issuance
+    try:
+        device, token = store.issue_device_session(
+            row["id"], ua=request.headers.get("User-Agent", ""), ip=client_ip)
+    except DeviceQuotaError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except PairingExpiredError as exc:
+        raise HTTPException(410, "pairing expired — start a new one") from exc
+    except PairingStateError as exc:
+        # lost the issuance race — the code is spent by the winner
+        raise HTTPException(410, "pairing code already used") from exc
+    return {"ok": True, "device_id": device["id"], "device_token": token,
+            "scope": device["scope"], "expires_at": device["expires_at"],
+            "hard_expires_at": device["hard_expires_at"]}
+
+
+@app.get("/api/pairing/{pairing_id}")
+async def get_pairing(pairing_id: str, request: Request) -> PairingStatusOut:
+    """Pairing status for the trusted side (ui-token) — the ONLY source of
+    the verify digits besides the device's own exchange response (§3.3:
+    /api/events is unauthenticated, so the digits never ride SSE or stored
+    notifications)."""
+    _guard_ui_write(request)
+    row = store.get_pairing(pairing_id)
+    if row is None:
+        raise HTTPException(404, f"pairing {pairing_id} not found")
+    return {"ok": True, "pairing_id": row["id"],
+            "state": _pairing_state_of(row), "verify": row["verify"],
+            "device_name": row["device_name"], "source_ip": row["source_ip"],
+            "scope": row["scope"], "created_at": row["created_at"],
+            "scanned_at": row["scanned_at"], "confirmed_at": row["confirmed_at"],
+            "expires_at": row["expires_at"]}
+
+
+@app.post("/api/pairing/{pairing_id}/confirm")
+async def confirm_pairing(pairing_id: str, body: PairingConfirmBody,
+                          request: Request) -> PairingConfirmOut:
+    """Owner decision on a scanned pairing (ui-token; ADR 0012 §2.4).
+    allow=true → confirmed (SSE pairing.confirmed); allow=false → revoked
+    (SSE pairing.revoked). Repeat confirms answer 200 idempotently without
+    re-deciding (§4); confirm before any scan → 409; TTL-passed → 410.
+    The endpoint never accepts verify digits as input (§3.5, CWE-307)."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _pairing_confirm_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"pairing confirm rate limit exceeded "
+            f"({_PAIRING_CONFIRM_RATE_LIMIT} per "
+            f"{_PAIRING_CONFIRM_RATE_WINDOW:.0f}s per client)",
+        )
+    try:
+        row, outcome = store.confirm_pairing(pairing_id, allow=body.allow)
+    except PairingNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except PairingExpiredError as exc:
+        raise HTTPException(410, "pairing expired — start a new one") from exc
+    except PairingStateError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if outcome == "confirmed":
+        _notify_and_broadcast(
+            "system", "Пейринг подтверждён",
+            f"пейринг {pairing_id} подтверждён — устройство может забрать "
+            "токен", None,
+            {"kind": "pairing.confirmed", "pairing_id": pairing_id,
+             "device_name": row["device_name"]})
+    elif outcome == "denied":
+        _notify_and_broadcast(
+            "system", "Пейринг отклонён",
+            f"пейринг {pairing_id} отклонён владельцем", None,
+            {"kind": "pairing.revoked", "pairing_id": pairing_id})
+    return {"ok": True, "pairing_id": pairing_id,
+            "state": _pairing_state_of(row), "outcome": outcome}
+
+
+@app.delete("/api/pairing/{pairing_id}")
+async def cancel_pairing(pairing_id: str, request: Request) -> PairingConfirmOut:
+    """Owner cancel of a not-yet-issued pairing (ui-token; §10.2): created/
+    scanned/confirmed → revoked + SSE pairing.revoked. Already revoked →
+    200 idempotent; issued → 409 (the device token EXISTS — revoke the
+    device via DELETE /api/devices/{id}); TTL-passed → 410."""
+    _guard_ui_write(request)
+    try:
+        row, transitioned = store.cancel_pairing(pairing_id)
+    except PairingNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except PairingExpiredError as exc:
+        raise HTTPException(410, "pairing expired — start a new one") from exc
+    except PairingStateError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if transitioned:
+        _notify_and_broadcast(
+            "system", "Пейринг отменён",
+            f"пейринг {pairing_id} отменён владельцем", None,
+            {"kind": "pairing.revoked", "pairing_id": pairing_id})
+    return {"ok": True, "pairing_id": pairing_id,
+            "state": _pairing_state_of(row),
+            "outcome": "revoked" if transitioned else "idempotent"}
+
+
+@app.get("/api/devices")
+async def list_devices(request: Request) -> DevicesOut:
+    """Device sessions for the owner panel (ui-token; §10.2). Items carry
+    NO token material — token_hash stays in the store (hash-only, §5)."""
+    _guard_ui_write(request)
+    items = store.list_devices()
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@app.delete("/api/devices/{device_id}")
+async def revoke_device(device_id: str, request: Request) -> DeviceRevokedOut:
+    """Revoke a device session (ui-token; §5). One step, terminal — only a
+    new pairing restores access. SSE pairing.revoked carries the device_id;
+    the next request with that token gets 401 (scope middleware)."""
+    _guard_ui_write(request)
+    result = store.revoke_device(device_id)
+    if result is None:
+        raise HTTPException(404, f"device {device_id} not found")
+    row, transitioned = result
+    if transitioned:
+        _notify_and_broadcast(
+            "system", "Устройство отключено",
+            f"device-сессия «{row['name']}» ({device_id}) отозвана", None,
+            {"kind": "pairing.revoked", "device_id": device_id})
+    return {"ok": True, "device": row}
 
 
 # ------------------------------------------------------------------------ SSE
