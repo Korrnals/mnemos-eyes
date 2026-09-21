@@ -1651,6 +1651,51 @@ class Store:
             r["superseded"] = bool(r["superseded"])
         return rows
 
+    def list_recent_reports(self, *, task_id: str | None = None,
+                            kind: str | None = None, limit: int = 50,
+                            before_id: int | None = None,
+                            include_superseded: bool = False,
+                            ) -> list[dict[str, Any]]:
+        """Cross-task report feed, freshest first (CV-6: the Agents-domain
+        activity stream). Rows in the same house shape as ``list_reports``.
+
+        Filters: ``task_id`` exact, ``kind`` exact (REPORT_KINDS only —
+        ValueError on garbage; the endpoint maps it to 422). Cursor
+        pagination: ``before_id`` keeps rows with id strictly below it, so
+        pages stay stable while new reports land (no offset drift); the
+        caller owns the limit clamp. A ``task_id`` that matches nothing —
+        including an unknown task — yields an EMPTY page, not an error:
+        unlike per-task ``list_reports`` the feed addresses no single
+        entity, so there is nothing to 404 on (endpoint-level contract).
+
+        Superseded finals are excluded by default — the live feed shows one
+        final per task; ``include_superseded`` restores them flagged."""
+        if kind is not None and kind not in REPORT_KINDS:
+            raise ValueError(f"invalid report kind: {kind}")
+        where: list[str] = []
+        params: list[Any] = []
+        if task_id is not None:
+            where.append("task_id=?")
+            params.append(task_id)
+        if kind is not None:
+            where.append("kind=?")
+            params.append(kind)
+        if not include_superseded:
+            where.append("superseded=0")
+        if before_id is not None:
+            where.append("id<?")
+            params.append(before_id)
+        cond = f" WHERE {' AND '.join(where)}" if where else ""
+        with self._lock, self._conn() as db:
+            rows = [dict(r) for r in db.execute(
+                "SELECT id, task_id, kind, agent, body, superseded, created_at "
+                f"FROM task_reports{cond} ORDER BY id DESC LIMIT ?",  # noqa: S608 — fragments from a fixed allow-list, values bound
+                (*params, limit),
+            ).fetchall()]
+        for r in rows:
+            r["superseded"] = bool(r["superseded"])
+        return rows
+
     # ------------------------------------------------------- assignments
     # ADR 0009 phase 1: assignment queue (variant A′). One connection per
     # call under the write lock; every multi-step transition (claim+move,

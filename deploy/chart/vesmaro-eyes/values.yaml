@@ -13,7 +13,7 @@ image:
   repository: ghcr.io/korrnals/vesmaro-eyes
   # Explicit tag synced from server/app.py by scripts/sync-version.sh.
   # If left empty, .Chart.AppVersion is used.
-  tag: "1.11.3"
+  tag: "1.11.5"
   pullPolicy: Always
 
 imagePullSecrets:
