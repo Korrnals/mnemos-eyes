@@ -826,6 +826,77 @@ export const en: Record<TranslationKey, string> = {
   "agents.menu.label": "Executor menu {{name}}",
   "agents.menu.copyId": "Copy id ({{id}})",
   "agents.menu.openRegistry": "Open registry",
+  // AGW-6 A: link check (outbound-only honesty)
+  "agents.linkcheck.trigger": "Check connection",
+  "agents.linkcheck.checkForReal": "Check for real",
+  "agents.linkcheck.verdict.never": "has never answered a poll",
+  "agents.linkcheck.verdict.online": "online — answered a poll {{age}} ago",
+  "agents.linkcheck.verdict.stale": "answered a while ago — {{age}} ago",
+  "agents.linkcheck.verdict.offline": "not responding — last answered {{age}} ago",
+  "agents.linkcheck.verdict.revoked": "revoked — presence is gone",
+  "agents.linkcheck.verdict.unknown": "presence thresholds are not loaded yet",
+  "agents.linkcheck.disclaimer":
+    "The board never pings agents (outbound-only): this is the age of the poller's last answer, not machine availability.",
+  "agents.linkcheck.unitSeconds": "s",
+  "agents.linktest.title": "Check for real — {{name}}",
+  "agents.linktest.subtitle":
+    "Pick a task — its «Take into work» sheet opens with {{name}} pinned.",
+  "agents.linktest.allowlistNote":
+    "An allowlist miss is a valid test too: the refusal-report proves the link just as well as a launch.",
+  "agents.linktest.loading": "Loading board tasks",
+  "agents.linktest.empty":
+    "No tasks accept assignments right now. Create a test task on the board and come back.",
+  "agents.linktest.listLabel": "Tasks for the test assignment",
+  "agents.linktest.rowAria": "Open «Take into work» with {{name}} pinned",
+  "agents.sheet.pinnedHint":
+    "Executor pinned: the assignment waits for them to come back online — submit stays active.",
+  "agents.sheet.pinnedInvalidHint":
+    "The pinned executor cannot take tasks right now — pick «Default» or another executor.",
+  // AGW-6 B: executor settings card (drawer)
+  "agents.card.title": "Executor card",
+  "agents.card.description":
+    "Executor settings: identity, link, access, declared capabilities",
+  "agents.card.menuOpen": "Settings card",
+  "agents.card.sectionIdentity": "Identity",
+  "agents.card.sectionLink": "Link",
+  "agents.card.sectionAccess": "Access",
+  "agents.card.sectionCaps": "Capabilities (declared)",
+  "agents.card.sectionDanger": "Danger zone",
+  "agents.card.nameLabel": "Name",
+  "agents.card.copyId": "Copy id ({{id}})",
+  "agents.card.harnessLabel": "harness",
+  "agents.card.transportLabel": "transport",
+  "agents.card.versionLabel": "version",
+  "agents.card.registeredVia": "origin",
+  "agents.card.registeredAt": "registered",
+  "agents.card.updatedAt": "updated",
+  "agents.card.harnessNote":
+    "The harness is not editable: it is the local allowlist matching axis on the machine — changing it would silently desync the board from poller.yaml. The honest path is «Revoke» + a fresh enrollment.",
+  "agents.card.stateApproved": "approved",
+  "agents.card.enabledLabel": "Enabled for dispatch",
+  "agents.card.enabledNote": "dispatch = approved AND enabled",
+  "agents.card.enabledPendingHint":
+    "Approve first — the dispatch switch appears after approval.",
+  "agents.card.capsPlaceholder": "a specialist role, e.g. researcher",
+  "agents.card.capsInputAria": "New capability",
+  "agents.card.capsAdd": "Add",
+  "agents.card.capsClear": "Clear",
+  "agents.card.capsClearConfirm":
+    "Send an empty capabilities list? The server will wipe every declared value ([] is a valid operation).",
+  "agents.card.capsDup": "This capability is already declared.",
+  "agents.card.capsMax": "Maximum 64 — the server rejects more.",
+  "agents.card.capsRemoveAria": "Remove capability {{capability}}",
+  "agents.card.capsNote":
+    "Declarations for ROUTING only (owner-declared); they never gate launches — the real gate is the poller's local allowlist.",
+  "agents.card.save": "Save",
+  "agents.card.saved": "{{name}}: card saved",
+  "agents.card.noChanges": "no changes",
+  "agents.card.dangerNote":
+    "«Revoke» is terminal — trust is not restorable; «Delete» removes the record — active assignments keep their pins.",
+  "agents.card.revokedReadOnly":
+    "This executor is revoked — the card is read-only except Delete.",
+  "agents.card.secretHint":
+    "The secret is never shown: it appears exactly once, at registration. Lost it — revoke the executor and register again.",
   "agents.registry.viaEnrollment": "origin: enrollment token",
   "agents.registry.viaMachine": "origin: machine token",
   "agents.enrollment.title": "Add executor",

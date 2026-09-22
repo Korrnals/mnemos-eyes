@@ -40,6 +40,18 @@ function selectableExecutor(executor: ExecutorItem): boolean {
   return executor.state === "approved" && executor.enabled && executor.presence !== "offline";
 }
 
+/**
+ * AGW-6 A.3 pin rule: a PINNED approved+enabled executor stays selectable
+ * even while OFFLINE — that is the link-test case («не отвечает» → send a
+ * real task, the queue waits, the claim proves the link). Pending/revoked/
+ * disabled stay unselectable in every case: routing can never pick them,
+ * the pin would be a lie.
+ */
+function selectablePinnedExecutor(executor: ExecutorItem, pinned: boolean): boolean {
+  if (pinned) return executor.state === "approved" && executor.enabled;
+  return selectableExecutor(executor);
+}
+
 /** Short tier label (the same strings row signatures use). */
 function routingReasonTextKey(reason: string): TranslationKey {
   switch (reason) {
@@ -65,12 +77,16 @@ export function AssignExecutorSheet({
   open,
   onOpenChange,
   prefill = null,
+  pinnedExecutorId = null,
 }: {
   task: BoardTask;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Retry prefill (failed/expired «Перезапустить») — same parameters again. */
   prefill?: AssignPrefill | null;
+  /** AGW-6 A.3 link-test pin: pre-select this executor (deep-link
+   * `?assign=<id>` from the link-check second stage). */
+  pinnedExecutorId?: string | null;
 }) {
   // The form is a keyed inner component (EditTaskDialog pattern): opening
   // the sheet mounts it fresh — state seeds from the task/prefill through
@@ -81,9 +97,10 @@ export function AssignExecutorSheet({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <AssignExecutorForm
-          key={`${prefill?.specialist ?? ""}|${prefill?.harness ?? ""}`}
+          key={`${prefill?.specialist ?? ""}|${prefill?.harness ?? ""}|${pinnedExecutorId ?? ""}`}
           task={task}
           prefill={prefill}
+          pinnedExecutorId={pinnedExecutorId}
           onDone={() => onOpenChange(false)}
         />
       </DialogContent>
@@ -94,10 +111,12 @@ export function AssignExecutorSheet({
 function AssignExecutorForm({
   task,
   prefill,
+  pinnedExecutorId,
   onDone,
 }: {
   task: BoardTask;
   prefill: AssignPrefill | null;
+  pinnedExecutorId: string | null;
   onDone: () => void;
 }) {
   const t = useT();
@@ -108,12 +127,14 @@ function AssignExecutorForm({
   const board = useBoardTasks();
   const mutations = useAssignmentMutations();
   // Fresh-open seeds; retry runs carry the failed attempt's parameters
-  // verbatim (spec §3.1 CTA).
+  // verbatim (spec §3.1 CTA). The link-test pin pre-selects its executor.
   const [specialist, setSpecialist] = useState(
     prefill?.specialist ?? task.specialists[0] ?? "",
   );
   const [harness, setHarness] = useState<string>(prefill?.harness ?? "zcode");
-  const [executorChoice, setExecutorChoice] = useState<string>("default");
+  const [executorChoice, setExecutorChoice] = useState<string>(
+    pinnedExecutorId ?? "default",
+  );
   const [submitting, setSubmitting] = useState(false);
 
   /** Specialist candidates: the task's own first, then the board union. */
@@ -132,13 +153,49 @@ function AssignExecutorForm({
   const executorName = (id: string): string =>
     executorRows.find((row) => row.id === id)?.name ?? id;
 
+  // --- P2: the pin is a CLAIM, never a lie ----------------------------------
+  // The server stores executor_id as a plain designation (no eligibility
+  // check at create; eligibility applies at claim). A deep-link pin on a
+  // pending/revoked/disabled executor would queue an assignment nobody can
+  // ever claim — holding the ≤1-active slot until manual cleanup. So the
+  // pin may only SURVIVE when it is routable (approved+enabled; offline is
+  // the ratified link-test case — the queue waits).
+  const pinnedRow = pinnedExecutorId
+    ? (executorRows.find((executor) => executor.id === pinnedExecutorId) ?? null)
+    : null;
+  const pinSelectable =
+    pinnedRow !== null && pinnedRow.state === "approved" && pinnedRow.enabled;
+
+  /**
+   * The choice that would ACTUALLY travel (submit guard, second line of
+   * defense behind the disabled radio):
+   * - the owner moved off the pin themselves → their choice stands;
+   * - no pin → the seeded/selected default;
+   * - pin selectable → the pin (offline allowed);
+   * - pin row GONE from the registry (deleted) → honest fallback to
+   *   default — there is no executor to show, nothing to stand on;
+   * - pin row exists but is NOT routable → null: submit BLOCKED, the
+   *   pinned radio stays checked-but-disabled, the hint names the way out
+   *   (pick «Default» or another executor). No silent substitution.
+   */
+  const effectiveChoice = ((): string | null => {
+    if (pinnedExecutorId === null || executorChoice !== pinnedExecutorId) {
+      return executorChoice;
+    }
+    if (pinSelectable) return pinnedExecutorId;
+    if (pinnedRow === null) return "default";
+    return null;
+  })();
+  const pinBlocked = effectiveChoice === null;
+
   /**
    * LIVE preview — the shared resolver over the live registry + settings.
    * The project-default tier is server-only data (no endpoint); the preview
-   * label carries that honesty.
+   * label carries that honesty. The preview resolves from the EFFECTIVE
+   * choice — a blocked pin never produces a lying «route: X» preview.
    */
   const preview = resolveRoutingAnnotation({
-    pin: executorChoice === "default" ? "" : executorChoice,
+    pin: effectiveChoice !== null && effectiveChoice !== "default" ? effectiveChoice : "",
     specialist,
     taskSpecialists: task.specialists,
     executors: executorRows,
@@ -152,7 +209,8 @@ function AssignExecutorForm({
 
   const submit = (): void => {
     const value = specialist.trim();
-    if (value.length === 0 || submitting) return;
+    // P2 second line: a blocked pin NEVER reaches the wire.
+    if (value.length === 0 || submitting || effectiveChoice === null) return;
     setSubmitting(true);
     mutations.createAssignment(
       task,
@@ -160,7 +218,7 @@ function AssignExecutorForm({
         task_id: task.id,
         specialist: value,
         harness,
-        executor_id: executorChoice === "default" ? "" : executorChoice,
+        executor_id: effectiveChoice === "default" ? "" : effectiveChoice,
       },
       {
         onQueued: onDone,
@@ -234,7 +292,9 @@ function AssignExecutorForm({
               <input
                 type="radio"
                 name="assign-executor"
-                checked={executorChoice === "default"}
+                /* The EFFECTIVE default: also lit when a deleted pin fell
+                 * back silently — the owner always sees what will travel. */
+                checked={effectiveChoice === "default"}
                 onChange={() => setExecutorChoice("default")}
                 className="mt-1 accent-iris-bright"
               />
@@ -250,7 +310,12 @@ function AssignExecutorForm({
               </span>
             </label>
             {executorRows.map((executor) => {
-              const selectable = selectableExecutor(executor);
+              const isPin = executor.id === pinnedExecutorId;
+              const selectable = selectablePinnedExecutor(executor, isPin);
+              // A BLOCKED pin keeps its radio checked-but-disabled: the
+              // owner sees exactly what the deep-link named and why the
+              // submit is held (no silent substitution, no dead-looking UI).
+              const checked = executorChoice === executor.id || (isPin && executorChoice === pinnedExecutorId);
               return (
                 <label
                   key={executor.id}
@@ -265,7 +330,7 @@ function AssignExecutorForm({
                   <input
                     type="radio"
                     name="assign-executor"
-                    checked={executorChoice === executor.id}
+                    checked={checked}
                     disabled={!selectable}
                     onChange={() => setExecutorChoice(executor.id)}
                     className="mt-1 accent-iris-bright"
@@ -282,6 +347,14 @@ function AssignExecutorForm({
               );
             })}
           </div>
+          {/* Link-test pin: the honest wait spelled out at the pin itself —
+           * or, when the pin is unroutable, the way out named just as
+           * plainly (P2: the slot must not be held by a ghost). */}
+          {pinnedExecutorId !== null ? (
+            <p className="mt-1 border-t border-border-subtle pt-1 text-xs text-foreground-muted">
+              {pinBlocked ? t("agents.sheet.pinnedInvalidHint") : t("agents.sheet.pinnedHint")}
+            </p>
+          ) : null}
         </fieldset>
 
         {/* LIVE route preview (aria-live: the route changes with selections). */}
@@ -321,7 +394,7 @@ function AssignExecutorForm({
             type="button"
             size="sm"
             onClick={submit}
-            disabled={submitting || specialist.trim().length === 0}
+            disabled={submitting || specialist.trim().length === 0 || pinBlocked}
           >
             {submitting ? t("agents.sheet.submitting") : t("agents.sheet.submit")}
           </Button>

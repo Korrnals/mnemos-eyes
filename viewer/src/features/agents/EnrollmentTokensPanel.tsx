@@ -1,4 +1,4 @@
-import { Check, KeyRound, ScrollText } from "lucide-react";
+import { Check, KeyRound, ScrollText, Settings2 } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import type { EnrollmentItem, ExecutorItem } from "@/gateway/boardTypes";
@@ -160,7 +160,11 @@ function EnrollmentRow({
       </span>
 
       {/* used → the minted executor (name from the registry; the row id in
-       * mono keeps the link honest even while the registry refetch lags). */}
+       * mono keeps the link honest even while the registry refetch lags).
+       * AGW-6 B: the deep-link opens the row's SETTINGS CARD (the hash the
+       * registry page consumes into the drawer) — the enrollment flow's
+       * «Открыть карточку»: at mint time no row exists, the card offer
+       * becomes real the moment the token is USED. */}
       {state === "used" ? (
         <span className="flex min-w-0 items-center gap-1 text-xs text-foreground-secondary">
           {t("agents.enrollment.usedBy", { name: minted?.name ?? row.executor_id })}
@@ -170,6 +174,15 @@ function EnrollmentRow({
           >
             {row.executor_id}
           </Link>
+          {minted ? (
+            <Link
+              to={`/agents/harnesses#executor-sheet-${encodeURIComponent(row.executor_id)}`}
+              className="flex items-center gap-1 rounded-sm text-xs text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+            >
+              <Settings2 className="size-3" aria-hidden="true" />
+              {t("agents.card.menuOpen")}
+            </Link>
+          ) : null}
         </span>
       ) : null}
 

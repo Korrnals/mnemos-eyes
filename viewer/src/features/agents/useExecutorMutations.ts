@@ -156,7 +156,34 @@ export function createExecutorMutations(deps: ExecutorMutationDeps) {
     });
   };
 
-  return { approveExecutor, setExecutorEnabled, revokeExecutor, removeExecutor };
+  /**
+   * Generic owner PATCH (AGW-6 B settings card): the caller passes a DIFF
+   * body — only the genuinely changed fields (the route does
+   * model_dump(exclude_none=True); capabilities:[] is a VALID deliberate
+   * wipe). The same gate + server-text error toasts as every action here;
+   * the success toast is optional (the card saves are quiet unless the
+   * caller asks for one).
+   */
+  const updateExecutor = (
+    executor: ExecutorItem,
+    body: ExecutorPatchInput,
+    okTitleKey?: TranslationKey,
+  ): void => {
+    run({ errorTitleKey: "agents.executors.actionFailed" }, async () => {
+      await patch(executor, body);
+      if (okTitleKey) {
+        toast.push({ kind: "ok", title: t(okTitleKey, { name: executor.name }) });
+      }
+    });
+  };
+
+  return {
+    approveExecutor,
+    setExecutorEnabled,
+    revokeExecutor,
+    removeExecutor,
+    updateExecutor,
+  };
 }
 
 export type ExecutorMutations = ReturnType<typeof createExecutorMutations>;
