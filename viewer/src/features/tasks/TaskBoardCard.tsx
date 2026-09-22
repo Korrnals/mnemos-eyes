@@ -1,5 +1,5 @@
 import { useCallback, forwardRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { MessageSquare } from "lucide-react";
@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import type { BoardTask } from "@/gateway/boardTypes";
 import { ActiveAssignmentBadge } from "@/features/agents/ActiveAssignmentBadge";
 import { useT, useI18n } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import {
   formatTaskDate,
   isArchcomReviewTask,
@@ -101,6 +102,15 @@ const TaskCardBody = forwardRef<
 ) {
   const t = useT();
   const { lang } = useI18n();
+  // UI-18 pair 1: the board URL (filters included) rides along as `return=`
+  // so the detail page's back control leads home. Read once per render —
+  // no effects, no subscriptions (freeze-gate safe by construction).
+  const location = useLocation();
+  const detailHref = withReturn(
+    `/tasks/${encodeURIComponent(task.id)}`,
+    location.pathname,
+    location.search,
+  );
   const spacing = CARD_SKIN[skin];
   // Card-owned context menu (right-click + ⋯): `menuAt` is the cursor anchor
   // of the LAST right-click; it is cleared on close so the next ⋯ open
@@ -179,7 +189,7 @@ const TaskCardBody = forwardRef<
         }
       >
         <Link
-          to={`/tasks/${encodeURIComponent(task.id)}`}
+          to={detailHref}
           className="text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
         >
           <HighlightedTitle title={task.title} query={query} />

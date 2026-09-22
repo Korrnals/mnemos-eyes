@@ -8,7 +8,7 @@ import { MemoryCardSkeleton, TableRowSkeleton } from "@/components/skeletons/Ske
 import { TaskExecutionTab } from "@/features/agents/TaskExecutionTab";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
-import type { TaskHistory, TaskMemories } from "@/gateway/boardTypes";
+import type { BoardTask, TaskHistory, TaskMemories } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
 import {
@@ -22,6 +22,7 @@ import {
 import { EditTaskDialog } from "./EditTaskDialog";
 import { useTaskMutations } from "./useTaskMutations";
 import {
+  useArchivedTask,
   useSyncReportCount,
   useTask,
   useTaskHistory,
@@ -37,6 +38,12 @@ import {
  * «Изменить» (content edit, BE-12 force path inside) and UI-8 «Вернуть в
  * работу» on a live final report (PATCH status=in-progress — the column
  * never moves).
+ *
+ * UI-18 pair 4: when the board projection misses the id AND the task lives
+ * in the archive, the page renders from the archive row (`useArchivedTask`
+ * probe — the wire has no archived single GET). Tab links preserve `?return=`
+ * and every other param (spec §2.2 rule 4): the first tab click must not
+ * kill the back context.
  */
 
 const TASK_TABS = [
@@ -63,6 +70,10 @@ export function TaskDetailPage() {
   const canMutate = isTaskMutationSource(gateway);
   const { id } = useParams<{ id: string }>();
   const task = useTask(id);
+  // UI-18 pair 4: archived rows miss the board projection — probe the
+  // archive ONLY after the board query settled empty (no extra wire call on
+  // the happy path).
+  const archived = useArchivedTask(id, task.isSuccess && task.data === undefined);
   // UI-8 needs the reports anyway (the «Отчёты» tab loads the same key —
   // one wire call, no extra request for the header decision).
   const reports = useTaskReports(id);
@@ -71,6 +82,14 @@ export function TaskDetailPage() {
   const [searchParams] = useSearchParams();
   const tabParam = searchParams.get("tab") ?? "reports";
   const tab: TaskTabId = isTaskTabId(tabParam) ? tabParam : "reports";
+  // Tabs inherit the WHOLE current query (return=, …) and swap only `tab`
+  // (spec §2.2 rule 4).
+  const tabHref = (tabId: TaskTabId) => {
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", tabId);
+    const qs = params.toString();
+    return `/tasks/${encodeURIComponent(id ?? "")}${qs ? `?${qs}` : ""}`;
+  };
 
   if (id === undefined) {
     return (
@@ -119,9 +138,23 @@ export function TaskDetailPage() {
     );
   }
 
-  if (!task.data) {
-    // Not on the board projection: unknown id or ARCHIVED row (archived
-    // tasks never travel with /api/board — check the Архив page).
+  const boardTask = task.data;
+  const current = boardTask ?? archived.data ?? undefined;
+  if (!current) {
+    // Not on the board projection: unknown id or ARCHIVED row. The archive
+    // probe may still be fetching (UI-18 pair 4) — hold the skeleton until
+    // it settles so a live archived row never flashes not-found.
+    if (archived.fetchStatus === "fetching") {
+      return (
+        <TaskDetailShell>
+          <div role="status" aria-label={t("tasks.loadingOne")}>
+            <MemoryCardSkeleton count={3} />
+          </div>
+        </TaskDetailShell>
+      );
+    }
+    // Unknown id, or an archived row beyond the probe page: the not-found
+    // state keeps its honest «Открыть архив» escape.
     return (
       <TaskDetailShell>
         <EmptyState
@@ -137,8 +170,6 @@ export function TaskDetailPage() {
       </TaskDetailShell>
     );
   }
-
-  const current = task.data;
   // UI-8: a live (non-superseded) final report marks the task as finished —
   // only then does the header offer «Вернуть в работу».
   const hasLiveFinal = (reports.data?.items ?? []).some(
@@ -219,7 +250,7 @@ export function TaskDetailPage() {
             return (
               <li key={entry.id}>
                 <Link
-                  to={`/tasks/${encodeURIComponent(id)}?tab=${entry.id}`}
+                  to={tabHref(entry.id)}
                   aria-current={active ? "page" : undefined}
                   onClick={(event) => {
                     // Same-path navigation only swaps the query — keep it soft.
@@ -246,7 +277,7 @@ export function TaskDetailPage() {
         {tab === "reports" ? <ReportsTab taskId={id} lang={lang} /> : null}
         {tab === "history" ? <HistoryTab taskId={id} lang={lang} /> : null}
         {tab === "memory" ? <MemoryTab taskId={id} lang={lang} /> : null}
-        {tab === "details" ? <DetailsTab taskId={id} lang={lang} /> : null}
+        {tab === "details" ? <DetailsTab task={current} lang={lang} /> : null}
         {tab === "execution" ? (
           <TaskExecutionTab
             task={current}
@@ -535,11 +566,12 @@ function MemoryTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
   );
 }
 
-/** «Детали»: summary readable, spec pre-wrap, honest metadata table. */
-function DetailsTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
+/** «Детали»: summary readable, spec pre-wrap, honest metadata table. The row
+ * arrives as a prop so ARCHIVED tasks (UI-18 pair 4 — no board row) render
+ * too; the old inner useTask() re-query silently hid their details tab. */
+function DetailsTab({ task, lang }: { task: BoardTask; lang: "ru" | "en" }) {
   const t = useT();
-  const task = useTask(taskId);
-  const current = task.data;
+  const current = task;
   if (!current) return null;
 
   return (

@@ -227,13 +227,14 @@ async function mountTree(
   });
 }
 
-/** Card link hrefs of one column, in DOM order (the rendered card order). */
+/** Card link PATHS of one column, in DOM order (the rendered card order).
+ * UI-18: hrefs carry ?return=… — strip it so order assertions speak paths. */
 function columnCardHrefs(columnLabel: string): string[] {
   return Array.from(
     container!.querySelectorAll(
       `section[aria-label="${columnLabel}"] ul li a[href^="/tasks/"]`,
     ),
-  ).map((link) => link.getAttribute("href") ?? "");
+  ).map((link) => (link.getAttribute("href") ?? "").split("?")[0]);
 }
 
 /** The style toggle's button by its visible label. */

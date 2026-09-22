@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { SearchBar, type SearchTypeSetting } from "@/components/SearchBar/SearchBar";
 import { SearchResultList } from "@/components/SearchResultList/SearchResultList";
@@ -26,6 +26,10 @@ const SEARCH_LIMIT = 20;
 export function SearchPage() {
   const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
+  // UI-18 pair 9: the well's URL (?q=&type=) rides as `return=` on every
+  // result card — «‹ Поиск» must restore the query AND the type filter.
+  const location = useLocation();
+  const returnSource = { pathname: location.pathname, search: location.search };
   const urlQuery = searchParams.get("q") ?? "";
   const type = parseType(searchParams.get("type"));
 
@@ -107,13 +111,21 @@ export function SearchPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <h1 className="sr-only">{t("search.title")}</h1>
       <div>{searchBar}</div>
-      <SearchResults query={urlQuery} type={type} />
+      <SearchResults query={urlQuery} type={type} returnSource={returnSource} />
     </div>
   );
 }
 
 /** Mounted only for non-empty queries so the search query never fires idle. */
-function SearchResults({ query, type }: { query: string; type: SearchTypeSetting }) {
+function SearchResults({
+  query,
+  type,
+  returnSource,
+}: {
+  query: string;
+  type: SearchTypeSetting;
+  returnSource: { pathname: string; search: string };
+}) {
   const t = useT();
   const search = useSearch({ query, limit: SEARCH_LIMIT });
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -160,7 +172,7 @@ function SearchResults({ query, type }: { query: string; type: SearchTypeSetting
         {t("search.hitsCount", { count: results.length, query })}
         {type === "auto" ? "" : t("search.hitsTypedSuffix")}
       </p>
-      <SearchResultList results={results} queryTerms={terms} className="mt-3" />
+      <SearchResultList results={results} queryTerms={terms} className="mt-3" returnSource={returnSource} />
     </section>
   );
 }
