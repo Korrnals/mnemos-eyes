@@ -22,6 +22,7 @@ function executor(overrides: Partial<ExecutorItem>): ExecutorItem {
     state: "approved",
     last_seen: "",
     presence: "online",
+    registered_via: "",
     registered_at: "",
     updated_at: "",
     ...overrides,

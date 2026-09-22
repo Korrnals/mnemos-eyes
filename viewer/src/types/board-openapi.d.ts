@@ -961,21 +961,82 @@ export interface paths {
          * Register Executor
          * @description Register an executor (ARCH-9, ladder L0 — Amd 2 §4).
          *
-         *     MACHINE-token bootstrap: registration via the board token creates a
-         *     PENDING record; the owner approves via ui-token PATCH. The board mints
-         *     ``executor_secret`` (token_hex(24)) and stores ONLY its sha256 hash —
-         *     the plaintext appears exactly once, in this response (claim_token
-         *     pattern, long-lived). Capabilities are owner-declared via PATCH, never
-         *     accepted at registration. 422 unknown harness/transport; 409 duplicate
-         *     name; 429 rate 10/60 s per client AND a total cap on OPEN pending
-         *     registrations (PR #18 F5: pace limits bound requests, not volume —
-         *     approving/revoking/deleting frees quota). The owner NOTIFICATION fires
-         *     for the first open pending registration per host; later ones from the
-         *     same host are audit + SSE only (spam guard — the audit event is
-         *     always written).
+         *     MACHINE-token bootstrap OR a one-time ENROLLMENT token (``mne_…``,
+         *     Amd 2 §4 supplement): both legs create a PENDING record; the owner
+         *     approves via ui-token PATCH. The board mints ``executor_secret``
+         *     (token_hex(24)) and stores ONLY its sha256 hash — the plaintext appears
+         *     exactly once, in this response (claim_token pattern, long-lived).
+         *     Capabilities are owner-declared via PATCH, never accepted at
+         *     registration. The enrollment leg spends the token in the same store
+         *     transaction as the INSERT (single-use; a rolled-back registration never
+         *     burns it) and broadcasts ``enrollment.used`` (NO duplicate notification
+         *     — the registration notification below already covers the owner; spam
+         *     guard per host applies). 422 unknown harness/transport; 409 duplicate
+         *     name; 410 spent/dead enrollment token; 429 rate 10/60 s per client AND
+         *     a total cap on OPEN pending registrations (PR #18 F5: pace limits bound
+         *     requests, not volume — approving/revoking/deleting frees quota). The
+         *     owner NOTIFICATION fires for the first open pending registration per
+         *     host; later ones from the same host are audit + SSE only (spam guard —
+         *     the audit event is always written).
          */
         readonly post: operations["register_executor_api_executors_post"];
         readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/executors/enrollment": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * List Enrollments
+         * @description Enrollment tokens for the owner panel (ui-token). Items carry NO
+         *     token material — token_hash stays in the store (hash-only); the list
+         *     shows live tokens plus terminal history for the TTL/used audit trail.
+         */
+        readonly get: operations["list_enrollments_api_executors_enrollment_get"];
+        readonly put?: never;
+        /**
+         * Create Enrollment
+         * @description Mint a one-time enrollment token (ui-token; ADR 0009 Amd 2 §4
+         *     supplement). 201 returns the ``mne_`` token — it appears in exactly one
+         *     response body, this one; the store keeps only its sha256. TTL 15 min
+         *     (server constant; renewal = a new token). Rate 3 per 10 min per client
+         *     (pairing-create pattern); live tokens capped at ENROLLMENT_MAX_LIVE →
+         *     409 with NO auto-revoke (the owner chooses, device-quota principle).
+         *     422 unknown harness_hint (the hint feeds the bootstrap command — a
+         *     bogus hint would mislead the remote leg).
+         */
+        readonly post: operations["create_enrollment_api_executors_enrollment_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/executors/enrollment/{enrollment_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Revoke Enrollment
+         * @description Revoke a LIVE enrollment token (ui-token). created → revoked + SSE
+         *     ``enrollment.revoked``; already revoked → 200 idempotent; used → 409
+         *     (the executor EXISTS — kill it via the executor registry, never here);
+         *     expired → 409 (the TTL already did the job); unknown → 404.
+         */
+        readonly delete: operations["revoke_enrollment_api_executors_enrollment__enrollment_id__delete"];
         readonly options?: never;
         readonly head?: never;
         readonly patch?: never;
@@ -2043,6 +2104,105 @@ export interface components {
         } & {
             readonly [key: string]: unknown;
         };
+        /** EnrollmentCreateBody */
+        readonly EnrollmentCreateBody: {
+            /**
+             * Label
+             * @default
+             */
+            readonly label: string;
+            /**
+             * Harness Hint
+             * @default
+             */
+            readonly harness_hint: string;
+            /**
+             * Name Hint
+             * @default
+             */
+            readonly name_hint: string;
+        };
+        /** EnrollmentCreatedOut */
+        readonly EnrollmentCreatedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly enrollment: components["schemas"]["EnrollmentOut"];
+            /** Token */
+            readonly token: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** EnrollmentListOut */
+        readonly EnrollmentListOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["EnrollmentOut"][];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** EnrollmentOut */
+        readonly EnrollmentOut: {
+            /** Enrollment Id */
+            readonly enrollment_id: string;
+            /**
+             * Label
+             * @default
+             */
+            readonly label: string;
+            /**
+             * Harness Hint
+             * @default
+             */
+            readonly harness_hint: string;
+            /**
+             * Name Hint
+             * @default
+             */
+            readonly name_hint: string;
+            /**
+             * State
+             * @default created
+             */
+            readonly state: string;
+            /**
+             * Created At
+             * @default
+             */
+            readonly created_at: string;
+            /**
+             * Expires At
+             * @default
+             */
+            readonly expires_at: string;
+            /**
+             * Used At
+             * @default
+             */
+            readonly used_at: string;
+            /**
+             * Used Ip
+             * @default
+             */
+            readonly used_ip: string;
+            /**
+             * Executor Id
+             * @default
+             */
+            readonly executor_id: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** EnrollmentRevokedOut */
+        readonly EnrollmentRevokedOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly enrollment: components["schemas"]["EnrollmentOut"];
+        } & {
+            readonly [key: string]: unknown;
+        };
         /** EventItem */
         readonly EventItem: {
             /** Ts */
@@ -2163,6 +2323,11 @@ export interface components {
              * @default offline
              */
             readonly presence: string;
+            /**
+             * Registered Via
+             * @default
+             */
+            readonly registered_via: string;
             /**
              * Registered At
              * @default
@@ -5293,6 +5458,90 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["ExecutorRegisteredOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly list_enrollments_api_executors_enrollment_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["EnrollmentListOut"];
+                };
+            };
+        };
+    };
+    readonly create_enrollment_api_executors_enrollment_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["EnrollmentCreateBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["EnrollmentCreatedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly revoke_enrollment_api_executors_enrollment__enrollment_id__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly enrollment_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["EnrollmentRevokedOut"];
                 };
             };
             /** @description Validation Error */

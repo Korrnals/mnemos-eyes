@@ -631,6 +631,7 @@ export const MOCK_EXECUTORS: ExecutorItem[] = [
     state: "approved",
     last_seen: "2026-09-19T08:59:30+00:00",
     presence: "online",
+    registered_via: "",
     registered_at: "2026-09-18T09:00:00+00:00",
     updated_at: "2026-09-19T08:00:00+00:00",
   },
@@ -647,6 +648,7 @@ export const MOCK_EXECUTORS: ExecutorItem[] = [
     // 5 min before the corpus point — inside the stale corridor (2–10 min).
     last_seen: "2026-09-19T08:55:00+00:00",
     presence: "stale",
+    registered_via: "",
     registered_at: "2026-09-17T14:20:00+00:00",
     updated_at: "2026-09-18T10:00:00+00:00",
   },
@@ -662,6 +664,7 @@ export const MOCK_EXECUTORS: ExecutorItem[] = [
     state: "approved",
     last_seen: "2026-09-19T08:58:00+00:00",
     presence: "online",
+    registered_via: "",
     registered_at: "2026-09-16T11:30:00+00:00",
     updated_at: "2026-09-19T07:45:00+00:00",
   },
@@ -679,6 +682,7 @@ export const MOCK_EXECUTORS: ExecutorItem[] = [
     // 3 h silent — beyond the 10 min offline bound.
     last_seen: "2026-09-19T06:00:00+00:00",
     presence: "offline",
+    registered_via: "",
     registered_at: "2026-09-15T08:00:00+00:00",
     updated_at: "2026-09-15T08:00:00+00:00",
   },
@@ -695,6 +699,9 @@ export const MOCK_EXECUTORS: ExecutorItem[] = [
     // Pending executors MAY tick — the owner sees liveness before approving.
     last_seen: "2026-09-19T08:59:00+00:00",
     presence: "online",
+    // Minted through an enrollment token (AGW-5) — the owner cross-checks
+    // the origin in the approve decision (design §Threat model).
+    registered_via: "enrollment:enr-4f8e2d1c9b0a",
     registered_at: "2026-09-19T08:40:00+00:00",
     updated_at: "2026-09-19T08:40:00+00:00",
   },
@@ -710,6 +717,7 @@ export const MOCK_EXECUTORS: ExecutorItem[] = [
     state: "revoked",
     last_seen: "2026-09-18T18:00:00+00:00",
     presence: "offline",
+    registered_via: "",
     registered_at: "2026-09-14T12:00:00+00:00",
     updated_at: "2026-09-18T18:05:00+00:00",
   },

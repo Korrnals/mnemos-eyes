@@ -26,6 +26,10 @@ import type {
   ExecutorPatchInput,
   ExecutorStateChangeResult,
   ExecutorsPage,
+  EnrollmentCreateInput,
+  EnrollmentCreatedResult,
+  EnrollmentRevokeResult,
+  EnrollmentsPage,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -284,6 +288,28 @@ export interface BoardGateway extends MemoryGateway {
    * attribution strings (two-clock discipline, Amd 2 §3). 404 unknown id.
    */
   deleteExecutor(executorId: string): Promise<void>;
+  /**
+   * Mint a one-time enrollment token (`POST /api/executors/enrollment`,
+   * ui-token; AGW-5 phase 2). 201 carries the `mne_…` plaintext EXACTLY
+   * once (hash-only storage server-side); 409 live-token quota (≤3, no
+   * auto-revoke — the owner chooses); 422 unknown harness_hint; 429 rate
+   * 3/10 min per client; 503 fail-closed while the server has no ui token.
+   */
+  createEnrollment(
+    payload: EnrollmentCreateInput,
+  ): Promise<EnrollmentCreatedResult>;
+  /**
+   * Enrollment tokens for the owner panel (`GET /api/executors/enrollment`,
+   * ui-token) — live tokens plus terminal history, no hash/token material.
+   */
+  listEnrollments(signal?: AbortSignal): Promise<EnrollmentsPage>;
+  /**
+   * Revoke a LIVE token (`DELETE /api/executors/enrollment/{id}`,
+   * ui-token). created → revoked; ALREADY revoked → 200 idempotent;
+   * used → 409 (the executor EXISTS — kill it via the executor registry,
+   * never here); expired → 409; unknown → 404.
+   */
+  revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult>;
   /** Default/fallback executor pair (`GET /api/settings/execution`, open read). */
   getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
   /**
@@ -698,6 +724,38 @@ export class BoardAdapter implements BoardGateway {
   async deleteExecutor(executorId: string): Promise<void> {
     await this.request<{ ok: boolean }>(
       `/executors/${encodeURIComponent(executorId)}`,
+      { method: "DELETE", auth: true },
+    );
+  }
+
+  async createEnrollment(
+    payload: EnrollmentCreateInput,
+  ): Promise<EnrollmentCreatedResult> {
+    return this.request<EnrollmentCreatedResult>("/executors/enrollment", {
+      method: "POST",
+      // Omitted keys stay at the server defaults (label/hints are optional
+      // strings; empty string = not provided).
+      body: {
+        ...(payload.label ? { label: payload.label } : {}),
+        ...(payload.harness_hint ? { harness_hint: payload.harness_hint } : {}),
+        ...(payload.name_hint ? { name_hint: payload.name_hint } : {}),
+      },
+      auth: true,
+    });
+  }
+
+  async listEnrollments(signal?: AbortSignal): Promise<EnrollmentsPage> {
+    return this.request<EnrollmentsPage>("/executors/enrollment", {
+      signal,
+      auth: true,
+    });
+  }
+
+  async revokeEnrollment(
+    enrollmentId: string,
+  ): Promise<EnrollmentRevokeResult> {
+    return this.request<EnrollmentCreatedResult>(
+      `/executors/enrollment/${encodeURIComponent(enrollmentId)}`,
       { method: "DELETE", auth: true },
     );
   }

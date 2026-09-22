@@ -35,6 +35,7 @@ const PENDING: ExecutorItem = {
   state: "pending",
   last_seen: "2026-09-19T08:59:00+00:00",
   presence: "online",
+  registered_via: "",
   registered_at: "2026-09-19T08:40:00+00:00",
   updated_at: "2026-09-19T08:40:00+00:00",
 };

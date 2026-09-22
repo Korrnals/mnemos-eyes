@@ -31,6 +31,10 @@ import type {
   ExecutorPatchInput,
   ExecutorStateChangeResult,
   ExecutorsPage,
+  EnrollmentCreateInput,
+  EnrollmentCreatedResult,
+  EnrollmentRevokeResult,
+  EnrollmentsPage,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -217,6 +221,16 @@ export interface AgentsMutationSource {
    * assignments keep their pins/attribution verbatim (two-clock rule).
    */
   deleteExecutor(executorId: string): Promise<void>;
+  /**
+   * Mint a one-time enrollment token (`POST /api/executors/enrollment`,
+   * ui-token; AGW-5 phase 2). The mne_ plaintext rides the 201 answer
+   * only; 409 live-quota (≤3), 422 unknown harness_hint.
+   */
+  createEnrollment(payload: EnrollmentCreateInput): Promise<EnrollmentCreatedResult>;
+  /** Token list for the owner panel (ui-token; live + terminal history). */
+  listEnrollments(signal?: AbortSignal): Promise<EnrollmentsPage>;
+  /** Revoke a LIVE token (idempotent on revoked; used/expired → 409). */
+  revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult>;
 }
 
 /** Gateway type that also speaks the agents-domain mutation wire. */
@@ -231,7 +245,10 @@ export function isAgentsMutationSource(
     typeof (gateway as Partial<AgentsMutationSource>).putExecutionSettings ===
       "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).patchExecutor === "function" &&
-    typeof (gateway as Partial<AgentsMutationSource>).deleteExecutor === "function"
+    typeof (gateway as Partial<AgentsMutationSource>).deleteExecutor === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).createEnrollment === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).listEnrollments === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).revokeEnrollment === "function"
   );
 }
 

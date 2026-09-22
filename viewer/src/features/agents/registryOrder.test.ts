@@ -22,6 +22,7 @@ const row = (overrides: Partial<ExecutorItem>): ExecutorItem => ({
   state: "approved",
   last_seen: "2026-09-19T08:00:00+00:00",
   presence: "offline",
+  registered_via: "",
   registered_at: "2026-09-18T00:00:00+00:00",
   updated_at: "",
   ...overrides,

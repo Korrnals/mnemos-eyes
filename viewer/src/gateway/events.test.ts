@@ -61,6 +61,7 @@ const EXECUTOR = {
   state: "approved",
   last_seen: "2026-09-19T08:59:30+00:00",
   presence: "online",
+  registered_via: "",
   registered_at: "2026-09-18T09:00:00+00:00",
   updated_at: "2026-09-19T08:00:00+00:00",
 };
@@ -431,5 +432,63 @@ describe("EventStream wiring", () => {
     expect(everything).toHaveBeenCalledTimes(1);
     expect(source.url).toBe("/api/events");
     stream.close();
+  });
+});
+
+describe("enrollment.* (AGW-5 phase 2, ui-contract §11)", () => {
+  it("parses created/revoked/expired on the enrollment_id alone", () => {
+    for (const kind of ["enrollment.created", "enrollment.revoked", "enrollment.expired"]) {
+      const parsed = parseBoardEvent(JSON.stringify({ kind, enrollment_id: "enr-1" }));
+      expect(parsed.status).toBe("event");
+      if (parsed.status !== "event") continue;
+      expect(parsed.event).toMatchObject({ kind, enrollment_id: "enr-1" });
+    }
+  });
+
+  it("parses used WITH the minted executor link + presenting IP", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "enrollment.used",
+        enrollment_id: "enr-1",
+        executor_id: "exec-9",
+        executor_name: "vps-1",
+        used_ip: "10.0.0.9",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({
+      kind: "enrollment.used",
+      enrollment_id: "enr-1",
+      executor_id: "exec-9",
+      executor_name: "vps-1",
+      used_ip: "10.0.0.9",
+    });
+  });
+
+  it("a used frame WITHOUT the executor link is malformed, not thin", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({ kind: "enrollment.used", enrollment_id: "enr-1" }),
+    );
+    expect(parsed).toMatchObject({ status: "ignored", reason: "malformed-payload" });
+  });
+
+  it("no token material is allowed to ride ANY enrollment frame", () => {
+    // Contractual: the dictionary rule (ADR 0012 §3.3 pattern) — the parser
+    // passes the frame through, so the EXCLUSION test is on the type shape:
+    // the parsed used event carries only the four declared fields.
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "enrollment.used",
+        enrollment_id: "enr-1",
+        executor_id: "e",
+        executor_name: "n",
+        used_ip: "i",
+        token: "mne_leak",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(JSON.stringify(parsed.event)).not.toContain("mne_leak");
   });
 });
