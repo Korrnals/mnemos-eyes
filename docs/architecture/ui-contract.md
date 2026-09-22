@@ -265,6 +265,22 @@ REST-контракт той же фазы: `POST/GET /api/executors/enrollment`
 токену — существующий `POST /api/executors` с `Bearer mne_…`. Полный
 контракт — `docs/design/2026-09-22-executor-enrollment.md`.
 
+Словарь словаря харнесов (wave 3C, дополнение 2026-09-22 —
+администрируемый реестр, design §C): владелец пополняет словарь
+номинации; все гейты (регистрация, enrollment-hint, создание assignment,
+автоматизация, enum правил) читают таблицу; запуск по-прежнему гейтит
+только локальный allowlist исполнителя (A3).
+
+| kind | Payload (v1) | Эмиттер | Клиент |
+| --- | --- | --- | --- |
+| `harness.added` | `harness: {name, added_at, added_via, note}` | POST `/api/harnesses` (ui) | инвалидация harnesses-ключа; селекты харнеса обновляются рефетчем |
+| `harness.removed` | `name: str` | DELETE `/api/harnesses/{name}` (ui; 409 пока жив executor/активное назначение/включенное правило) | та же инвалидация |
+
+REST-контракт: `GET /api/harnesses` (open read,
+`meta.seed_min_count`), `POST /api/harnesses` (ui; 422 имя
+`^[a-z0-9][a-z0-9._-]{0,59}$` или кап ≤64; 409 дубликат),
+`DELETE /api/harnesses/{name}` (ui; 404 unknown).
+
 ### Встроенные объекты
 
 - `Task`: `id`, `col` (`open|in-progress|blocked|resolved|done`),

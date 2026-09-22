@@ -333,8 +333,7 @@ export const ru = {
   "login.continueQueued":
     "Войдите, чтобы продолжить — действие выполнится автоматически",
   // Отказ «у порога» (ADR 0014 Ф1): verify вернул отказ — ничего не сохранено.
-  "login.rejected":
-    "Сервер не принял токен — проверьте значение и попробуйте ещё раз.",
+  "login.rejected": "Сервер не принял токен — проверьте значение и попробуйте ещё раз.",
   // Отказ «в полёте» (ADR 0014 Ф2): сохранённый токен протух / сессия истекла
   // по idle-таймауту — отдельный текст, чтобы не читалось как «опечатка».
   "login.sessionExpired": "Сессия истекла — войдите ещё раз.",
@@ -954,6 +953,13 @@ export const ru = {
   "agents.enrollment.usedBy": "использован: {{name}}",
   "agents.enrollment.usedIp": "IP подключения: {{ip}}",
   "agents.enrollment.done": "Готово",
+  "agents.harness.addOption": "Добавить харнес…",
+  "agents.harness.add": "Добавить",
+  "agents.harness.adding": "Добавляем…",
+  "agents.harness.addFailed": "Не удалось добавить харнес",
+  "agents.harness.invalid":
+    "Строчные латиница/цифры, затем точки, дефисы, подчёркивания (до 60 знаков).",
+
   "agents.enrollment.listTitle": "Токены подключения",
   "agents.enrollment.listHint": "живые + история",
   "agents.enrollment.listLoading": "Загружаем токены",
@@ -966,7 +972,6 @@ export const ru = {
     "Отозвать токен {{label}}? Подключение по нему станет невозможно.",
   "agents.enrollment.revoked": "Токен отозван",
   "agents.enrollment.revokeFailed": "Не удалось отозвать токен",
-
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Автоматизация",

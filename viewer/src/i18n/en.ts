@@ -775,7 +775,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.registry.title": "Agent connections",
   "agents.registry.loading": "Loading the executor registry",
   "agents.registry.failed": "Failed to load the executor registry",
-  "agents.registry.empty": "No executors yet — connect the first one with the guide below.",
+  "agents.registry.empty":
+    "No executors yet — connect the first one with the guide below.",
   "agents.registry.band.pending": "Awaiting approval",
   "agents.registry.band.active": "Connected",
   "agents.registry.band.revoked": "Revoked",
@@ -938,6 +939,13 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.usedBy": "used: {{name}}",
   "agents.enrollment.usedIp": "connection IP: {{ip}}",
   "agents.enrollment.done": "Done",
+  "agents.harness.addOption": "Add harness…",
+  "agents.harness.add": "Add",
+  "agents.harness.adding": "Adding…",
+  "agents.harness.addFailed": "Failed to add the harness",
+  "agents.harness.invalid":
+    "Lowercase latin/digits first, then dots, dashes, underscores (≤60 chars).",
+
   "agents.enrollment.listTitle": "Enrollment tokens",
   "agents.enrollment.listHint": "live + history",
   "agents.enrollment.listLoading": "Loading tokens",
@@ -950,7 +958,6 @@ export const en: Record<TranslationKey, string> = {
     "Revoke the token {{label}}? It can no longer be used to connect.",
   "agents.enrollment.revoked": "Token revoked",
   "agents.enrollment.revokeFailed": "Failed to revoke the token",
-
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Automation",
@@ -1125,11 +1132,11 @@ export const en: Record<TranslationKey, string> = {
   "pairing.qr.hint": "No camera? Type the code below manually on the device.",
   "pairing.qr.loading": "Loading the QR…",
   "pairing.codeLabel": "Pairing code",
-  "pairing.codeHint":
-    "Manual path: open /pair on the device and enter this code.",
+  "pairing.codeHint": "Manual path: open /pair on the device and enter this code.",
   "pairing.copy": "Copy",
   "pairing.copied": "Copied",
-  "pairing.copyFailed": "Copy failed — the code stays in the field, select it manually.",
+  "pairing.copyFailed":
+    "Copy failed — the code stays in the field, select it manually.",
   "pairing.waitingScan": "Waiting for the scan…",
   "pairing.ttl": "expires in {{time}}",
   "pairing.expiredShort": "expired — start over",

@@ -33,6 +33,9 @@ import type {
   ExecutorPatchInput,
   ExecutorStateChangeResult,
   ExecutorsPage,
+  HarnessCreateInput,
+  HarnessesPage,
+  HarnessStateResult,
   EnrollmentCreateInput,
   EnrollmentCreatedResult,
   EnrollmentRevokeResult,
@@ -213,6 +216,8 @@ export interface AgentsSource {
   listExecutors(signal?: AbortSignal): Promise<ExecutorsPage>;
   /** Default/fallback executor pair (`GET /api/settings/execution`). */
   getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
+  /** Harness dictionary (`GET /api/harnesses`, open read; wave 3C). */
+  listHarnesses(signal?: AbortSignal): Promise<HarnessesPage>;
 }
 
 /** Gateway type that also serves the agents-domain reads. */
@@ -222,7 +227,8 @@ export function isAgentsSource(gateway: MemoryGateway): gateway is AgentsGateway
   return (
     typeof (gateway as Partial<AgentsSource>).listAssignments === "function" &&
     typeof (gateway as Partial<AgentsSource>).listExecutors === "function" &&
-    typeof (gateway as Partial<AgentsSource>).getExecutionSettings === "function"
+    typeof (gateway as Partial<AgentsSource>).getExecutionSettings === "function" &&
+    typeof (gateway as Partial<AgentsSource>).listHarnesses === "function"
   );
 }
 
@@ -267,6 +273,16 @@ export interface AgentsMutationSource {
   listEnrollments(signal?: AbortSignal): Promise<EnrollmentsPage>;
   /** Revoke a LIVE token (idempotent on revoked; used/expired → 409). */
   revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult>;
+  /**
+   * Add a harness to the dictionary (`POST /api/harnesses`, ui-token;
+   * wave 3C). 201 row; 422 bad name or dictionary cap; 409 duplicate.
+   */
+  createHarness(payload: HarnessCreateInput): Promise<HarnessStateResult>;
+  /**
+   * Remove a harness (`DELETE /api/harnesses/{name}`, ui-token; wave 3C).
+   * 404 unknown; 409 while live in an executor/assignment/rule.
+   */
+  deleteHarness(name: string): Promise<void>;
 }
 
 /** Gateway type that also speaks the agents-domain mutation wire. */
@@ -284,7 +300,9 @@ export function isAgentsMutationSource(
     typeof (gateway as Partial<AgentsMutationSource>).deleteExecutor === "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).createEnrollment === "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).listEnrollments === "function" &&
-    typeof (gateway as Partial<AgentsMutationSource>).revokeEnrollment === "function"
+    typeof (gateway as Partial<AgentsMutationSource>).revokeEnrollment === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).createHarness === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).deleteHarness === "function"
   );
 }
 
@@ -298,15 +316,14 @@ export interface AutomationSource {
   automationStatus(signal?: AbortSignal): Promise<AutomationStatus>;
   listSchedules(signal?: AbortSignal): Promise<SchedulesPage>;
   listHooks(signal?: AbortSignal): Promise<HooksPage>;
-  listLaunches(
-    params?: LaunchesParams,
-    signal?: AbortSignal,
-  ): Promise<LaunchesPage>;
+  listLaunches(params?: LaunchesParams, signal?: AbortSignal): Promise<LaunchesPage>;
 }
 
 export type AutomationGateway = MemoryGateway & AutomationSource;
 
-export function isAutomationSource(gateway: MemoryGateway): gateway is AutomationGateway {
+export function isAutomationSource(
+  gateway: MemoryGateway,
+): gateway is AutomationGateway {
   return (
     typeof (gateway as Partial<AutomationSource>).automationStatus === "function" &&
     typeof (gateway as Partial<AutomationSource>).listSchedules === "function" &&
@@ -339,8 +356,10 @@ export function isAutomationMutationSource(
   gateway: MemoryGateway,
 ): gateway is AutomationMutationGateway {
   return (
-    typeof (gateway as Partial<AutomationMutationSource>).createSchedule === "function" &&
-    typeof (gateway as Partial<AutomationMutationSource>).runScheduleNow === "function" &&
+    typeof (gateway as Partial<AutomationMutationSource>).createSchedule ===
+      "function" &&
+    typeof (gateway as Partial<AutomationMutationSource>).runScheduleNow ===
+      "function" &&
     typeof (gateway as Partial<AutomationMutationSource>).createHook === "function" &&
     typeof (gateway as Partial<AutomationMutationSource>).deleteHook === "function"
   );
@@ -381,10 +400,7 @@ export interface PairingSource {
   /** Trusted-side status (`GET /api/pairing/{id}`, ui-token; verify source). */
   getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus>;
   /** Owner decision (`POST /api/pairing/{id}/confirm {allow}`, ui-token). */
-  confirmPairing(
-    pairingId: string,
-    allow: boolean,
-  ): Promise<PairingConfirmResult>;
+  confirmPairing(pairingId: string, allow: boolean): Promise<PairingConfirmResult>;
   /** Cancel before issued (`DELETE /api/pairing/{id}`, ui-token). */
   cancelPairing(pairingId: string): Promise<PairingConfirmResult>;
 }
@@ -406,9 +422,9 @@ export function isPairingSource(gateway: MemoryGateway): gateway is PairingGatew
  * separate guard: the /pair page must work without ANY session surface.
  */
 export interface PairingExchangeSource {
-  exchangePairing(payload: PairingExchangeInput): Promise<
-    PairingExchangeAwaiting | PairingIssuedResult
-  >;
+  exchangePairing(
+    payload: PairingExchangeInput,
+  ): Promise<PairingExchangeAwaiting | PairingIssuedResult>;
 }
 
 export function isPairingExchangeSource(

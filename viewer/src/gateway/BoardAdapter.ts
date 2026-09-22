@@ -32,6 +32,9 @@ import type {
   EnrollmentCreatedResult,
   EnrollmentRevokeResult,
   EnrollmentsPage,
+  HarnessCreateInput,
+  HarnessesPage,
+  HarnessStateResult,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -343,9 +346,7 @@ export interface BoardGateway extends MemoryGateway {
    * auto-revoke — the owner chooses); 422 unknown harness_hint; 429 rate
    * 3/10 min per client; 503 fail-closed while the server has no ui token.
    */
-  createEnrollment(
-    payload: EnrollmentCreateInput,
-  ): Promise<EnrollmentCreatedResult>;
+  createEnrollment(payload: EnrollmentCreateInput): Promise<EnrollmentCreatedResult>;
   /**
    * Enrollment tokens for the owner panel (`GET /api/executors/enrollment`,
    * ui-token) — live tokens plus terminal history, no hash/token material.
@@ -360,6 +361,24 @@ export interface BoardGateway extends MemoryGateway {
   revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult>;
   /** Default/fallback executor pair (`GET /api/settings/execution`, open read). */
   getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
+  /**
+   * Harness dictionary (`GET /api/harnesses`, open read; wave 3C). The
+   * owner-managed nomination registry — meta.seed_min_count is the
+   * guaranteed seed size, the set itself is data, never a UI constant.
+   */
+  listHarnesses(signal?: AbortSignal): Promise<HarnessesPage>;
+  /**
+   * Add a harness (`POST /api/harnesses`, ui-token; wave 3C). 201 row;
+   * 422 bad name (server-side sanitization is authoritative) or
+   * dictionary cap (≤64); 409 duplicate.
+   */
+  createHarness(payload: HarnessCreateInput): Promise<HarnessStateResult>;
+  /**
+   * Remove a harness (`DELETE /api/harnesses/{name}`, ui-token; wave 3C).
+   * 404 unknown; 409 while the name is live in a registered executor, a
+   * non-terminal assignment or an automation rule.
+   */
+  deleteHarness(name: string): Promise<void>;
   /**
    * Set the default/fallback pair (`PUT /api/settings/execution`,
    * ui-token). Amd 2 §5 gates answer 422: a default must exist, be
@@ -905,13 +924,34 @@ export class BoardAdapter implements BoardGateway {
     });
   }
 
-  async revokeEnrollment(
-    enrollmentId: string,
-  ): Promise<EnrollmentRevokeResult> {
+  async revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult> {
     return this.request<EnrollmentCreatedResult>(
       `/executors/enrollment/${encodeURIComponent(enrollmentId)}`,
       { method: "DELETE", auth: true },
     );
+  }
+
+  async listHarnesses(signal?: AbortSignal): Promise<HarnessesPage> {
+    return this.request<HarnessesPage>("/harnesses", { signal });
+  }
+
+  async createHarness(payload: HarnessCreateInput): Promise<HarnessStateResult> {
+    return this.request<HarnessStateResult>("/harnesses", {
+      method: "POST",
+      // Omitted note stays at the server default (empty string).
+      body: {
+        name: payload.name,
+        ...(payload.note ? { note: payload.note } : {}),
+      },
+      auth: true,
+    });
+  }
+
+  async deleteHarness(name: string): Promise<void> {
+    await this.request<{ ok: boolean }>(`/harnesses/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      auth: true,
+    });
   }
 
   async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {
@@ -1043,10 +1083,10 @@ export class BoardAdapter implements BoardGateway {
   }
 
   async getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus> {
-    return this.request<PairingStatus>(
-      `/pairing/${encodeURIComponent(pairingId)}`,
-      { signal, auth: true },
-    );
+    return this.request<PairingStatus>(`/pairing/${encodeURIComponent(pairingId)}`, {
+      signal,
+      auth: true,
+    });
   }
 
   async confirmPairing(
@@ -1382,7 +1422,8 @@ export function normalizeTagDrill(payload: unknown, tag: string): TagDrill {
 }
 
 /** `GET /api/health` anonymous dict → `BoardHealthDetail` (per-store rows). */
-export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {  const source = (payload ?? {}) as Record<string, unknown>;
+export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {
+  const source = (payload ?? {}) as Record<string, unknown>;
   const servers = Array.isArray(source.servers) ? source.servers : [];
   return {
     ok: source.ok === true,

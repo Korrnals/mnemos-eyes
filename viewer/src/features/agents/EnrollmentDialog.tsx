@@ -1,13 +1,17 @@
 import { useState } from "react";
 import { Check, Copy, Eye, EyeOff, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type {
   EnrollmentCreatedResult,
   EnrollmentItem,
   ExecutorItem,
 } from "@/gateway/boardTypes";
-import { KNOWN_HARNESSES } from "@/gateway/harnesses";
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
 import { useValidationNow } from "@/features/tasks/useValidationClock";
@@ -18,14 +22,15 @@ import {
   formatTtlCountdown,
 } from "./enrollment";
 import { useEnrollmentActions, useHonestCopy } from "./useEnrollment";
+import { HarnessSelect } from "./HarnessSelect";
 
 /**
  * «Добавить исполнителя» — the enrollment dialog (AGW-5 phase 2, design
  * §Фазы.2). Two phases in ONE dialog (the AssignExecutorSheet pattern):
  *
- * 1. FORM — label (≤64), harness_hint (the closed KNOWN_HARNESSES mirror —
- *    the server 422s unknown values with the authoritative list, so drift
- *    surfaces honestly), name_hint (optional, ≤120).
+ * 1. FORM — label (≤64), harness_hint (the LIVE dictionary combobox with
+ *    free entry — wave 3C; the server 422s unknown values with the
+ *    authoritative list), name_hint (optional, ≤120).
  * 2. TOKEN SCREEN — the mne_… plaintext hidden until «Показать» (shoulder
  *    surfacing beats a ninja reveal), copy buttons, the LIVE TTL countdown
  *    (mm:ss off the shared 1 Hz ticker), and the VPS bootstrap block — the
@@ -71,11 +76,7 @@ export function EnrollmentDialog({
         {created ? (
           <TokenScreen created={created} executors={executors} onDone={close} />
         ) : (
-          <EnrollmentForm
-            key={formKey}
-            onCreated={setCreated}
-            onDone={close}
-          />
+          <EnrollmentForm key={formKey} onCreated={setCreated} onDone={close} />
         )}
         {/* The description stays stable across phases (Radix wants one). */}
         <DialogDescription className="sr-only">
@@ -117,9 +118,7 @@ function EnrollmentForm({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-3">
-      <DialogDescription>
-        {t("agents.enrollment.formHint")}
-      </DialogDescription>
+      <DialogDescription>{t("agents.enrollment.formHint")}</DialogDescription>
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t("agents.enrollment.label")}
         <input
@@ -132,17 +131,7 @@ function EnrollmentForm({
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t("agents.enrollment.harness")}
-        <select
-          value={harness}
-          onChange={(event) => setHarness(event.target.value)}
-          className="h-9 rounded-md border border-border bg-background px-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
-        >
-          {KNOWN_HARNESSES.map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-        </select>
+        <HarnessSelect id="enroll-harness" value={harness} onChange={setHarness} />
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t("agents.enrollment.nameHint")}
@@ -194,14 +183,12 @@ function TokenScreen({
   // A used token links to the row it minted (enrollment.used carries the
   // executor_id; the registry list query has it after the invalidation).
   const minted = row.executor_id
-    ? executors.find((executor) => executor.id === row.executor_id) ?? null
+    ? (executors.find((executor) => executor.id === row.executor_id) ?? null)
     : null;
 
   return (
     <div className="flex flex-col gap-3">
-      <DialogDescription>
-        {t("agents.enrollment.tokenOnce")}
-      </DialogDescription>
+      <DialogDescription>{t("agents.enrollment.tokenOnce")}</DialogDescription>
 
       {/* The token: masked until «Показать»; mono; copy beside, never inline
        * in the text (no accidental selection leaks). */}
@@ -237,7 +224,9 @@ function TokenScreen({
           ) : (
             <Copy className="size-3.5" aria-hidden="true" />
           )}
-          {copied === "token" ? t("agents.enrollment.copied") : t("agents.enrollment.copy")}
+          {copied === "token"
+            ? t("agents.enrollment.copied")
+            : t("agents.enrollment.copy")}
         </Button>
       </div>
 
@@ -285,9 +274,9 @@ function TokenScreen({
         <ol className="space-y-2 border-t border-border-subtle px-3 py-2">
           {steps.map((step, index) => (
             <li key={index} className="flex items-start gap-2">
-            <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-foreground-secondary">
-              {step}
-            </pre>
+              <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-foreground-secondary">
+                {step}
+              </pre>
               <Button
                 type="button"
                 variant="ghost"
@@ -307,7 +296,9 @@ function TokenScreen({
         </ol>
       </div>
 
-      <p className="text-xs text-foreground-muted">{t("agents.enrollment.afterRegister")}</p>
+      <p className="text-xs text-foreground-muted">
+        {t("agents.enrollment.afterRegister")}
+      </p>
 
       <div className="flex items-center justify-end gap-2">
         {minted ? (

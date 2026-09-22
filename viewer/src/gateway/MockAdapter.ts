@@ -1,7 +1,6 @@
 import type { MemoryGateway } from "./MemoryGateway";
 import type { InboxParams } from "./BoardAdapter";
 import { resolveRoutingAnnotation } from "./routing";
-import { KNOWN_HARNESSES } from "./harnesses";
 import { ApiError } from "@/lib/errors";
 import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
@@ -12,6 +11,7 @@ import {
   MOCK_EXECUTORS,
   MOCK_EXECUTORS_META,
   MOCK_EXECUTION_SETTINGS,
+  MOCK_HARNESSES,
   MOCK_HISTORY,
   MOCK_HOOKS,
   MOCK_INBOX,
@@ -46,6 +46,10 @@ import type {
   EnrollmentItem,
   EnrollmentRevokeResult,
   EnrollmentsPage,
+  HarnessCreateInput,
+  HarnessesPage,
+  HarnessItem,
+  HarnessStateResult,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -170,6 +174,9 @@ export class MockAdapter implements MemoryGateway {
   // --- AGW-1 mutable agents state (same clone-per-instance discipline) --------
   private assignments: AssignmentItem[];
   private executors: ExecutorItem[];
+  /** Harness dictionary (wave 3C): live playground state seeded from the
+   * fixture corpus; the nomination gates read THIS, like the server. */
+  private harnesses: HarnessItem[];
   private executionSettings: ExecutionSettings;
   /** Per-project defaults (board_meta `default_executor:project:<slug>`
    * mirror) — modelled through PUT /settings/execution with a project scope. */
@@ -197,6 +204,7 @@ export class MockAdapter implements MemoryGateway {
     this.inboxItems = MOCK_INBOX.items.map((item) => ({ ...item }));
     this.assignments = MOCK_ASSIGNMENTS.map((assignment) => ({ ...assignment }));
     this.executors = MOCK_EXECUTORS.map((executor) => ({ ...executor }));
+    this.harnesses = MOCK_HARNESSES.map((harness) => ({ ...harness }));
     this.executionSettings = { ...MOCK_EXECUTION_SETTINGS };
     this.schedules = MOCK_SCHEDULES.map((rule) => ({ ...rule }));
     this.hooks = MOCK_HOOKS.map((rule) => ({ ...rule }));
@@ -833,6 +841,15 @@ export class MockAdapter implements MemoryGateway {
     signal?: AbortSignal,
   ): Promise<AssignmentCreatedResult> {
     await this.delay(signal);
+    // Server mirror (assignment create gate, wave 3C): an unknown harness
+    // can never launch — refuse early against the live dictionary.
+    if (!this.harnessNames().includes(payload.harness)) {
+      throw new ApiError(
+        422,
+        `unknown harness: ${payload.harness}; known: ${this.harnessNames().join(", ")}`,
+        { url: "mock:/api/assignments" },
+      );
+    }
     const assignment = this.createAssignmentRow(
       payload.task_id,
       payload.specialist,
@@ -910,6 +927,117 @@ export class MockAdapter implements MemoryGateway {
       items: this.executors.map((executor) => ({ ...executor })),
       meta: MOCK_EXECUTORS_META,
     };
+  }
+
+  // --- harness dictionary (wave 3C, design 2026-09-22 §C) ---------------------
+  // Server mirrors: name rule and dictionary ceiling (store.py HARNESS_*),
+  // in-use delete gates (executor / non-terminal assignment / schedule /
+  // hook condition). The playground dictionary state is what its OWN
+  // nomination gates read — same as the server.
+
+  /** Live dictionary snapshot — the mock's nomination gates use it. */
+  private harnessNames(): string[] {
+    return this.harnesses.map((harness) => harness.name);
+  }
+
+  async listHarnesses(signal?: AbortSignal): Promise<HarnessesPage> {
+    await this.delay(signal);
+    return {
+      ok: true,
+      count: this.harnesses.length,
+      items: [...this.harnesses].sort((a, b) => a.name.localeCompare(b.name)),
+      meta: { seed_min_count: 10 },
+    };
+  }
+
+  async createHarness(
+    payload: HarnessCreateInput,
+    signal?: AbortSignal,
+  ): Promise<HarnessStateResult> {
+    await this.delay(signal);
+    const name = payload.name.trim();
+    if (!/^[a-z0-9][a-z0-9._-]{0,59}$/.test(name)) {
+      throw new ApiError(
+        422,
+        `invalid harness name: '${name}' (lowercase latin/digits first, then [a-z0-9._-], max 60 chars)`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    if (this.harnesses.length >= 64) {
+      throw new ApiError(
+        422,
+        "the harness dictionary is capped at 64 — remove unused entries before adding more",
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    if (this.harnessNames().includes(name)) {
+      throw new ApiError(409, `harness '${name}' is already registered`, {
+        url: "mock:/api/harnesses",
+      });
+    }
+    const row: HarnessItem = {
+      name,
+      added_at: new Date(this.now()).toISOString(),
+      added_via: "owner",
+      note: (payload.note ?? "").trim().slice(0, 200),
+    };
+    this.harnesses.push(row);
+    return { ok: true, harness: { ...row } };
+  }
+
+  async deleteHarness(name: string, signal?: AbortSignal): Promise<void> {
+    await this.delay(signal);
+    const index = this.harnesses.findIndex((harness) => harness.name === name);
+    if (index === -1) {
+      throw new ApiError(404, `harness '${name}' is not registered`, {
+        url: "mock:/api/harnesses",
+      });
+    }
+    if (this.executors.some((executor) => executor.harness === name)) {
+      throw new ApiError(
+        409,
+        `harness '${name}' is used by a registered executor — revoke or delete that executor first`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    if (
+      this.assignments.some(
+        (assignment) =>
+          assignment.harness === name &&
+          ACTIVE_ASSIGNMENT_STATES.includes(assignment.state),
+      )
+    ) {
+      throw new ApiError(
+        409,
+        `harness '${name}' has active assignments — cancel or finish them first`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    // Only ENABLED rules block: rules are soft-deleted (the row survives
+    // retention), a disabled rule cannot fire — counting it would make a
+    // harness undeletable forever (server parity, wave 3C review fix).
+    if (this.schedules.some((rule) => rule.harness === name && rule.enabled)) {
+      throw new ApiError(
+        409,
+        `harness '${name}' is referenced by an automation schedule — delete the schedule first`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    for (const hook of this.hooks) {
+      if (!hook.enabled) continue;
+      // HookRule.condition arrives PARSED (ConditionItem[]) — no JSON decode.
+      const hit = hook.condition.some(
+        (clause) => clause.field === "harness" && String(clause.value) === name,
+      );
+      if (hit) {
+        throw new ApiError(
+          409,
+          `harness '${name}' is referenced by automation hook '${hook.name}' — delete the hook first`,
+          { url: "mock:/api/harnesses" },
+        );
+      }
+    }
+    this.harnesses.splice(index, 1);
   }
 
   async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {
@@ -1022,8 +1150,7 @@ export class MockAdapter implements MemoryGateway {
     // Rename guard (AGW-4 P3): pydantic bounds (1..120) + the duplicate
     // check of update_executor. Computed UP FRONT — a local `name` would
     // silently collide with the DOM `window.name` global in the spread.
-    const nextName =
-      patch.name !== undefined ? patch.name.trim() : undefined;
+    const nextName = patch.name !== undefined ? patch.name.trim() : undefined;
     if (nextName !== undefined && (nextName.length === 0 || nextName.length > 120)) {
       throw new ApiError(422, "invalid executor name", {
         url: "mock:/api/executors",
@@ -1070,8 +1197,8 @@ export class MockAdapter implements MemoryGateway {
 
   /**
    * Mint a one-time mne_ token (store.create_enrollment mirror): 422
-   * unknown harness_hint (the allowlist is the closed KNOWN_HARNESSES
-   * mirror), 409 at ENROLLMENT_MAX_LIVE = 3 live tokens with NO auto-revoke
+   * unknown harness_hint (the hint gate reads the live dictionary state,
+   * wave 3C), 409 at ENROLLMENT_MAX_LIVE = 3 live tokens with NO auto-revoke
    * (device-quota principle — the owner revokes by hand). TTL 15 min,
    * server constant. The plaintext token exists ONLY in this answer.
    */
@@ -1083,11 +1210,11 @@ export class MockAdapter implements MemoryGateway {
     if (
       payload.harness_hint !== undefined &&
       payload.harness_hint !== "" &&
-      !(KNOWN_HARNESSES as readonly string[]).includes(payload.harness_hint)
+      !this.harnessNames().includes(payload.harness_hint)
     ) {
       throw new ApiError(
         422,
-        `unknown harness_hint: ${payload.harness_hint}; known: ${KNOWN_HARNESSES.join(", ")}`,
+        `unknown harness_hint: ${payload.harness_hint}; known: ${this.harnessNames().join(", ")}`,
         { url: "mock:/api/executors/enrollment" },
       );
     }
@@ -1168,11 +1295,25 @@ export class MockAdapter implements MemoryGateway {
   async automationStatus(signal?: AbortSignal): Promise<AutomationStatus> {
     await this.delay(signal);
     // Derived from live rule state like the server; engine stays the honest
-    // S1 constant (no loop exists to report live).
+    // S1 constant (no loop exists to report live). The harness values_hint
+    // joins through the LIVE dictionary state (wave 3C — server parity),
+    // never a static fixture list.
     const schedulesEnabled = this.schedules.filter((rule) => rule.enabled).length;
     const hooksEnabled = this.hooks.filter((rule) => rule.enabled).length;
     return {
       ...MOCK_AUTOMATION_STATUS,
+      condition_meta: {
+        ...MOCK_AUTOMATION_STATUS.condition_meta,
+        values_hint: {
+          // The generated schema types values_hint as `unknown` (anonymous
+          // dict on the wire); the mock owns the fixture shape.
+          ...(MOCK_AUTOMATION_STATUS.condition_meta.values_hint as Record<
+            string,
+            unknown
+          >),
+          harness: this.harnessNames(),
+        },
+      },
       rules: {
         schedules: { total: this.schedules.length, enabled: schedulesEnabled },
         hooks: { total: this.hooks.length, enabled: hooksEnabled },
