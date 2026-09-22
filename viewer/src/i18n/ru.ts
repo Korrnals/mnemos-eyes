@@ -50,6 +50,10 @@ export const ru = {
   "nav.versionAria": "Версия приложения {{version}}",
   "shell.skipToContent": "Перейти к содержимому",
   "shell.viewFell": "Этот вид упал в колодец",
+  // Update banner (owner feedback: остывшие вкладки должны «чиниться сами»
+  // — баннер появляется при выходе нового деплоя, перезагрузка по клику).
+  "shell.updateAvailable": "Вышло обновление приложения",
+  "shell.updateReload": "Обновить",
   "shell.tryAgain": "Попробовать снова",
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------
@@ -212,6 +216,7 @@ export const ru = {
 
   // --- tags -------------------------------------------------------------------
   "tags.title": "Теги",
+  "tags.familyRowLabel": "Теги этого семейства",
   "tags.filterLabel": "Фильтр тегов",
   "tags.filterPlaceholder": "напр. topic:fts",
   "tags.loading": "Загружаем теги",
@@ -228,6 +233,32 @@ export const ru = {
     "Фильтрация на клиенте — у mnemos нет выборки по тегу (ADR 0003 §9).",
   "tags.nothingCarries": "Под этим тегом ничего нет",
   "tags.nothingCarriesMessage": "Сейчас нет воспоминаний с тегом {{tag}}.",
+  // --- tags cloud (UI-17, spec 2026-09-21 §9; owner-approved copy) -----------
+  "tags.statsLine": "{{count}} тегов · данные на {{time}}",
+  "tags.partialData": "Данные от {{answered}} из {{total}} хранилищ",
+  "tags.partialStores": "Не ответили хранилища: {{servers}}",
+  "tags.family.all": "Все семейства",
+  "tags.family.bare": "без префикса",
+  "tags.family.tags": "{{count}} тегов",
+  "tags.band.core": "Ядро · 1000+",
+  "tags.band.frequent": "Частые · 100–999",
+  "tags.band.middle": "Средние · 10–99",
+  "tags.band.rare": "Редкие · 1–9",
+  "tags.band.showAll": "Показать все {{count}}",
+  "tags.band.showMore": "Ещё {{count}}",
+  "tags.band.collapse": "Свернуть",
+  "tags.searchMatches": "Подходит: {{count}}",
+  "tags.searchCapped": "Показаны первые {{count}} — уточните запрос",
+  "tags.group.heading": "Группа {{group}}",
+  "tags.group.open": "Открыть группу {{group}}",
+  "tags.drill.siblings": "Рядом в семействе {{family}}",
+  "tags.drill.tasks": "Задачи с этим тегом",
+  "tags.drill.tasksEmpty": "Задач с этим тегом нет",
+  "tags.drill.memories": "Записи",
+  "tags.drill.subsetNote":
+    "Показано подмножество: дрилл идёт через поисковый ранжир и может быть неполным (BE-13)",
+  "tags.drill.storeErrors": "Недоступны хранилища: {{servers}}",
+  "tags.drill.openInMemories": "Открыть в Записях",
 
   // --- status -----------------------------------------------------------------
   "status.title": "Статус",
@@ -583,7 +614,6 @@ export const ru = {
   "traces.rawJson": "Сырой JSON",
   "traces.unknownStatus": "неизвестно",
 
-
   // --- agents domain (AGW-2: assignment trigger + execution tab) -------------------
   "agents.list.label": "Поручения задачи",
   "agents.list.loading": "Загружаем поручения",
@@ -632,7 +662,8 @@ export const ru = {
   "agents.executor.revokedReason": "доступ отозван",
   "agents.executor.disabledReason": "отключён владельцем (маршрутизация выключена)",
   "agents.executor.offlineReason": "не на связи — последняя связь {{age}} назад",
-  "agents.executor.staleReason": "пульс пропущен ({{age}} назад) — дефолту нужен строго онлайн",
+  "agents.executor.staleReason":
+    "пульс пропущен ({{age}} назад) — дефолту нужен строго онлайн",
   "agents.executor.staleShort": "пульс пропущен — дефолту нужен строго онлайн",
   "agents.sheet.title": "Взять в работу",
   "agents.sheet.subtitle": "{{id}}: поручение встанет в очередь к исполнителю",
@@ -646,19 +677,20 @@ export const ru = {
   "agents.sheet.submit": "Назначить",
   "agents.sheet.submitting": "Назначаем…",
   "agents.assign.open": "Взять в работу",
-  "agents.assign.terminalTask": "Задача в терминальной колонке — создание поручений закрыто",
+  "agents.assign.terminalTask":
+    "Задача в терминальной колонке — создание поручений закрыто",
   "agents.assign.createFailed": "Не удалось назначить",
   "agents.assign.created": "{{id}}: назначено",
   "agents.assign.createdDetail": "поручение в очереди, ждёт поллера",
   "agents.cancel.label": "Отменить",
-  "agents.cancel.confirm": "Исполнителю будет отправлен сигнал остановки. Отменить поручение?",
+  "agents.cancel.confirm":
+    "Исполнителю будет отправлен сигнал остановки. Отменить поручение?",
   "agents.cancel.reason": "отменено владельцем",
   "agents.cancel.sent": "{{id}}: отмена отправлена",
   "agents.cancel.sentDetail": "исполнитель получит сигнал остановки",
   "agents.cancel.failed": "Не удалось отменить поручение",
   "agents.retry.label": "Перезапустить",
   "agents.badge.title": "Исполнение: {{state}}",
-
 
   // --- agents domain: execution section (AGW-3) -----------------------------------
   "nav.agentsExecution": "Исполнение",
@@ -693,7 +725,8 @@ export const ru = {
   "agents.row.copyId": "Копировать id ({{id}})",
   "agents.timing.expiresIn": "истечёт через ~{{minutes}} мин",
   "agents.timing.noClaimStamp": "без метки взятия",
-  "agents.timing.queuedNotifyHint": "~{{minutes}} мин без исполнителя — poller не забирает (уведомление)",
+  "agents.timing.queuedNotifyHint":
+    "~{{minutes}} мин без исполнителя — poller не забирает (уведомление)",
   "agents.timing.reapOverdue": "истёк — ждёт жнеца",
   "agents.timeline.created": "создано",
   "agents.timeline.claimed": "взято",
@@ -828,7 +861,8 @@ export const ru = {
   "automation.hook.subtitle":
     "Событие (on) + условия + действие; создаётся выключенным",
   "automation.hook.empty": "Правил нет",
-  "automation.hook.emptyHint": "Создайте правило на событие борда — действие сработает при включении.",
+  "automation.hook.emptyHint":
+    "Создайте правило на событие борда — действие сработает при включении.",
   "automation.hook.noCondition": "без условий",
   "automation.rule.enabled": "включено",
   "automation.rule.disabled": "выключено",
@@ -861,7 +895,8 @@ export const ru = {
   "automation.form.addClause": "Добавить",
   "automation.form.addClauseTitle": "Добавить условие из словаря",
   "automation.form.removeClause": "Убрать условие {{clause}}",
-  "automation.form.noValueEnum": "У этого поля нет закрытого набора значений — условие недоступно в v1.",
+  "automation.form.noValueEnum":
+    "У этого поля нет закрытого набора значений — условие недоступно в v1.",
   "automation.form.onLabel": "Событие (on)",
   "automation.form.actionLabel": "Действие",
   "automation.form.create": "Создать",
@@ -883,17 +918,64 @@ export const ru = {
   "automation.mutation.createFailed": "Не удалось создать правило",
   "automation.mutation.patchFailed": "Не удалось изменить правило",
   "automation.mutation.deleteFailed": "Не удалось удалить правило",
-  "automation.mutation.deleteConfirm": "Удалить правило «{{name}}»? Имя останется занятым (мягкое удаление с retention) — создать правило с тем же именем нельзя.",
+  "automation.mutation.deleteConfirm":
+    "Удалить правило «{{name}}»? Имя останется занятым (мягкое удаление с retention) — создать правило с тем же именем нельзя.",
   "automation.mutation.deleted": "«{{name}}» удалено",
   "automation.mutation.retainedNote": "мягкое удаление: строка сохранена выключенной",
   "automation.mutation.created": "«{{name}}» создано (выключено)",
   "automation.mutation.runFailed": "Не удалось запустить",
   "automation.mutation.launched": "«{{name}}»: запущено",
-  "automation.mutation.launchedDetail": "поручение в очереди задачи {{id}} — смотрите «Исполнение»",
+  "automation.mutation.launchedDetail":
+    "поручение в очереди задачи {{id}} — смотрите «Исполнение»",
   "automation.mutation.skipped": "«{{name}}»: пропущено",
   "automation.mutation.skippedDetail": "запуск отказан — причина в журнале",
   "overview.agentsAll": "Исполнение",
   "overview.autoLaunchesToday": "авто-запусков сегодня: {{count}}",
+
+  // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
+  "nav.docs": "Документация",
+  "docs.index.lede": "Справочник по бору: от первого запуска до обновления.",
+  "docs.cat.gettingStarted": "Начало работы",
+  "docs.catDesc.gettingStarted":
+    "Развёртывание борда и первый вход — с нуля до рабочего места.",
+  "docs.cat.board": "Панель и группы",
+  "docs.catDesc.board": "Группы памяти и канбан-доска: структура и работа с записями.",
+  "docs.cat.agents": "Агенты и поручения",
+  "docs.catDesc.agents": "Поручения, исполнители и отчёты об исполнении.",
+  "docs.cat.automation": "Автоматизация",
+  "docs.catDesc.automation": "Правила и расписания — без крон-синтаксиса.",
+  "docs.cat.devices": "Устройства и подключение",
+  "docs.catDesc.devices": "Подключение устройства к борду по QR-коду.",
+  "docs.cat.security": "Безопасность и токены",
+  "docs.catDesc.security": "Токены доступа, их выдача и ротация.",
+  "docs.cat.maintenance": "Обслуживание",
+  "docs.catDesc.maintenance":
+    "Бэкап, обновление и диагностика — что делать, когда что-то пошло не так.",
+  "docs.cat.faq": "Частые вопросы",
+  "docs.catDesc.faq": "Короткие ответы на частые вопросы.",
+  "docs.search.placeholder": "Поиск по документации",
+  "docs.search.ariaLabel": "Поиск по документации",
+  "docs.search.resultsLabel": "Результаты поиска",
+  "docs.search.indexing": "Индексируется…",
+  "docs.search.noResults": "По запросу «{{query}}» ничего не найдено",
+  "docs.search.noResultsHint":
+    "Попробуйте одно слово: «токен» вместо «ротация токенов»",
+  "docs.toc.title": "На этой странице",
+  "docs.prev": "Предыдущая",
+  "docs.next": "Следующая",
+  "docs.prevNextNav": "Навигация по страницам",
+  "docs.badge.verified": "актуально для v{{version}}",
+  "docs.localeFallback": "Доступно на русском",
+  "docs.copy.code": "Скопировать код",
+  "docs.copy.done": "Код скопирован",
+  "docs.notFound.title": "Такой страницы нет",
+  "docs.notFound.message": "Проверьте адрес или вернитесь к списку категорий.",
+  "docs.notFound.cta": "Все категории",
+  "docs.error.title": "Не удалось показать страницу",
+  "docs.loading": "Загрузка…",
+  "docs.pages.one": "{{count}} страница",
+  "docs.pages.few": "{{count}} страницы",
+  "docs.pages.many": "{{count}} страниц",
 
   // --- shared empty/error ----------------------------------------------------------
   "common.retry": "Повторить",

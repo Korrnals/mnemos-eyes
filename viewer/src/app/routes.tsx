@@ -87,6 +87,19 @@ const AutomationPage = lazy(() =>
     default: m.AutomationPage,
   })),
 );
+const DocsIndexPage = lazy(() =>
+  import("@/features/docs/DocsIndexPage").then((m) => ({
+    default: m.DocsIndexPage,
+  })),
+);
+const DocsCategoryPage = lazy(() =>
+  import("@/features/docs/DocsCategoryPage").then((m) => ({
+    default: m.DocsCategoryPage,
+  })),
+);
+const DocsPage = lazy(() =>
+  import("@/features/docs/DocsPage").then((m) => ({ default: m.DocsPage })),
+);
 
 /**
  * The route table as data (redesign concept §2.1 / ADR 0011 Ф1) — consumed by
@@ -200,6 +213,34 @@ export function buildRoutes(): RouteObject[] {
             // enable / revoke / delete management (spec §1, wave 2).
             { path: "harnesses", element: <AgentsHarnessesPage /> },
           ],
+        },
+
+        // Документация domain (ADR 0015): pure-frontend md section — index,
+        // category lists, article pages. Static siblings (`/docs/c/…`) rank
+        // above the `:slug` route by react-router ranking.
+        {
+          path: "/docs",
+          element: (
+            <Page>
+              <DocsIndexPage />
+            </Page>
+          ),
+        },
+        {
+          path: "/docs/c/:category",
+          element: (
+            <Page>
+              <DocsCategoryPage />
+            </Page>
+          ),
+        },
+        {
+          path: "/docs/:slug",
+          element: (
+            <Page>
+              <DocsPage />
+            </Page>
+          ),
         },
 
         // Система domain (temporary honest home for the legacy views).

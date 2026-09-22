@@ -9,6 +9,7 @@ import type {
   TagSummary,
   Trace,
 } from "./types";
+import type { TagDrill, TagDrillParams } from "./boardTypes";
 
 /**
  * The single data-access seam of the viewer (architecture.md §4).
@@ -31,6 +32,13 @@ export interface MemoryGateway {
 
   // Tags
   listTags(signal?: AbortSignal): Promise<TagSummary[]>;
+  /**
+   * Cross-cutting drill for one tag: board tasks + merged memories
+   * (`GET /api/tags/{tag}/drill` on the board; the mnemos HttpAdapter
+   * composes the memories slice from search and reports no tasks — UI-17
+   * spec §5/§10.2). Memories are a ranked SUBSET (BE-13) — the UI says so.
+   */
+  drillTag(tag: string, params?: TagDrillParams, signal?: AbortSignal): Promise<TagDrill>;
 
   // Agent recall
   agentRecall(

@@ -17,6 +17,9 @@ board (vesmaro.abyss.lab)                 laptop
         ▼                                          harness subprocess
 ```
 
+Удалённый исполнитель (VPS): enrollment-флоу, сетевой путь и чеклист
+подключения — [REMOTE-EXECUTOR.md](REMOTE-EXECUTOR.md).
+
 ## Состав
 
 | Файл | Назначение |

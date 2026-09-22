@@ -1,13 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BOARD_STYLE,
-  DEFAULT_TASK_VIEW,
   BOARD_STYLE_STORAGE_KEY,
-  TASK_VIEW_STORAGE_KEY,
   loadBoardStyle,
-  loadTaskView,
   saveBoardStyle,
-  saveTaskView,
 } from "./tasksViewPrefs";
 
 /** In-memory Storage double (the node test env has none). */
@@ -53,34 +49,6 @@ class ThrowingStorage implements Storage {
   }
 }
 
-describe("tasksViewPrefs (CV-4 §1 — persisted «Канбан | Список» choice)", () => {
-  it("defaults to the kanban (view №1) with no storage at all", () => {
-    expect(loadTaskView(undefined)).toBe(DEFAULT_TASK_VIEW);
-    expect(DEFAULT_TASK_VIEW).toBe("kanban");
-  });
-
-  it("round-trips the stored choice under vesmaro.tasksView", () => {
-    const storage = new MemoryStorage();
-    saveTaskView("list", storage);
-    expect(storage.getItem(TASK_VIEW_STORAGE_KEY)).toBe("list");
-    expect(loadTaskView(storage)).toBe("list");
-  });
-
-  it("falls back to kanban on corrupt values (never crashes, never 'list')", () => {
-    const storage = new MemoryStorage();
-    storage.setItem(TASK_VIEW_STORAGE_KEY, "table");
-    expect(loadTaskView(storage)).toBe("kanban");
-    storage.setItem(TASK_VIEW_STORAGE_KEY, "");
-    expect(loadTaskView(storage)).toBe("kanban");
-  });
-
-  it("survives throwing storage (private mode): read → default, write → no-op", () => {
-    const storage = new ThrowingStorage();
-    expect(loadTaskView(storage)).toBe("kanban");
-    expect(() => saveTaskView("list", storage)).not.toThrow();
-  });
-});
-
 describe("tasksViewPrefs (CV-5 — persisted «Группы | Классика» board style)", () => {
   it("defaults to the grouped board (Ф3) with no storage at all", () => {
     expect(loadBoardStyle(undefined)).toBe(DEFAULT_BOARD_STYLE);
@@ -108,11 +76,14 @@ describe("tasksViewPrefs (CV-5 — persisted «Группы | Классика»
     expect(() => saveBoardStyle("classic", storage)).not.toThrow();
   });
 
-  it("keeps the two preference namespaces apart (tasksView ≠ boardStyle)", () => {
+  it("the task-VIEW key stays a tombstone (route is the contract, 2026-09-22)", () => {
+    // vesmaro.tasksView is no longer read or written anywhere; boardStyle
+    // keeps its own namespace. Older browsers may carry the stale key.
     const storage = new MemoryStorage();
-    saveTaskView("list", storage);
+    storage.setItem("vesmaro.tasksView", "list");
     expect(loadBoardStyle(storage)).toBe("groups");
     saveBoardStyle("classic", storage);
-    expect(loadTaskView(storage)).toBe("list");
+    expect(storage.getItem("vesmaro.tasksView")).toBe("list");
+    expect(storage.getItem(BOARD_STYLE_STORAGE_KEY)).toBe("classic");
   });
 });

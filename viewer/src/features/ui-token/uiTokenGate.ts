@@ -39,6 +39,10 @@ export interface UiTokenGateState {
   reason: UiTokenWindowReason;
   /** Mirrors the injected hasToken() after every transition. */
   tokenPresent: boolean;
+  /** Server-provided 401 detail for the rejected case (owner feedback
+   * 2026-09-22: «the bearer is a machine-class token — this action
+   * requires VESMARO_UI_TOKEN» beats a generic "not accepted"). */
+  rejectDetail?: string;
 }
 
 type Listener = (state: UiTokenGateState) => void;
@@ -146,7 +150,13 @@ export class UiTokenGate {
       // behind a fresh value.
       clearUiToken();
       this.pending = onDeferred ? { run, onDeferred } : { run };
-      this.setState({ open: true, reason: "rejected", tokenPresent: false });
+      this.setState({
+        open: true, reason: "rejected", tokenPresent: false,
+        // The FastAPI detail rides error.message (http.extractErrorMessage);
+        // the generic "401 Unauthorized" fallback stays hidden — the dialog
+        // already says (401) in the localized line.
+        rejectDetail: error.message.startsWith("401") ? undefined : error.message,
+      });
       this.emit({ type: "tokenRejected" });
       onDeferred?.();
     }

@@ -58,6 +58,10 @@ import type {
   ScheduleRule,
   ScheduleRunResult,
   SchedulesPage,
+  TagDrill,
+  TagDrillMemory,
+  TagDrillParams,
+  TagDrillTask,
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
@@ -68,7 +72,7 @@ import type {
   TaskReports,
   TaskUnarchiveResult,
 } from "./boardTypes";
-import type { BoardTask } from "./boardTypes";
+import type { BoardTask, MergedTags } from "./boardTypes";
 import type {
   A2ASession,
   HealthStatus,
@@ -119,6 +123,19 @@ export interface MockAdapterOptions {
    * consult the clock, so untouched instances stay byte-identical.
    */
   now?: () => number;
+  /**
+   * Tag corpus override (UI-17 spec §10.5): a deterministic ~610-tag dataset
+   * with the Zipf-like live distribution, so band sections / caps / the DOM
+   * budget are tested at true scale instead of the ~30 fixture tags. When
+   * absent, `listTags`/`mergedTags` keep deriving counts from MOCK_MEMORIES.
+   */
+  tagCorpus?: readonly TagSummary[];
+  /**
+   * Simulated unreachable stores for `mergedTags` (UI-17 spec §6 partial
+   * state: `errors[]` ≠ ∅ → the ◐ marker + tooltip; the cloud still renders
+   * from the answering corpus).
+   */
+  tagStoreErrors?: readonly { readonly server?: string; readonly status?: number }[];
 }
 
 /**
@@ -132,6 +149,11 @@ export class MockAdapter implements MemoryGateway {
   private readonly latency: false | { minMs: number; maxMs: number };
   private readonly rand: () => number;
   private readonly now: () => number;
+  private readonly tagCorpus: readonly TagSummary[] | undefined;
+  private readonly tagStoreErrors: readonly {
+    readonly server?: string;
+    readonly status?: number;
+  }[];
 
   // --- Ф3 mutable task state (cloned per instance; fixtures stay pristine) ----
   private tasks: BoardTask[];
@@ -158,6 +180,8 @@ export class MockAdapter implements MemoryGateway {
     // Fixed seed → identical latency sequences across runs.
     this.rand = mulberry32(20260916);
     this.now = options.now ?? (() => Date.now());
+    this.tagCorpus = options.tagCorpus;
+    this.tagStoreErrors = options.tagStoreErrors ?? [];
     this.tasks = MOCK_TASKS.map((task) => ({ ...task }));
     this.archivedTasks = [{ ...MOCK_ARCHIVED_TASK }];
     this.inboxItems = MOCK_INBOX.items.map((item) => ({ ...item }));
@@ -171,7 +195,8 @@ export class MockAdapter implements MemoryGateway {
     this.nextAssignmentNo =
       Math.max(0, ...MOCK_ASSIGNMENTS.map((assignment) => assignment.id)) + 1;
     this.nextRuleNo =
-      Math.max(0, ...MOCK_SCHEDULES.map((r) => r.id), ...MOCK_HOOKS.map((r) => r.id)) + 1;
+      Math.max(0, ...MOCK_SCHEDULES.map((r) => r.id), ...MOCK_HOOKS.map((r) => r.id)) +
+      1;
     this.nextLaunchNo = Math.max(0, ...MOCK_LAUNCHES.map((r) => r.id)) + 1;
   }
 
@@ -203,10 +228,17 @@ export class MockAdapter implements MemoryGateway {
     signal?: AbortSignal,
   ): Promise<Memory[]> {
     await this.delay(signal);
+    // `tags` is a comma-separated native listing filter (UI-17 §5.6) — the
+    // mock intersects every requested tag, mirroring the wire semantics.
+    const wantedTags = (params.tags ?? "")
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
     const filtered = MOCK_MEMORIES.filter(
       (memory) =>
         (params.status === undefined || memory.status === params.status) &&
-        (params.project === undefined || memory.project === params.project),
+        (params.project === undefined || memory.project === params.project) &&
+        wantedTags.every((tag) => (memory.tags ?? []).includes(tag)),
     ).sort(byCreatedDesc);
     const offset = params.offset ?? 0;
     return filtered
@@ -232,15 +264,88 @@ export class MockAdapter implements MemoryGateway {
 
   async listTags(signal?: AbortSignal): Promise<TagSummary[]> {
     await this.delay(signal);
+    return this.listTagsInner();
+  }
+
+  /** Sort rule shared by every tag listing (count DESC, name ASC — deterministic). */
+  private static sortTags(tags: readonly TagSummary[]): TagSummary[] {
+    return [...tags].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  }
+
+  private listTagsInner(): TagSummary[] {
+    if (this.tagCorpus) {
+      return MockAdapter.sortTags(this.tagCorpus);
+    }
     const counts = new Map<string, number>();
     for (const memory of MOCK_MEMORIES) {
       for (const tag of memory.tags ?? []) {
         counts.set(tag, (counts.get(tag) ?? 0) + 1);
       }
     }
-    return [...counts.entries()]
-      .map(([tag, count]) => ({ tag, count }))
-      .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+    return MockAdapter.sortTags(
+      [...counts.entries()].map(([tag, count]) => ({ tag, count })),
+    );
+  }
+
+  /**
+   * Raw aggregated tag view (UI-17 spec §6): corpus + per-store honesty.
+   * Serves `servers_scanned` as `1 + errors` (one answering mock store) and
+   * passes the injected store failures through verbatim — the tags cloud
+   * renders its ◐ partial marker from exactly this shape.
+   */
+  async mergedTags(signal?: AbortSignal): Promise<MergedTags> {
+    await this.delay(signal);
+    const tags = await this.listTagsInner();
+    return {
+      tags: tags.map((tag) => ({ name: tag.tag, count: tag.count })),
+      servers_scanned: this.tagStoreErrors.length + 1,
+      errors: this.tagStoreErrors.map((error) => ({ ...error })),
+    };
+  }
+
+  /**
+   * Tag drill over the mock corpus (UI-17 §5): board tasks matching via
+   * mnemos_tags/specialists/agents (the server rule), memories via the
+   * fixture tags — recency order, `limit`-sliced like the wire.
+   */
+  async drillTag(
+    tag: string,
+    params: TagDrillParams = {},
+    signal?: AbortSignal,
+  ): Promise<TagDrill> {
+    await this.delay(signal);
+    const limit = params.limit ?? 12;
+    const tasks: TagDrillTask[] = this.tasks
+      .filter(
+        (task) =>
+          (task.mnemos_tags ?? []).includes(tag) ||
+          (task.specialists ?? []).includes(tag) ||
+          (task.agents ?? []).includes(tag),
+      )
+      // Wire fidelity: the server limits only memories (app.py drill),
+      // tasks come back whole.
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        col: task.col,
+        agents: [...(task.agents ?? [])],
+        env: task.env,
+      }));
+    const memories: TagDrillMemory[] = MOCK_MEMORIES.filter((memory) =>
+      (memory.tags ?? []).includes(tag),
+    )
+      .sort(byCreatedDesc)
+      .slice(0, limit)
+      .map((memory) => ({
+        id: memory.id ?? "",
+        title: memory.title ?? "",
+        tags: [...(memory.tags ?? [])],
+        server: "mock-store",
+        created_at: memory.created_at ?? null,
+        status: memory.status ?? null,
+        excerpt: memory.content.slice(0, 180),
+      }));
+    return { ok: true, tag, tasks, memories, errors: [] };
   }
 
   async agentRecall(
@@ -968,7 +1073,12 @@ export class MockAdapter implements MemoryGateway {
         { url: "mock:/api/automation/schedules" },
       );
     }
-    assertUniqueRuleName(payload.name, this.schedules, this.hooks, "mock:/api/automation/schedules");
+    assertUniqueRuleName(
+      payload.name,
+      this.schedules,
+      this.hooks,
+      "mock:/api/automation/schedules",
+    );
     const rule: ScheduleRule = {
       ...payload,
       id: this.nextRuleNo++,
@@ -1007,9 +1117,13 @@ export class MockAdapter implements MemoryGateway {
       ...(patch.executor_id != null ? { executor_id: patch.executor_id } : {}),
       ...(patch.trigger_kind != null ? { trigger_kind: patch.trigger_kind } : {}),
       ...(patch.trigger_value != null ? { trigger_value: patch.trigger_value } : {}),
-      ...(patch.window_from !== undefined ? { window_from: patch.window_from ?? null } : {}),
+      ...(patch.window_from !== undefined
+        ? { window_from: patch.window_from ?? null }
+        : {}),
       ...(patch.window_to !== undefined ? { window_to: patch.window_to ?? null } : {}),
-      ...(patch.max_runs_per_day != null ? { max_runs_per_day: patch.max_runs_per_day } : {}),
+      ...(patch.max_runs_per_day != null
+        ? { max_runs_per_day: patch.max_runs_per_day }
+        : {}),
       ...(patch.cooldown_s != null ? { cooldown_s: patch.cooldown_s } : {}),
       ...(patch.enabled != null ? { enabled: patch.enabled } : {}),
       // Every effective patch recomputes the schedule clock from now.
@@ -1043,7 +1157,11 @@ export class MockAdapter implements MemoryGateway {
     await this.delay(signal);
     const rule = this.schedules.find((row) => row.id === ruleId);
     if (!rule) {
-      throw notFoundRule(ruleId, "schedule", `mock:/api/automation/schedules/${ruleId}/run`);
+      throw notFoundRule(
+        ruleId,
+        "schedule",
+        `mock:/api/automation/schedules/${ruleId}/run`,
+      );
     }
     const runAt = this.stamp();
     try {
@@ -1058,7 +1176,9 @@ export class MockAdapter implements MemoryGateway {
       );
       const launchId = this.appendLaunch(rule, runAt, "launched", "", assignment.id);
       this.schedules = this.schedules.map((row) =>
-        row.id === rule.id ? { ...row, last_run_at: runAt, updated_at: this.stamp() } : row,
+        row.id === rule.id
+          ? { ...row, last_run_at: runAt, updated_at: this.stamp() }
+          : row,
       );
       return {
         ok: true,
@@ -1071,7 +1191,13 @@ export class MockAdapter implements MemoryGateway {
     } catch (error) {
       // Refused attempts still journal a skipped row (gate honesty).
       if (error instanceof ApiError) {
-        this.appendLaunch(rule, runAt, "skipped", `${error.status}: ${error.message}`, null);
+        this.appendLaunch(
+          rule,
+          runAt,
+          "skipped",
+          `${error.status}: ${error.message}`,
+          null,
+        );
       }
       throw error;
     }
@@ -1088,7 +1214,12 @@ export class MockAdapter implements MemoryGateway {
 
   async createHook(payload: HookCreateInput, signal?: AbortSignal): Promise<HookRule> {
     await this.delay(signal);
-    assertUniqueRuleName(payload.name, this.schedules, this.hooks, "mock:/api/automation/hooks");
+    assertUniqueRuleName(
+      payload.name,
+      this.schedules,
+      this.hooks,
+      "mock:/api/automation/hooks",
+    );
     const rule: HookRule = {
       ...payload,
       id: this.nextRuleNo++,
@@ -1124,7 +1255,9 @@ export class MockAdapter implements MemoryGateway {
         ? { source_allowlist: [...patch.source_allowlist] }
         : {}),
       ...(patch.action != null ? { action: patch.action } : {}),
-      ...(patch.action_payload != null ? { action_payload: { ...patch.action_payload } } : {}),
+      ...(patch.action_payload != null
+        ? { action_payload: { ...patch.action_payload } }
+        : {}),
       ...(patch.cooldown_s != null ? { cooldown_s: patch.cooldown_s } : {}),
       ...(patch.budget != null ? { budget: patch.budget } : {}),
       ...(patch.enabled != null ? { enabled: patch.enabled } : {}),
@@ -1172,9 +1305,7 @@ export class MockAdapter implements MemoryGateway {
       .filter((row) => !params.kind || row.rule_kind === params.kind)
       .filter((row) => !params.decision || row.decision === params.decision)
       // attempted_at DESC with the unique id tiebreak (wire contract).
-      .sort(
-        (a, b) => b.attempted_at.localeCompare(a.attempted_at) || b.id - a.id,
-      );
+      .sort((a, b) => b.attempted_at.localeCompare(a.attempted_at) || b.id - a.id);
     const requested = params.limit ?? DEFAULT_LAUNCH_LIMIT;
     const truncated = requested > LAUNCH_PAGE_CAP;
     const limit = Math.min(requested, LAUNCH_PAGE_CAP);
@@ -1220,8 +1351,7 @@ export class MockAdapter implements MemoryGateway {
       );
     }
     const activeHolds = this.assignments.some(
-      (row) =>
-        row.task_id === taskId && ACTIVE_ASSIGNMENT_STATES.includes(row.state),
+      (row) => row.task_id === taskId && ACTIVE_ASSIGNMENT_STATES.includes(row.state),
     );
     if (activeHolds) {
       throw new ApiError(
@@ -1250,7 +1380,12 @@ export class MockAdapter implements MemoryGateway {
       heartbeat_at: null,
       finished_at: null,
       topics: [...task.mnemos_tags],
-      routing: this.resolveRouting(executorId, specialist, task.specialists, task.project),
+      routing: this.resolveRouting(
+        executorId,
+        specialist,
+        task.specialists,
+        task.project,
+      ),
     };
     this.assignments.push(assignment);
     return { ...assignment };

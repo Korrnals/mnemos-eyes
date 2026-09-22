@@ -7,6 +7,7 @@ import { useTaskInbox } from "@/features/tasks/useTasks";
 import { useSessionControl } from "@/features/ui-token/useSessionControl";
 import { useBoardHealth } from "@/hooks/usePulse";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
+import { isDocsSectionActive } from "@/features/docs/docsNav";
 import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
 
@@ -196,12 +197,17 @@ function SectionLink({ section, pathname }: { section: NavSection; pathname: str
   // Records ("/memory") must highlight on its detail route too
   // ("/memory/:id") — the list is the master of the master-detail pair.
   // The task list ("/tasks") likewise owns its detail route ("/tasks/:id").
+  // Docs sections light up on their ARTICLES too: slug → category goes
+  // through the docs manifest (design spec §2 — базовый isPathActive не
+  // знает про slug→category).
   const active =
     section.to === "/memory"
       ? pathname === "/memory" || /^\/memory\/[^/]+$/.test(pathname)
       : section.to === "/tasks"
         ? pathname === "/tasks" || /^\/tasks\/[^/]+$/.test(pathname)
-        : isPathActive(pathname, section.to, section.end);
+        : section.to.startsWith("/docs/c/")
+          ? isDocsSectionActive(pathname, section.to)
+          : isPathActive(pathname, section.to, section.end);
   return (
     <Link
       to={section.to}
