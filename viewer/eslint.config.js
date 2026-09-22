@@ -49,4 +49,42 @@ export default tseslint.config(
       "react-refresh/only-export-components": "off",
     },
   },
+  {
+    // Docs security gates (contract 2026-09-22 §9.1): markdown renders ONLY
+    // through react-markdown's default sanitization — the raw-HTML escape
+    // hatches are banned at lint level, not just by convention.
+    files: ["src/features/docs/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "rehype-raw",
+              message:
+                "Docs gate §9: raw HTML passthrough is forbidden — hostile content must never reach the DOM.",
+            },
+            {
+              name: "rehype-sanitize",
+              message:
+                "Docs gate §9: sanitization IS the react-markdown default (no rehype-raw); adding rehype-sanitize would imply raw HTML.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message:
+            "Docs gate §9: dangerouslySetInnerHTML is forbidden in the docs feature.",
+        },
+        {
+          selector: "Property[key.name='dangerouslySetInnerHTML']",
+          message:
+            "Docs gate §9: dangerouslySetInnerHTML is forbidden in the docs feature.",
+        },
+      ],
+    },
+  },
 );

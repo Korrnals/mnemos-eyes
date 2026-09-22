@@ -21,7 +21,7 @@ export function Breadcrumbs({ pathname }: { pathname: string }) {
           const last = index === crumbs.length - 1;
           return (
             <li
-              key={`${crumb.key}-${index}`}
+              key={`${crumb.key ?? crumb.label}-${index}`}
               className="flex min-w-0 items-center gap-1"
             >
               {index > 0 ? (
@@ -30,7 +30,7 @@ export function Breadcrumbs({ pathname }: { pathname: string }) {
                   aria-hidden="true"
                 />
               ) : null}
-              {crumb.to && !last ? (
+              {crumb.to && crumb.key && !last ? (
                 <Link
                   to={crumb.to}
                   className="inline-flex min-h-6 items-center rounded-sm text-foreground-secondary transition-colors duration-instant hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
@@ -42,7 +42,7 @@ export function Breadcrumbs({ pathname }: { pathname: string }) {
                   aria-current="page"
                   className="inline-flex min-h-6 items-center truncate font-medium text-foreground"
                 >
-                  {t(crumb.key)}
+                  {crumb.label ?? (crumb.key ? t(crumb.key) : "")}
                 </span>
               )}
             </li>

@@ -574,7 +574,6 @@ export const en: Record<TranslationKey, string> = {
   "traces.rawJson": "Raw JSON",
   "traces.unknownStatus": "unknown",
 
-
   // --- agents domain (AGW-2: assignment trigger + execution tab) -------------------
   "agents.list.label": "Task assignments",
   "agents.list.loading": "Loading assignments",
@@ -597,7 +596,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.age.unitHours": "h",
   "agents.age.unitDays": "d",
   "agents.identity.reportedBy": "reported by {{who}} · unverified",
-  "agents.identity.tooltip": "Identity declared by the executor, never verified by the server",
+  "agents.identity.tooltip":
+    "Identity declared by the executor, never verified by the server",
   "agents.routing.resolvedRow": "route: {{name}} · {{reason}}",
   "agents.routing.unmatchedRow": "waiting for an executor",
   "agents.routing.waitsOffline": "waiting for an executor (offline {{age}})",
@@ -623,7 +623,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.executor.revokedReason": "access revoked",
   "agents.executor.disabledReason": "disabled by the owner (routing off)",
   "agents.executor.offlineReason": "offline — last seen {{age}} ago",
-  "agents.executor.staleReason": "pulse missed ({{age}} ago) — a default needs strictly online",
+  "agents.executor.staleReason":
+    "pulse missed ({{age}} ago) — a default needs strictly online",
   "agents.executor.staleShort": "pulse missed — a default needs strictly online",
   "agents.sheet.title": "Take into work",
   "agents.sheet.subtitle": "{{id}}: the assignment will queue for an executor",
@@ -637,19 +638,20 @@ export const en: Record<TranslationKey, string> = {
   "agents.sheet.submit": "Assign",
   "agents.sheet.submitting": "Assigning…",
   "agents.assign.open": "Take into work",
-  "agents.assign.terminalTask": "The task is in a terminal column — assignment is closed",
+  "agents.assign.terminalTask":
+    "The task is in a terminal column — assignment is closed",
   "agents.assign.createFailed": "Failed to assign",
   "agents.assign.created": "{{id}}: assigned",
   "agents.assign.createdDetail": "assignment queued, waiting for the poller",
   "agents.cancel.label": "Cancel",
-  "agents.cancel.confirm": "A stop signal will be sent to the executor. Cancel the assignment?",
+  "agents.cancel.confirm":
+    "A stop signal will be sent to the executor. Cancel the assignment?",
   "agents.cancel.reason": "cancelled by the owner",
   "agents.cancel.sent": "{{id}}: cancellation sent",
   "agents.cancel.sentDetail": "the executor will receive the stop signal",
   "agents.cancel.failed": "Failed to cancel the assignment",
   "agents.retry.label": "Restart",
   "agents.badge.title": "Execution: {{state}}",
-
 
   // --- agents domain: execution section (AGW-3) -----------------------------------
   "nav.agentsExecution": "Execution",
@@ -684,7 +686,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.row.copyId": "Copy id ({{id}})",
   "agents.timing.expiresIn": "expires in ~{{minutes}} min",
   "agents.timing.noClaimStamp": "no claim stamp",
-  "agents.timing.queuedNotifyHint": "~{{minutes}} min without an executor — the poller is not taking it (notification)",
+  "agents.timing.queuedNotifyHint":
+    "~{{minutes}} min without an executor — the poller is not taking it (notification)",
   "agents.timing.reapOverdue": "expired — awaiting the reaper",
   "agents.timeline.created": "created",
   "agents.timeline.claimed": "claimed",
@@ -727,7 +730,6 @@ export const en: Record<TranslationKey, string> = {
   "agents.settings.saveFailed": "Failed to save execution settings",
   "agents.settings.meshIneligible": "mesh transport — routing unavailable until R4",
 
-
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Automation",
   "automation.title": "Automation",
@@ -761,7 +763,8 @@ export const en: Record<TranslationKey, string> = {
   "automation.hook.title": "New hook rule",
   "automation.hook.subtitle": "Event (on) + conditions + action; created disabled",
   "automation.hook.empty": "No rules",
-  "automation.hook.emptyHint": "Create a rule on a board event — the action fires once enabled.",
+  "automation.hook.emptyHint":
+    "Create a rule on a board event — the action fires once enabled.",
   "automation.hook.noCondition": "no conditions",
   "automation.rule.enabled": "enabled",
   "automation.rule.disabled": "disabled",
@@ -794,7 +797,8 @@ export const en: Record<TranslationKey, string> = {
   "automation.form.addClause": "Add",
   "automation.form.addClauseTitle": "Add a condition from the dictionary",
   "automation.form.removeClause": "Remove condition {{clause}}",
-  "automation.form.noValueEnum": "This field has no closed value set — the condition is unavailable in v1.",
+  "automation.form.noValueEnum":
+    "This field has no closed value set — the condition is unavailable in v1.",
   "automation.form.onLabel": "Event (on)",
   "automation.form.actionLabel": "Action",
   "automation.form.create": "Create",
@@ -816,17 +820,63 @@ export const en: Record<TranslationKey, string> = {
   "automation.mutation.createFailed": "Failed to create the rule",
   "automation.mutation.patchFailed": "Failed to update the rule",
   "automation.mutation.deleteFailed": "Failed to delete the rule",
-  "automation.mutation.deleteConfirm": "Delete rule «{{name}}»? The name stays taken (soft delete with retention) — a rule with the same name cannot be created.",
+  "automation.mutation.deleteConfirm":
+    "Delete rule «{{name}}»? The name stays taken (soft delete with retention) — a rule with the same name cannot be created.",
   "automation.mutation.deleted": "«{{name}}» deleted",
   "automation.mutation.retainedNote": "soft delete: the row is retained disabled",
   "automation.mutation.created": "«{{name}}» created (disabled)",
   "automation.mutation.runFailed": "Failed to run",
   "automation.mutation.launched": "«{{name}}»: launched",
-  "automation.mutation.launchedDetail": "assignment queued for task {{id}} — see «Execution»",
+  "automation.mutation.launchedDetail":
+    "assignment queued for task {{id}} — see «Execution»",
   "automation.mutation.skipped": "«{{name}}»: skipped",
   "automation.mutation.skippedDetail": "the run was refused — reason in the journal",
   "overview.agentsAll": "Execution",
   "overview.autoLaunchesToday": "auto-launches today: {{count}}",
+
+  // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
+  "nav.docs": "Documentation",
+  "docs.index.lede": "Board reference: from the first launch to upgrades.",
+  "docs.cat.gettingStarted": "Getting started",
+  "docs.catDesc.gettingStarted":
+    "Deploy the board and sign in — from zero to a workspace.",
+  "docs.cat.board": "Board & groups",
+  "docs.catDesc.board": "Memory groups and the kanban board: structure and daily work.",
+  "docs.cat.agents": "Agents & assignments",
+  "docs.catDesc.agents": "Assignments, executors and completion reports.",
+  "docs.cat.automation": "Automation",
+  "docs.catDesc.automation": "Rules and schedules — no cron syntax.",
+  "docs.cat.devices": "Devices & pairing",
+  "docs.catDesc.devices": "Pair a device with the board via a QR code.",
+  "docs.cat.security": "Security & tokens",
+  "docs.catDesc.security": "Access tokens: issuing and rotation.",
+  "docs.cat.maintenance": "Maintenance",
+  "docs.catDesc.maintenance":
+    "Backup, upgrade and troubleshooting — what to do when something breaks.",
+  "docs.cat.faq": "FAQ",
+  "docs.catDesc.faq": "Short answers to frequent questions.",
+  "docs.search.placeholder": "Search the docs",
+  "docs.search.ariaLabel": "Search the docs",
+  "docs.search.resultsLabel": "Search results",
+  "docs.search.indexing": "Indexing…",
+  "docs.search.noResults": "Nothing found for “{{query}}”",
+  "docs.search.noResultsHint": "Try a single word: “token” instead of “token rotation”",
+  "docs.toc.title": "On this page",
+  "docs.prev": "Previous",
+  "docs.next": "Next",
+  "docs.prevNextNav": "Page navigation",
+  "docs.badge.verified": "current as of v{{version}}",
+  "docs.localeFallback": "Available in Russian only",
+  "docs.copy.code": "Copy code",
+  "docs.copy.done": "Code copied",
+  "docs.notFound.title": "No such page",
+  "docs.notFound.message": "Check the address or go back to the category list.",
+  "docs.notFound.cta": "All categories",
+  "docs.error.title": "The page could not be shown",
+  "docs.loading": "Loading…",
+  "docs.pages.one": "{{count}} page",
+  "docs.pages.few": "{{count}} pages",
+  "docs.pages.many": "{{count}} pages",
 
   // --- shared empty/error ----------------------------------------------------------
   "common.retry": "Retry",

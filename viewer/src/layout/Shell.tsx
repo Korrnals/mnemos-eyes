@@ -10,7 +10,8 @@ import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { Breadcrumbs } from "./Breadcrumbs";
-import { crumbsFor, routeTitleKey } from "./navItems";
+import { crumbsFor, routeTitle } from "./navItems";
+import { useDocsManifest } from "@/features/docs/manifest";
 import { useT } from "@/i18n";
 
 /**
@@ -30,8 +31,17 @@ export function Shell() {
   const toggle = useCallback(() => setCollapsed((value) => !value), []);
   const location = useLocation();
   const t = useT();
-  const titleKey = routeTitleKey(location.pathname);
-  const title = titleKey === null ? "mnemos-eyes" : t(titleKey);
+  // Content-derived docs titles ride crumbs; brand is the fallback.
+  const title = routeTitle(location.pathname, t) ?? "mnemos-eyes";
+  // Subscribe the chrome to the lazy docs manifest ONLY inside the section:
+  // mounting the subscription kicks getManifest(), which fetches EVERY md
+  // chunk — an unconditional call here would download the whole corpus on
+  // the first paint of any route (laziness is the budget gate, contract §7
+  // «индекс строится на первом открытии /docs», §10). A deep link straight
+  // into /docs/* still hydrates: enabled flips on before the trail renders.
+  useDocsManifest(
+    location.pathname === "/docs" || location.pathname.startsWith("/docs/"),
+  );
   // The root page carries no trail — render no bar at all (anti-noise).
   const hasCrumbs = crumbsFor(location.pathname).length > 0;
 

@@ -67,7 +67,10 @@ export function UpdateBanner() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void check(controller.signal);
+    // Deferred a tick: check() flips state only after its fetches resolve,
+    // but the effect body must not even call it synchronously
+    // (react-hooks/set-state-in-effect, plugin v7).
+    queueMicrotask(() => void check(controller.signal));
     const onVisible = () => {
       if (document.visibilityState === "visible") void check(controller.signal);
     };
