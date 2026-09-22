@@ -96,8 +96,9 @@ describe("TaskBoardPage (mock adapter — 7 WF-1 columns)", () => {
     );
     // The in-progress column holds two project groups (mnemos-eyes, mnemos).
     expect(html).toContain('aria-expanded="true"');
-    // Card titles link to the task page (keyboard/SR path).
-    expect(html).toMatch(/href="\/tasks\/TB-1"/);
+    // Card titles link to the task page (keyboard/SR path) carrying the
+    // board URL as ?return= (UI-18 pair 1).
+    expect(html).toMatch(/href="\/tasks\/TB-1\?return=/);
   });
 
   it("badges the archcom-flagged validating card (sweep tag)", async () => {
@@ -145,7 +146,7 @@ describe("TaskBoardPage (mock adapter — 7 WF-1 columns)", () => {
     );
     // Matching cards stay with a <mark> highlight inside the title…
     expect(html).toContain("<mark");
-    expect(html).toContain('href="/tasks/TB-14"');
+    expect(html).toContain('href="/tasks/TB-14?return=');
     // …and non-matching cards are filtered out of the board.
     expect(html).not.toContain('href="/tasks/TB-1"');
   });

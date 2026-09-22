@@ -51,6 +51,9 @@ export const en: Record<TranslationKey, string> = {
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------
   "breadcrumbs.label": "Breadcrumb",
+  // Back control of the sticky crumb row (UI-18 spec §3.4): see ru.ts.
+  "nav.backTo": "Back: {{place}}",
+  "nav.backFallback": "Back",
 
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Switch to light theme",
