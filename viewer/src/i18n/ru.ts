@@ -807,7 +807,7 @@ export const ru = {
   "agents.connect.step2":
     "Скопируйте poller.example.yaml в ~/.config/mnemos-eyes/poller.yaml (chmod 0600) и заполните board_url, executor_name и allowlist.",
   "agents.connect.step3":
-    "Машинный токен — только окружение: VESMARO_BOARD_TOKEN в /etc/vesmaro/poller.env с правами 0600; не в конфиге и не в промптах.",
+    "Машинный токен — только окружение: VESMARO_BOARD_TOKEN в /etc/vesmaro/poller.env (systemd-юнит /opt) или в ~/.config/mnemos-eyes/poller.env (laptop user-unit), права 0600; не в конфиге и не в промптах — см. deploy/poller/README.md.",
   "agents.connect.step4":
     "Запустите поллер службой (systemd unit из README) или разово с --once для dry-run проверки.",
   "agents.connect.step5":
@@ -835,6 +835,62 @@ export const ru = {
   "agents.onboarding.label": "Как это работает",
   "agents.onboarding.body":
     "Возьмите задачу в разделе «Задачи» и нажмите на её странице «Взять в работу» — поллер подхватит поручение через ~10 секунд, и вы увидите его здесь; лента внизу наполняется событиями вживую.",
+
+  // --- agents domain: enrollment + context menus (AGW-5 phase 2) -------------------
+  "agents.menu.triggerAria": "Действия с исполнителем {{name}}",
+  "agents.menu.label": "Меню исполнителя {{name}}",
+  "agents.menu.copyId": "Копировать id ({{id}})",
+  "agents.menu.openRegistry": "Открыть реестр",
+  "agents.registry.viaEnrollment": "происхождение: enrollment-токен",
+  "agents.registry.viaMachine": "происхождение: машина-токен",
+  "agents.enrollment.title": "Добавить исполнителя",
+  "agents.enrollment.description":
+    "Создание одноразового токена подключения для удалённого исполнителя",
+  "agents.enrollment.formHint":
+    "Одноразовый токен (TTL 15 минут) для регистрации удалённой машины; зарегистрировавшийся исполнитель появится здесь в ожидании одобрения.",
+  "agents.enrollment.label": "Название (для себя)",
+  "agents.enrollment.labelPlaceholder": "например, vps-1",
+  "agents.enrollment.harness": "Харнес (подсказка для команд)",
+  "agents.enrollment.nameHint": "Имя исполнителя (необязательно)",
+  "agents.enrollment.create": "Создать токен",
+  "agents.enrollment.creating": "Создаём…",
+  "agents.enrollment.createFailed": "Не удалось создать токен",
+  "agents.enrollment.created": "Токен подключения создан",
+  "agents.enrollment.tokenLabel": "Токен подключения",
+  "agents.enrollment.tokenOnce": "Токен показывается один раз — скопируйте сейчас.",
+  "agents.enrollment.show": "Показать",
+  "agents.enrollment.hide": "Скрыть",
+  "agents.enrollment.copy": "Копировать",
+  "agents.enrollment.copied": "Скопировано",
+  "agents.enrollment.copyFailedToken":
+    "Скопировать не удалось — токен остаётся видимым, выделите его вручную.",
+  "agents.enrollment.copyFailed":
+    "Скопировать не удалось — значение в строке, выделите вручную.",
+  "agents.enrollment.copyAll": "Скопировать всё",
+  "agents.enrollment.copyStepAria": "Копировать шаг {{step}}",
+  "agents.enrollment.ttl": "истечёт через {{time}}",
+  "agents.enrollment.state.created": "ждёт подключения",
+  "agents.enrollment.state.used": "использован",
+  "agents.enrollment.state.expired": "истёк",
+  "agents.enrollment.state.revoked": "отозван",
+  "agents.enrollment.bootstrapTitle": "На VPS выполните",
+  "agents.enrollment.afterRegister":
+    "После регистрации на VPS исполнитель появится выше в «Ожидают подтверждения» — проверьте происхождение и IP, затем Одобрить → Включить.",
+  "agents.enrollment.usedBy": "использован: {{name}}",
+  "agents.enrollment.usedIp": "IP подключения: {{ip}}",
+  "agents.enrollment.done": "Готово",
+  "agents.enrollment.listTitle": "Токены подключения",
+  "agents.enrollment.listHint": "живые + история",
+  "agents.enrollment.listLoading": "Загружаем токены",
+  "agents.enrollment.listFailed": "Не удалось загрузить токены",
+  "agents.enrollment.empty": "Токенов пока не было",
+  "agents.enrollment.loginHint":
+    "Войдите токеном владельца — создание и статусы подключения требуют ui-токен.",
+  "agents.enrollment.revoke": "Отозвать",
+  "agents.enrollment.revokeConfirm":
+    "Отозвать токен {{label}}? Подключение по нему станет невозможно.",
+  "agents.enrollment.revoked": "Токен отозван",
+  "agents.enrollment.revokeFailed": "Не удалось отозвать токен",
 
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------

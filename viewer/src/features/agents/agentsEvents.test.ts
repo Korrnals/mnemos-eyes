@@ -22,6 +22,8 @@ function seededClient(): QueryClient {
   const client = new QueryClient();
   client.setQueryData(keys.agents.assignments.list(), MOCK_ASSIGNMENTS_PAGE);
   client.setQueryData(keys.agents.executors.list(), MOCK_EXECUTORS_PAGE);
+  // AGW-5 phase 2: the enrollment list is part of the domain cache.
+  client.setQueryData(keys.agents.enrollment.list(), { ok: true, count: 0, items: [] });
   client.setQueryData(keys.tasks.board(), MOCK_BOARD);
   return client;
 }
@@ -130,5 +132,42 @@ describe("applyAgentsReconnectToCache — §5.9 reconnect refetch", () => {
     expect(isKeyInvalidated(client, keys.agents.assignments.all)).toBe(true);
     expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(true);
     expect(isKeyInvalidated(client, keys.tasks.all)).toBe(false);
+  });
+});
+
+describe("applyAgentsEventToCache — enrollment family (AGW-5 phase 2)", () => {
+  it("created/revoked/expired invalidate the enrollment list only", () => {
+    for (const kind of ["created", "revoked", "expired"]) {
+      const client = seededClient();
+      applyAgentsEventToCache(
+        client,
+        mustEvent({ kind: `enrollment.${kind}`, enrollment_id: "enr-1" }),
+      );
+      expect(isKeyInvalidated(client, keys.agents.enrollment.all)).toBe(true);
+      expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(false);
+      expect(isKeyInvalidated(client, keys.agents.assignments.all)).toBe(false);
+    }
+  });
+
+  it("used invalidates enrollment AND executors (a pending row was minted)", () => {
+    const client = seededClient();
+    applyAgentsEventToCache(
+      client,
+      mustEvent({
+        kind: "enrollment.used",
+        enrollment_id: "enr-1",
+        executor_id: "exec-new",
+        executor_name: "vps-1",
+        used_ip: "10.0.0.9",
+      }),
+    );
+    expect(isKeyInvalidated(client, keys.agents.enrollment.all)).toBe(true);
+    expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(true);
+  });
+
+  it("the reconnect refetch covers the enrollment list too", () => {
+    const client = seededClient();
+    applyAgentsReconnectToCache(client);
+    expect(isKeyInvalidated(client, keys.agents.enrollment.all)).toBe(true);
   });
 });

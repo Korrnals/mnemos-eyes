@@ -196,6 +196,19 @@ export interface BoardEventMap {
   "automation.rule.deleted": AutomationRuleEvent & {
     readonly kind: "automation.rule.deleted";
   };
+  // Enrollment-token kinds (AGW-5 phase 2, ui-contract §11 дополнение
+  // 2026-09-22): mint / registration leg / revoke / TTL-sweep. `used` rides
+  // WITHOUT a duplicate notification — `executor.registered` already carries
+  // one (spam-guard per host).
+  "enrollment.created": EnrollmentEvent & { readonly kind: "enrollment.created" };
+  "enrollment.used": EnrollmentEvent & {
+    readonly kind: "enrollment.used";
+    readonly executor_id: string;
+    readonly executor_name: string;
+    readonly used_ip: string;
+  };
+  "enrollment.revoked": EnrollmentEvent & { readonly kind: "enrollment.revoked" };
+  "enrollment.expired": EnrollmentEvent & { readonly kind: "enrollment.expired" };
 }
 
 export interface AssignmentEvent {
@@ -243,6 +256,22 @@ export interface AutomationRuleEvent {
   readonly rule: Readonly<Record<string, unknown>>;
   /** old→new audit pairs (updated/toggled/deleted; absent on created). */
   readonly changes?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Enrollment-token event payload (ADR 0009 Amd 2 §4 supplement, ui-contract
+ * §11 — AGW-5 phase 2): `{kind, enrollment_id, …}`. The `used` member
+ * carries the minted executor link (id/name) plus the presenting IP — the
+ * owner's origin cross-check at approve time; the audit rule (ADR 0012
+ * §3.3 pattern) forbids token material in ANY payload, so there is no
+ * token fragment here either.
+ */
+export interface EnrollmentEvent {
+  readonly enrollment_id: string;
+  /** used only: the pending executor this token minted. */
+  readonly executor_id?: string;
+  readonly executor_name?: string;
+  readonly used_ip?: string;
 }
 
 /** Every kind the dictionary names (known kinds). */
@@ -379,6 +408,37 @@ export function parseBoardEvent(raw: string): ParsedBoardEvent {
           rule_kind: parsed.rule_kind,
           rule: parsed.rule,
           ...(isRecord(parsed.changes) ? { changes: parsed.changes } : {}),
+        },
+      };
+    case "enrollment.created":
+    case "enrollment.revoked":
+    case "enrollment.expired":
+      if (typeof parsed.enrollment_id !== "string") {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: { kind, enrollment_id: parsed.enrollment_id },
+      };
+    case "enrollment.used":
+      // The registration leg IS the point of this event: without the
+      // executor link + presenting IP it is malformed, not merely thin.
+      if (
+        typeof parsed.enrollment_id !== "string" ||
+        typeof parsed.executor_id !== "string" ||
+        typeof parsed.executor_name !== "string" ||
+        typeof parsed.used_ip !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          enrollment_id: parsed.enrollment_id,
+          executor_id: parsed.executor_id,
+          executor_name: parsed.executor_name,
+          used_ip: parsed.used_ip,
         },
       };
     default:

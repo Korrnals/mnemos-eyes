@@ -53,6 +53,18 @@ export function applyAgentsEventToCache(
       void queryClient.invalidateQueries({ queryKey: keys.agents.executors.all });
       void queryClient.invalidateQueries({ queryKey: keys.agents.assignments.all });
       break;
+    // AGW-5 phase 2: the enrollment family syncs ITS list; `used` also
+    // minted a pending executor row (belt-and-braces beside the server's
+    // own executor.registered — the at-most-once stream can drop frames).
+    case "enrollment.created":
+    case "enrollment.revoked":
+    case "enrollment.expired":
+      void queryClient.invalidateQueries({ queryKey: keys.agents.enrollment.all });
+      break;
+    case "enrollment.used":
+      void queryClient.invalidateQueries({ queryKey: keys.agents.enrollment.all });
+      void queryClient.invalidateQueries({ queryKey: keys.agents.executors.all });
+      break;
     default:
       // task / report / notification kinds — task-domain keys are the task
       // bridge's (taskEvents.ts) responsibility; agents keys stay untouched.
@@ -61,13 +73,14 @@ export function applyAgentsEventToCache(
 }
 
 /**
- * §5.9 reconnect refetch: assignments AND executors go stale together —
- * SSE is at-most-once without resumption, so the drop window may have
- * missed any number of transitions.
+ * §5.9 reconnect refetch: assignments, executors AND enrollment tokens go
+ * stale together — SSE is at-most-once without resumption, so the drop
+ * window may have missed any number of transitions.
  */
 export function applyAgentsReconnectToCache(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: keys.agents.assignments.all });
   void queryClient.invalidateQueries({ queryKey: keys.agents.executors.all });
+  void queryClient.invalidateQueries({ queryKey: keys.agents.enrollment.all });
 }
 
 /**

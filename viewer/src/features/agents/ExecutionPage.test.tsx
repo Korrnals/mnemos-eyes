@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
@@ -47,6 +47,7 @@ function executorPage(): ExecutorsPage {
         state: "approved",
         last_seen: ago(30), // online (≤120 s)
         presence: "online",
+        registered_via: "",
         registered_at: "",
         updated_at: "",
       },
@@ -62,6 +63,7 @@ function executorPage(): ExecutorsPage {
         state: "approved",
         last_seen: ago(15 * 60), // stale (≤600 s? no — 900 s → offline)
         presence: "stale",
+        registered_via: "",
         registered_at: "",
         updated_at: "",
       },
@@ -77,6 +79,7 @@ function executorPage(): ExecutorsPage {
         state: "approved",
         last_seen: ago(2 * 3600), // offline
         presence: "offline",
+        registered_via: "",
         registered_at: "",
         updated_at: "",
       },
@@ -443,5 +446,44 @@ describe("AGW-4 polish (actionable empties, terminal hint, onboarding)", () => {
     expect(second.container.textContent).toContain("How this works");
     expect(second.container.textContent).not.toContain("poller picks the assignment up");
     second.root.unmount();
+  });
+});
+
+describe("AGW-5 executor context menus", () => {
+  it("right-click on a strip chip opens the action menu incl. «Open registry»", async () => {
+    const { root, container } = await mountPage([]);
+    const chip = [...container.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find(
+      (candidate) => candidate.textContent?.includes("zcode@laptop"),
+    )!;
+    await act(async () => {
+      chip.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 40, clientY: 60 }),
+      );
+    });
+    const menu = container.querySelector("[role='menu']");
+    expect(menu).not.toBeNull();
+    // Approved chip: enable/disable, revoke, copy id, open registry, delete —
+    // approve is pending-only.
+    const items = [...menu!.querySelectorAll("[role='menuitem']")].map((item) =>
+      item.textContent,
+    );
+    expect(items.some((text) => text?.includes("Disable"))).toBe(true);
+    expect(items.some((text) => text?.includes("Revoke"))).toBe(true);
+    expect(items.some((text) => text?.includes("Open registry"))).toBe(true);
+    expect(items.some((text) => text?.includes("Delete"))).toBe(true);
+    expect(items.some((text) => text?.includes("Approve"))).toBe(false);
+    // Copy id lands in the clipboard (stubbed by happy-dom redefine).
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    await act(async () => {
+      [...menu!.querySelectorAll<HTMLButtonElement>("[role='menuitem']")]
+        .find((item) => item.textContent?.includes("Copy id"))!
+        .click();
+    });
+    expect(writeText).toHaveBeenCalledWith("exec-live");
+    root.unmount();
   });
 });

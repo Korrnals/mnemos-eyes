@@ -319,8 +319,62 @@ export interface ExecutorItem {
   readonly state: ExecutorRegistryState;
   readonly last_seen: string;
   readonly presence: ExecutorPresence;
+  /** Registration leg: '' = machine bootstrap, `enrollment:<id>` = mne_ leg
+   * (the owner verifies the origin in the approve decision, design §Threat). */
+  readonly registered_via: string;
   readonly registered_at: string;
   readonly updated_at: string;
+}
+
+/**
+ * Enrollment token row — board `EnrollmentOut` with `state` narrowed to the
+ * server's closed set (AGW-5 phase 2 UI). Carries NO token material: the
+ * store keeps only the hash; the mne_ plaintext appears exactly once, in the
+ * create response (`EnrollmentCreatedResult.token`).
+ */
+export type EnrollmentState = "created" | "used" | "expired" | "revoked";
+
+export interface EnrollmentItem {
+  readonly enrollment_id: string;
+  readonly label: string;
+  readonly harness_hint: string;
+  readonly name_hint: string;
+  readonly state: EnrollmentState;
+  readonly created_at: string;
+  /** Single TTL (server constant, 15 min); renewal = a new token. */
+  readonly expires_at: string;
+  readonly used_at: string;
+  /** Presenting IP of the registration leg — the owner's origin cross-check. */
+  readonly used_ip: string;
+  /** Set when state = used: the pending executor this token minted. */
+  readonly executor_id: string;
+}
+
+/** Mint answer — board `EnrollmentCreatedOut`. The token rides HERE ONLY. */
+export interface EnrollmentCreatedResult {
+  readonly ok: boolean;
+  readonly enrollment: EnrollmentItem;
+  readonly token: string;
+}
+
+/** Revoke answer — board `EnrollmentRevokedOut` (the fresh row; NO token). */
+export interface EnrollmentRevokeResult {
+  readonly ok: boolean;
+  readonly enrollment: EnrollmentItem;
+}
+
+/** Enrollment list — board `EnrollmentListOut` (live + terminal history). */
+export interface EnrollmentsPage {
+  readonly ok: boolean;
+  readonly count: number;
+  readonly items: readonly EnrollmentItem[];
+}
+
+/** Mint request — empty strings mean «not provided» (server defaults). */
+export interface EnrollmentCreateInput {
+  readonly label?: string;
+  readonly harness_hint?: string;
+  readonly name_hint?: string;
 }
 
 /**

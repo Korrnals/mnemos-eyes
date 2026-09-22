@@ -89,6 +89,13 @@ export const keys = {
       all: ["agents", "executors"] as const,
       list: () => ["agents", "executors", "list"] as const,
     },
+    // AGW-5 phase 2: enrollment tokens (mint/list/revoke, ui-token class).
+    // SSE enrollment.* invalidates this family; `used` additionally
+    // invalidates executors (a pending row was minted).
+    enrollment: {
+      all: ["agents", "enrollment"] as const,
+      list: () => ["agents", "enrollment", "list"] as const,
+    },
     settings: {
       execution: () => ["agents", "settings", "execution"] as const,
     },

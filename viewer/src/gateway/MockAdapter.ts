@@ -1,6 +1,7 @@
 import type { MemoryGateway } from "./MemoryGateway";
 import type { InboxParams } from "./BoardAdapter";
 import { resolveRoutingAnnotation } from "./routing";
+import { KNOWN_HARNESSES } from "./harnesses";
 import { ApiError } from "@/lib/errors";
 import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
@@ -40,6 +41,11 @@ import type {
   ExecutorRegistryState,
   ExecutorStateChangeResult,
   ExecutorsPage,
+  EnrollmentCreateInput,
+  EnrollmentCreatedResult,
+  EnrollmentItem,
+  EnrollmentRevokeResult,
+  EnrollmentsPage,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -171,6 +177,10 @@ export class MockAdapter implements MemoryGateway {
   private schedules: ScheduleRule[];
   private hooks: HookRule[];
   private launches: LaunchRow[];
+  /** AGW-5 phase 2: enrollment tokens minted at RUNTIME (playground starts
+   * clean — the fixtures carry none, minting is an owner action). */
+  private enrollments: EnrollmentItem[];
+  private nextEnrollmentNo = 1;
   private nextAssignmentNo = 1;
   private nextRuleNo = 1;
   private nextLaunchNo = 1;
@@ -191,6 +201,7 @@ export class MockAdapter implements MemoryGateway {
     this.schedules = MOCK_SCHEDULES.map((rule) => ({ ...rule }));
     this.hooks = MOCK_HOOKS.map((rule) => ({ ...rule }));
     this.launches = MOCK_LAUNCHES.map((row) => ({ ...row }));
+    this.enrollments = [];
     // Fresh ids never collide with the corpus rows.
     this.nextAssignmentNo =
       Math.max(0, ...MOCK_ASSIGNMENTS.map((assignment) => assignment.id)) + 1;
@@ -968,10 +979,12 @@ export class MockAdapter implements MemoryGateway {
 
   /**
    * Server-state-machine mirror (AGW-4; store.update_executor): pending is
-   * NOT a patchable target, revoked is TERMINAL (409 on any attempt to
-   * leave it — re-register instead), unknown id → 404. Presence recomputes
-   * from last_seen against the meta TTLs so a freshly approved row does
-   * not keep a stale verdict. Idempotent no-ops echo the row unchanged.
+   * NOT a patchable target, revoked is TERMINAL but a revoked→revoked PATCH
+   * is an idempotent no-op 200 (AGW-5 P3 — store.py:2600), unknown id →
+   * 404, a rename onto an existing name → 409 duplicate. Presence
+   * recomputes from last_seen against the meta TTLs so a freshly approved
+   * row does not keep a stale verdict. Idempotent no-ops echo the row
+   * unchanged.
    */
   async patchExecutor(
     executorId: string,
@@ -996,7 +1009,9 @@ export class MockAdapter implements MemoryGateway {
           { url: "mock:/api/executors" },
         );
       }
-      if (row.state === "revoked") {
+      // Leaving revoked is the forbidden transition; revoked→revoked is the
+      // idempotent no-op the server answers 200 (no SSE, no changes).
+      if (row.state === "revoked" && patch.state !== "revoked") {
         throw new ApiError(
           409,
           "executor is revoked — terminal state; re-register a new executor instead",
@@ -1004,10 +1019,29 @@ export class MockAdapter implements MemoryGateway {
         );
       }
     }
+    // Rename guard (AGW-4 P3): pydantic bounds (1..120) + the duplicate
+    // check of update_executor. Computed UP FRONT — a local `name` would
+    // silently collide with the DOM `window.name` global in the spread.
+    const nextName =
+      patch.name !== undefined ? patch.name.trim() : undefined;
+    if (nextName !== undefined && (nextName.length === 0 || nextName.length > 120)) {
+      throw new ApiError(422, "invalid executor name", {
+        url: "mock:/api/executors",
+      });
+    }
+    if (
+      nextName !== undefined &&
+      this.executors.some((other) => other.id !== executorId && other.name === nextName)
+    ) {
+      throw new ApiError(409, `duplicate executor name: ${nextName}`, {
+        url: "mock:/api/executors",
+      });
+    }
     // ExecutorItem fields are readonly — the patch REPLACES the row (the
     // UI never holds registry identity objects it could alias).
     const merged = {
       ...row,
+      ...(nextName !== undefined ? { name: nextName } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.capabilities !== undefined
         ? { capabilities: [...patch.capabilities] }
@@ -1030,6 +1064,103 @@ export class MockAdapter implements MemoryGateway {
       });
     }
     this.executors.splice(index, 1);
+  }
+
+  // --- executor enrollment (AGW-5 phase 2; Amd 2 §4 supplement) ---------------
+
+  /**
+   * Mint a one-time mne_ token (store.create_enrollment mirror): 422
+   * unknown harness_hint (the allowlist is the closed KNOWN_HARNESSES
+   * mirror), 409 at ENROLLMENT_MAX_LIVE = 3 live tokens with NO auto-revoke
+   * (device-quota principle — the owner revokes by hand). TTL 15 min,
+   * server constant. The plaintext token exists ONLY in this answer.
+   */
+  async createEnrollment(
+    payload: EnrollmentCreateInput,
+    signal?: AbortSignal,
+  ): Promise<EnrollmentCreatedResult> {
+    await this.delay(signal);
+    if (
+      payload.harness_hint !== undefined &&
+      payload.harness_hint !== "" &&
+      !(KNOWN_HARNESSES as readonly string[]).includes(payload.harness_hint)
+    ) {
+      throw new ApiError(
+        422,
+        `unknown harness_hint: ${payload.harness_hint}; known: ${KNOWN_HARNESSES.join(", ")}`,
+        { url: "mock:/api/executors/enrollment" },
+      );
+    }
+    const live = this.enrollments.filter((row) => row.state === "created");
+    if (live.length >= 3) {
+      throw new ApiError(
+        409,
+        "enrollment quota exceeded: at most 3 live tokens (revoke one to mint a new)",
+        { url: "mock:/api/executors/enrollment" },
+      );
+    }
+    const nowMs = this.now();
+    const row: EnrollmentItem = {
+      enrollment_id: `enr-mock-${String(this.nextEnrollmentNo).padStart(4, "0")}`,
+      label: payload.label ?? "",
+      harness_hint: payload.harness_hint ?? "",
+      name_hint: payload.name_hint ?? "",
+      state: "created",
+      created_at: new Date(nowMs).toISOString(),
+      expires_at: new Date(nowMs + ENROLLMENT_TTL_MS).toISOString(),
+      used_at: "",
+      used_ip: "",
+      executor_id: "",
+    };
+    this.nextEnrollmentNo += 1;
+    this.enrollments.push(row);
+    // token_urlsafe(24) shape mirror: `mne_` + 32 urlsafe chars.
+    const token = `mne_${mockTokenMaterial()}`;
+    return { ok: true, enrollment: { ...row }, token };
+  }
+
+  /** Live tokens plus terminal history, no hash/token material. */
+  async listEnrollments(signal?: AbortSignal): Promise<EnrollmentsPage> {
+    await this.delay(signal);
+    return {
+      ok: true,
+      count: this.enrollments.length,
+      items: this.enrollments.map((row) => ({ ...row })),
+    };
+  }
+
+  /**
+   * Revoke a LIVE token (store.revoke_enrollment mirror): created →
+   * revoked; already revoked → 200 idempotent; used → 409 (the executor
+   * exists — kill it via the registry); expired → 409; unknown → 404.
+   */
+  async revokeEnrollment(
+    enrollmentId: string,
+    signal?: AbortSignal,
+  ): Promise<EnrollmentRevokeResult> {
+    await this.delay(signal);
+    const index = this.enrollments.findIndex(
+      (row) => row.enrollment_id === enrollmentId,
+    );
+    if (index === -1) {
+      throw new ApiError(404, `enrollment ${enrollmentId} not found`, {
+        url: "mock:/api/executors/enrollment",
+      });
+    }
+    const row = this.enrollments[index];
+    if (row.state === "revoked") {
+      return { ok: true, enrollment: { ...row } };
+    }
+    if (row.state !== "created") {
+      throw new ApiError(
+        409,
+        `enrollment is ${row.state} — terminal; only a live (created) token can be revoked`,
+        { url: "mock:/api/executors/enrollment" },
+      );
+    }
+    const updated: EnrollmentItem = { ...row, state: "revoked" };
+    this.enrollments[index] = updated;
+    return { ok: true, enrollment: { ...updated } };
   }
 
   // --- SCHED-1 automation (ADR 0013 S1: CRUD + journal + manual run-now) -------
@@ -1771,6 +1902,19 @@ function abortError(): DOMException {
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError();
+}
+
+/** Enrollment TTL mirror — the server constant is 15 min (design §Solution). */
+const ENROLLMENT_TTL_MS = 15 * 60 * 1000;
+
+/** urlsafe token material stand-in (NOT random-secret grade — a playground). */
+function mockTokenMaterial(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  let out = "";
+  for (let i = 0; i < 32; i += 1) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return out;
 }
 
 /**

@@ -203,6 +203,7 @@ describe("BoardAdapter agents wire — executors + settings", () => {
           state: "approved",
           last_seen: "2026-09-19T08:59:30+00:00",
           presence: "online",
+          registered_via: "",
           registered_at: "2026-09-18T09:00:00+00:00",
           updated_at: "2026-09-19T08:00:00+00:00",
         },
