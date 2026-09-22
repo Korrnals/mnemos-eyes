@@ -65,6 +65,10 @@ from .store import (
     ExecutorNotFoundError,
     ExecutorQuotaError,
     ExecutorStateError,
+    HarnessError,
+    HarnessInUseError,
+    HarnessNotFoundError,
+    HarnessQuotaError,
     InvalidTransitionError,
     PRESENCE_ONLINE_S,
     PRESENCE_STALE_S,
@@ -1290,6 +1294,35 @@ class ExecutorRegisteredOut(_ApiModel):
     ok: bool
     executor: ExecutorOut
     executor_secret: str               # shown EXACTLY once — never again
+
+
+# Harness dictionary contracts (wave 3C, design 2026-09-22 §C): the
+# owner-managed nomination registry. Reads are open (a dictionary, same
+# boundary as GET /api/executors); writes are ui-token. ``seed_min_count``
+# tells clients how many entries the boot seed guarantees minimum — the UI
+# never hardcodes the set.
+class HarnessCreateBody(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    note: str = Field(default="", max_length=200)
+
+
+class HarnessOut(_ApiModel):
+    name: str
+    added_at: str = ""
+    added_via: str = "seed"            # seed | owner
+    note: str = ""
+
+
+class HarnessListOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[HarnessOut]
+    meta: dict[str, Any]               # seed_min_count — the guaranteed seed size
+
+
+class HarnessStateOut(_ApiModel):
+    ok: bool
+    harness: HarnessOut
 
 
 # Enrollment contracts (ADR 0009 Amd 2 §4 supplement): one-time mne_ tokens
@@ -3035,12 +3068,15 @@ async def create_assignment(body: AssignmentCreate,
     the task (≤1 invariant)."""
     _guard_ui_write(request)
     _assignment_rate_limit(request, ui=True)
-    if body.harness not in Store.KNOWN_HARNESSES:
+    known = store.harness_names()
+    if body.harness not in known:
         # assignments feed the poller's (harness, specialist) → command
-        # allowlist: an unknown harness can never launch — refuse early
+        # allowlist: an unknown harness can never launch — refuse early.
+        # Wave 3C: the gate reads the LIVE harness dictionary (the seed
+        # constant is no longer the source of truth).
         raise HTTPException(
             422, f"unknown harness: {body.harness}; "
-                 f"known: {sorted(Store.KNOWN_HARNESSES)}")
+                 f"known: {sorted(known)}")
     try:
         a = store.create_assignment(
             body.task_id, body.specialist, body.harness,
@@ -3279,6 +3315,13 @@ _ENROLLMENT_REVOKE_RATE_LIMIT = 10      # revokes per client ...
 _ENROLLMENT_REVOKE_RATE_WINDOW = 60.0   # ... per sliding minute (ui family)
 _enrollment_revoke_limiter = RateLimiter(
     limit=_ENROLLMENT_REVOKE_RATE_LIMIT, window=_ENROLLMENT_REVOKE_RATE_WINDOW)
+# Harness dictionary (wave 3C): adds/deletes are rare owner actions — the
+# enrollment-revoke budget (10/60 s per client) is the right shape. The
+# dictionary CAP (HARNESS_MAX_COUNT) bounds volume; this bounds pace.
+_HARNESS_WRITE_RATE_LIMIT = 10          # mutations per client ...
+_HARNESS_WRITE_RATE_WINDOW = 60.0       # ... per sliding minute (ui family)
+_harness_write_limiter = RateLimiter(
+    limit=_HARNESS_WRITE_RATE_LIMIT, window=_HARNESS_WRITE_RATE_WINDOW)
 
 
 def _executor_http(exc: ExecutorError) -> HTTPException:
@@ -3291,6 +3334,17 @@ def _executor_http(exc: ExecutorError) -> HTTPException:
     if isinstance(exc, (ExecutorConflictError, ExecutorStateError)):
         return HTTPException(409, str(exc))
     return HTTPException(409, str(exc))  # defensive: unknown subclass → 409
+
+
+def _harness_http(exc: HarnessError) -> HTTPException:
+    """Map store harness-dictionary errors onto HTTP: 404 unknown name /
+    409 duplicate or still-in-use / 422 bad name or dictionary cap (an
+    entry-validation class, not a rate guard)."""
+    if isinstance(exc, HarnessNotFoundError):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, HarnessQuotaError):
+        return HTTPException(422, str(exc))
+    return HTTPException(409, str(exc))  # conflict + in-use (defensive: base)
 
 
 @app.post("/api/executors", status_code=201)
@@ -3550,6 +3604,82 @@ async def delete_executor(executor_id: str, request: Request) -> OkOut:
         {"kind": "executor.deleted", "executor": _executor_public(row),
          "prev_state": row["state"], "state": row["state"]},
     )
+    return {"ok": True}
+
+
+# ----------------------------------------- harness dictionary (wave 3C)
+# The owner-managed nomination registry (design 2026-09-22 §C) that replaced
+# the closed KNOWN_HARNESSES gate (the constant survives as the SEED).
+# Nomination hygiene lives HERE — every gate (registration, enrollment hint,
+# assignment create, automation payloads, rule conditions) reads the table —
+# while launching stays gated by the poller's local allowlist (A3): adding
+# "myagent" only lets the owner NOMINATE it, no poller will ever run it
+# until its own config says so. GET is an open read (a dictionary, same
+# boundary as GET /api/executors); POST/DELETE are ui-token.
+@app.get("/api/harnesses")
+async def list_harnesses() -> HarnessListOut:
+    """The harness dictionary (open read). ``meta.seed_min_count`` is the
+    size of the boot seed — clients learn the guaranteed minimum and never
+    hardcode the set. Alphabetical; ``added_via`` distinguishes ``seed``
+    rows from owner-added ones."""
+    rows = store.list_harnesses()
+    return {
+        "ok": True,
+        "count": len(rows),
+        "items": rows,
+        "meta": {"seed_min_count": len(Store.KNOWN_HARNESSES)},
+    }
+
+
+@app.post("/api/harnesses", status_code=201)
+async def create_harness(body: HarnessCreateBody,
+                         request: Request) -> HarnessStateOut:
+    """Add a harness to the dictionary (ui-token; wave 3C). 201 → row;
+    422 invalid name (``^[a-z0-9][a-z0-9._-]{0,59}$``) or dictionary cap
+    (≤64 — entry validation, not a rate guard); 409 duplicate. Audit
+    ``harness.added`` + SSE — the UI select refreshes from the frame."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _harness_write_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"harness dictionary rate limit exceeded "
+            f"({_HARNESS_WRITE_RATE_LIMIT} per "
+            f"{_HARNESS_WRITE_RATE_WINDOW:.0f}s per client)",
+        )
+    try:
+        row = store.add_harness(body.name, body.note)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except HarnessError as exc:
+        raise _harness_http(exc) from exc
+    _broadcast({"kind": "harness.added", "harness": row})
+    return {"ok": True, "harness": row}
+
+
+@app.delete("/api/harnesses/{name}")
+async def delete_harness(name: str, request: Request) -> OkOut:
+    """Remove a harness from the dictionary (ui-token; wave 3C). 404
+    unknown; 409 while the name is LIVE anywhere an executor could act on
+    it — a registered executor, a non-terminal assignment or an automation
+    rule (schedule field / hook condition). Terminal history does NOT
+    block: it is archival and stays verbatim. Audit ``harness.removed`` +
+    SSE. Seed rows are deletable like any other (the seed does not
+    resurrect across restarts — it fills an EMPTY table only)."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _harness_write_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"harness dictionary rate limit exceeded "
+            f"({_HARNESS_WRITE_RATE_LIMIT} per "
+            f"{_HARNESS_WRITE_RATE_WINDOW:.0f}s per client)",
+        )
+    try:
+        row = store.delete_harness(name)
+    except HarnessError as exc:
+        raise _harness_http(exc) from exc
+    _broadcast({"kind": "harness.removed", "name": row["name"]})
     return {"ok": True}
 
 
