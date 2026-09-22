@@ -209,6 +209,27 @@ export interface BoardEventMap {
   };
   "enrollment.revoked": EnrollmentEvent & { readonly kind: "enrollment.revoked" };
   "enrollment.expired": EnrollmentEvent & { readonly kind: "enrollment.expired" };
+  // Pairing kinds (CV-7, ADR 0012 §10.3 — ui-contract §11 дополнение):
+  // requested (exchange created→scanned), confirmed (owner allow=true),
+  // revoked (owner deny / cancel / device revoke — pairing_id XOR device_id
+  // depending on WHAT died), expired (TTL sweep). Payload audit rule §3.3:
+  // NEVER code/verify/device_token in any payload — these frames are the
+  // owner panel's change HINTS only (the digits come from
+  // GET /api/pairing/{id} under ui-token, never from the LAN stream).
+  "pairing.requested": PairingEvent & {
+    readonly kind: "pairing.requested";
+    readonly device_name?: string;
+  };
+  "pairing.confirmed": PairingEvent & {
+    readonly kind: "pairing.confirmed";
+    readonly device_name?: string;
+  };
+  "pairing.revoked": {
+    readonly kind: "pairing.revoked";
+    readonly pairing_id?: string;
+    readonly device_id?: string;
+  };
+  "pairing.expired": PairingEvent & { readonly kind: "pairing.expired" };
 }
 
 export interface AssignmentEvent {
@@ -272,6 +293,19 @@ export interface EnrollmentEvent {
   readonly executor_id?: string;
   readonly executor_name?: string;
   readonly used_ip?: string;
+}
+
+/**
+ * Pairing event payload base (ADR 0012 §10.3): `{kind, pairing_id}`.
+ * Optional `device_name` rides on requested/confirmed (the self-asserted
+ * label — rendered as text, unverified by definition §3.6). The `revoked`
+ * member deliberately does NOT extend this base: the device-revoke emitter
+ * (DELETE /api/devices/{id}) speaks about the SESSION, not the pairing, so
+ * it carries `device_id` instead — the parser demands at least ONE of the
+ * two identifiers on that kind.
+ */
+export interface PairingEvent {
+  readonly pairing_id: string;
 }
 
 /** Every kind the dictionary names (known kinds). */
@@ -441,6 +475,33 @@ export function parseBoardEvent(raw: string): ParsedBoardEvent {
           used_ip: parsed.used_ip,
         },
       };
+    case "pairing.requested":
+    case "pairing.confirmed":
+    case "pairing.expired":
+      return parsePairingEvent(parsed, kind);
+    case "pairing.revoked": {
+      // §10.3: owner deny/cancel speak pairing_id, the DEVICE revoke speaks
+      // device_id — a frame without either identifier is malformed (the
+      // consumers could not tell what died).
+      if (
+        typeof parsed.pairing_id !== "string" &&
+        typeof parsed.device_id !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          ...(typeof parsed.pairing_id === "string"
+            ? { pairing_id: parsed.pairing_id }
+            : {}),
+          ...(typeof parsed.device_id === "string"
+            ? { device_id: parsed.device_id }
+            : {}),
+        },
+      };
+    }
     default:
       return ignored("unknown-kind", kind);
   }
@@ -497,6 +558,37 @@ function parseExecutorEvent(
 
 function ignored(reason: IgnoredEventReason, kind: string): ParsedBoardEvent {
   return { status: "ignored", reason, kind };
+}
+
+/**
+ * Pairing frames (ADR 0012 §10.3): the pairing_id is the one mandatory
+ * field on requested/confirmed/expired; the self-asserted device_name is an
+ * optional passthrough on the first two (rendered as text — §3.6) and
+ * contractually absent on expired (the TTL sweep knows no name).
+ */
+function parsePairingEvent(
+  parsed: Record<string, unknown>,
+  kind: "pairing.requested" | "pairing.confirmed" | "pairing.expired",
+): ParsedBoardEvent {
+  if (typeof parsed.pairing_id !== "string") {
+    return ignored("malformed-payload", kind);
+  }
+  if (kind === "pairing.expired") {
+    return {
+      status: "event",
+      event: { kind, pairing_id: parsed.pairing_id },
+    };
+  }
+  return {
+    status: "event",
+    event: {
+      kind,
+      pairing_id: parsed.pairing_id,
+      ...(typeof parsed.device_name === "string"
+        ? { device_name: parsed.device_name }
+        : {}),
+    },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1051,6 +1051,114 @@ export const ru = {
     "Если вы работаете с живым mnemos — проверьте, что API поднят и что dev-прокси (/api → mnemos) доступен. В разработке запросы из браузера остаются под CORS.",
   "app.loadingView": "Загружаем раздел",
   "app.notFoundMessage": "Такого пути в колодце нет.",
+
+  // --- CV-7: QR-пейринг и устройства (ADR 0012) ------------------------------------
+  "nav.devices": "Устройства",
+
+  // Диалог «Подключить устройство» (владельческая сторона, §2.1–§2.4).
+  "pairing.title": "Подключить устройство",
+  "pairing.description":
+    "Диалог QR-пейринга: создайте код, отсканируйте его устройством и подтвердите запрос после сверки четырёх цифр.",
+  "pairing.creating": "Создаём пейринг…",
+  "pairing.createFailed": "Не удалось создать пейринг",
+  "pairing.confirmFailed": "Не удалось подтвердить пейринг",
+  "pairing.denyFailed": "Не удалось отклонить пейринг",
+  "pairing.cancelFailed": "Не удалось отменить пейринг",
+  "pairing.qrTitle": "Отсканируйте QR устройством",
+  "pairing.qr.hint": "Нет камеры? Код ниже вводится вручную на устройстве.",
+  "pairing.qr.loading": "Загружаем QR…",
+  "pairing.codeLabel": "Код подключения",
+  "pairing.codeHint":
+    "Ручной ввод: откройте на устройстве страницу /pair и введите этот код.",
+  "pairing.copy": "Копировать",
+  "pairing.copied": "Скопировано",
+  "pairing.copyFailed": "Скопировать не удалось — код в строке, выделите вручную.",
+  "pairing.waitingScan": "Ждём сканирования…",
+  "pairing.ttl": "истечёт через {{time}}",
+  "pairing.expiredShort": "истёк — начните заново",
+  "pairing.cancel": "Отменить",
+  "pairing.requestTitle": "Запрос подключения",
+  "pairing.requestHint":
+    "Устройство отсканировало код. Сверь четыре цифры с его экраном и подтверди.",
+  "pairing.unverified": "не проверено",
+  "pairing.sourceIp": "IP устройства",
+  "pairing.noDeviceName": "без имени",
+  "pairing.verifyLabel": "Код подтверждения",
+  "pairing.verifyHint":
+    "Четыре цифры — сверка экранов, не пароль: они должны совпадать на обоих устройствах.",
+  "pairing.approve": "Подтвердить",
+  "pairing.deny": "Отклонить",
+  "pairing.confirmedTitle": "Устройство подтверждено",
+  "pairing.confirmedMessage":
+    "Токен выдастся при следующем обмене устройства — запись появится в списке устройств.",
+  "pairing.deniedTitle": "Запрос отклонён",
+  "pairing.deniedMessage": "Устройство не получит токен, код погашен.",
+  "pairing.cancelledTitle": "Пейринг отменён",
+  "pairing.expiredTitle": "Пейринг истёк — начните заново",
+  "pairing.expiredMessage": "Код живёт 3 минуты. Создайте новый пейринг.",
+  "pairing.revokedTitle": "Пейринг отозван",
+  "pairing.failedTitle": "Пейринг не создан",
+  "pairing.restart": "Начать заново",
+  "pairing.done": "Готово",
+
+  // Страница «Устройства» (/system/devices, §10.2).
+  "pairing.devices.title": "Устройства",
+  "pairing.devices.listLabel": "Спаренные устройства",
+  "pairing.devices.loading": "Загружаем устройства…",
+  "pairing.devices.failed": "Не удалось загрузить устройства",
+  "pairing.devices.loginHint":
+    "Список устройств требует сессии владельца — войдите, чтобы видеть подключённые устройства.",
+  "pairing.devices.empty": "Пока нет спаренных устройств",
+  "pairing.devices.emptyHint":
+    "Подключите телефон или планшет: «Подключить устройство» → QR → подтверждение.",
+  "pairing.devices.state.active": "активно",
+  "pairing.devices.state.expired": "истекло",
+  "pairing.devices.state.revoked": "отозвано",
+  "pairing.devices.created": "подключено",
+  "pairing.devices.lastIp": "последний IP",
+  "pairing.devices.expires": "скользящий TTL до",
+  "pairing.devices.hardExpires": "жёсткий до",
+  "pairing.devices.revoke": "Отозвать",
+  "pairing.devices.revokeConfirm":
+    "Отозвать «{{name}}»? Отзыв необратим — устройству понадобится новый пейринг.",
+  "pairing.devices.revoked": "Устройство отозвано",
+  "pairing.devices.revokeFailed": "Не удалось отозвать устройство",
+  "pairing.unsupportedTitle": "Пейринг недоступен в этом режиме",
+  "pairing.unsupportedMessage":
+    "Домен устройств говорит на merge-API борда (ADR 0012); в режиме прямого mnemos этой страницы нет.",
+
+  // Страница устройства (/pair, §2.3 — без аутентификации).
+  "pair.title": "Подключение устройства",
+  "pair.intro": "Введите код подключения с экрана владельца и имя устройства.",
+  "pair.codeLabel": "Код подключения",
+  "pair.codeInvalid": "Код не может быть пустым",
+  "pair.nameLabel": "Имя устройства",
+  "pair.defaultName": "Браузер {{platform}}",
+  "pair.platformUnknown": "без платформы",
+  "pair.connect": "Подключить",
+  "pair.connecting": "Подключаем…",
+  "pair.verifyingTitle": "Код принят — подтвердите на доверенной стороне",
+  "pair.verifyHint":
+    "Покажите владельцу эти четыре цифры и дождитесь подтверждения на его экране.",
+  "pair.waitHint":
+    "Проверим ещё раз автоматически через минуту; кнопка работает и вручную.",
+  "pair.checkNow": "Проверить",
+  "pair.checking": "Проверяем…",
+  "pair.successTitle": "Устройство подключено",
+  "pair.tokenLabel": "Токен устройства",
+  "pair.tokenOnce":
+    "Токен показывается один раз — сохраните его сейчас. Страница не восстановит его.",
+  "pair.copyFailed": "Скопировать не удалось — токен в строке, выделите вручную.",
+  "pair.deviceId": "Идентификатор устройства",
+  "pair.scope": "права",
+  "pair.expires": "истекает",
+  "pair.enterAnother": "Ввести другой код",
+  "pair.err403": "Код привязан к другому адресу",
+  "pair.err404": "Неизвестный код",
+  "pair.err410": "Код истёк или уже использован",
+  "pair.err429": "Слишком много попыток",
+  "pair.err503": "Пейринг отключён на сервере",
+  "pair.errGeneric": "Подключить не удалось",
 } as const;
 
 export type TranslationKey = keyof typeof ru;

@@ -1034,4 +1034,112 @@ export const en: Record<TranslationKey, string> = {
     "If you are running against a live mnemos, check that the API is up and that the dev proxy (/api → mnemos) is reachable. Browser requests stay CORS-gated during development.",
   "app.loadingView": "Loading view",
   "app.notFoundMessage": "This path does not exist in the well.",
+
+  // --- CV-7: QR pairing + devices (ADR 0012) ---------------------------------------
+  "nav.devices": "Devices",
+
+  // The «Подключить устройство» dialog (owner side, §2.1–§2.4).
+  "pairing.title": "Connect a device",
+  "pairing.description":
+    "The QR pairing dialog: create a code, scan it with the device, then confirm the request after matching the four digits.",
+  "pairing.creating": "Creating a pairing…",
+  "pairing.createFailed": "Could not create the pairing",
+  "pairing.confirmFailed": "Could not confirm the pairing",
+  "pairing.denyFailed": "Could not deny the pairing",
+  "pairing.cancelFailed": "Could not cancel the pairing",
+  "pairing.qrTitle": "Scan the QR with the device",
+  "pairing.qr.hint": "No camera? Type the code below manually on the device.",
+  "pairing.qr.loading": "Loading the QR…",
+  "pairing.codeLabel": "Pairing code",
+  "pairing.codeHint":
+    "Manual path: open /pair on the device and enter this code.",
+  "pairing.copy": "Copy",
+  "pairing.copied": "Copied",
+  "pairing.copyFailed": "Copy failed — the code stays in the field, select it manually.",
+  "pairing.waitingScan": "Waiting for the scan…",
+  "pairing.ttl": "expires in {{time}}",
+  "pairing.expiredShort": "expired — start over",
+  "pairing.cancel": "Cancel",
+  "pairing.requestTitle": "Connection request",
+  "pairing.requestHint":
+    "A device scanned the code. Match the four digits against its screen and confirm.",
+  "pairing.unverified": "unverified",
+  "pairing.sourceIp": "Device IP",
+  "pairing.noDeviceName": "no name",
+  "pairing.verifyLabel": "Verification code",
+  "pairing.verifyHint":
+    "Four digits are a screen match, not a password: they must be identical on both devices.",
+  "pairing.approve": "Confirm",
+  "pairing.deny": "Deny",
+  "pairing.confirmedTitle": "Device confirmed",
+  "pairing.confirmedMessage":
+    "The token will be issued at the device's next exchange — the entry appears in the device list.",
+  "pairing.deniedTitle": "Request denied",
+  "pairing.deniedMessage": "The device gets no token; the code is spent.",
+  "pairing.cancelledTitle": "Pairing cancelled",
+  "pairing.expiredTitle": "Pairing expired — start over",
+  "pairing.expiredMessage": "A code lives for 3 minutes. Create a new pairing.",
+  "pairing.revokedTitle": "Pairing revoked",
+  "pairing.failedTitle": "Pairing not created",
+  "pairing.restart": "Start over",
+  "pairing.done": "Done",
+
+  // The «Устройства» page (/system/devices, §10.2).
+  "pairing.devices.title": "Devices",
+  "pairing.devices.listLabel": "Paired devices",
+  "pairing.devices.loading": "Loading devices…",
+  "pairing.devices.failed": "Could not load the devices",
+  "pairing.devices.loginHint":
+    "The device list requires the owner session — sign in to see the connected devices.",
+  "pairing.devices.empty": "No paired devices yet",
+  "pairing.devices.emptyHint":
+    "Connect a phone or tablet: «Connect a device» → QR → confirmation.",
+  "pairing.devices.state.active": "active",
+  "pairing.devices.state.expired": "expired",
+  "pairing.devices.state.revoked": "revoked",
+  "pairing.devices.created": "connected",
+  "pairing.devices.lastIp": "last IP",
+  "pairing.devices.expires": "sliding TTL until",
+  "pairing.devices.hardExpires": "hard until",
+  "pairing.devices.revoke": "Revoke",
+  "pairing.devices.revokeConfirm":
+    "Revoke «{{name}}»? Revocation is irreversible — the device will need a fresh pairing.",
+  "pairing.devices.revoked": "Device revoked",
+  "pairing.devices.revokeFailed": "Could not revoke the device",
+  "pairing.unsupportedTitle": "Pairing is unavailable in this mode",
+  "pairing.unsupportedMessage":
+    "The devices domain speaks the board merge-API (ADR 0012); the direct-mnemos mode has no such page.",
+
+  // The device page (/pair, §2.3 — no authentication).
+  "pair.title": "Connect this device",
+  "pair.intro": "Enter the pairing code from the owner's screen and a device name.",
+  "pair.codeLabel": "Pairing code",
+  "pair.codeInvalid": "The code cannot be empty",
+  "pair.nameLabel": "Device name",
+  "pair.defaultName": "Browser on {{platform}}",
+  "pair.platformUnknown": "unknown platform",
+  "pair.connect": "Connect",
+  "pair.connecting": "Connecting…",
+  "pair.verifyingTitle": "Code accepted — confirm on the trusted side",
+  "pair.verifyHint":
+    "Show the owner these four digits and wait for the confirmation on their screen.",
+  "pair.waitHint":
+    "We will re-check automatically in a minute; the button works manually too.",
+  "pair.checkNow": "Check now",
+  "pair.checking": "Checking…",
+  "pair.successTitle": "Device connected",
+  "pair.tokenLabel": "Device token",
+  "pair.tokenOnce":
+    "The token is shown once — save it now. This page cannot restore it.",
+  "pair.copyFailed": "Copy failed — the token stays in the field, select it manually.",
+  "pair.deviceId": "Device id",
+  "pair.scope": "scope",
+  "pair.expires": "expires",
+  "pair.enterAnother": "Enter another code",
+  "pair.err403": "The code is bound to another address",
+  "pair.err404": "Unknown code",
+  "pair.err410": "The code expired or was already used",
+  "pair.err429": "Too many attempts",
+  "pair.err503": "Pairing is disabled on the server",
+  "pair.errGeneric": "Could not connect",
 };

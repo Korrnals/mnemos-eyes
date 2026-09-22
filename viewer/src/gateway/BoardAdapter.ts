@@ -38,12 +38,20 @@ import type {
   InboxRefreshResult,
   LaunchesPage,
   LaunchesParams,
+  DeviceRevokedResult,
+  DevicesPage,
   MemoryPulse,
   MemoryPulseItem,
   MemoryPulseServerNote,
   MergedMemoriesPage,
   MergedMemoryListItem,
   MergedTags,
+  PairingConfirmResult,
+  PairingCreatedResult,
+  PairingExchangeAwaiting,
+  PairingExchangeInput,
+  PairingIssuedResult,
+  PairingStatus,
   PulseParams,
   RuleDeletedAck,
   ScheduleCreateInput,
@@ -140,6 +148,17 @@ import type {
  * - runScheduleNow       POST /api/automation/schedules/{id}/run  → 200 | 404/422/409
  * - listHooks / createHook / patchHook / deleteHook               (mirrors schedules)
  * - listLaunches         GET  /api/automation/launches            ?rule_id&kind&decision&limit&cursor
+ *
+ * CV-7 QR pairing + devices (ADR 0012; ui-token class EXCEPT the exchange leg):
+ * - listDevices          GET    /api/devices                      (no token material)
+ * - revokeDevice         DELETE /api/devices/{id}                 → 200 | 404
+ * - createPairing        POST   /api/pairing                      → 201 code+verify | 429/503
+ * - getPairing           GET    /api/pairing/{id}                 (trusted side; verify)
+ * - confirmPairing       POST   /api/pairing/{id}/confirm {allow} → 200 idempotent | 409/410
+ * - cancelPairing        DELETE /api/pairing/{id}                 → 200 | 409/410
+ * - exchangePairing      POST   /api/pairing/exchange             NO auth (code = credential);
+ *                                                                  202 awaiting | 200 issued (one-shot) |
+ *                                                                  403 foreign IP | 404/410/429/503
  *
  * v0 honestly declares metrics / traces / sessions / agentRecall
  * unsupported (501) — they are mnemos-side views the merge API does not
@@ -370,6 +389,53 @@ export interface BoardGateway extends MemoryGateway {
   deleteHook(ruleId: number): Promise<RuleDeletedAck>;
   /** Launch journal page (`GET /api/automation/launches`, cursor contract). */
   listLaunches(params?: LaunchesParams, signal?: AbortSignal): Promise<LaunchesPage>;
+
+  // --- CV-7 QR pairing + devices (ADR 0012; wire in the class docblock) ----
+
+  /** Device sessions (`GET /api/devices`, ui-token) — no token material. */
+  listDevices(signal?: AbortSignal): Promise<DevicesPage>;
+  /**
+   * Revoke a device session (`DELETE /api/devices/{id}`, ui-token).
+   * TERMINAL — only a fresh pairing restores access; SSE pairing.revoked
+   * carries the device_id, the next token-bearing request gets 401.
+   */
+  revokeDevice(deviceId: string): Promise<DeviceRevokedResult>;
+  /**
+   * Start a pairing (`POST /api/pairing`, ui-token). 201 carries the
+   * single-use code + the 4 verify digits EXACTLY once; 429 rate 3/10 min
+   * per client; 503 fail-closed while the server has no ui token.
+   */
+  createPairing(): Promise<PairingCreatedResult>;
+  /**
+   * Trusted-side status (`GET /api/pairing/{id}`, ui-token) — the owner
+   * panel's only source of the verify digits + scan metadata (§3.3: the
+   * digits never ride SSE).
+   */
+  getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus>;
+  /**
+   * Owner decision (`POST /api/pairing/{id}/confirm {allow}`, ui-token).
+   * allow=true → confirmed (SSE pairing.confirmed); false → revoked.
+   * Repeat confirms answer 200 idempotently; confirm before scan → 409;
+   * TTL-passed → 410; rate 3/10 min per client.
+   */
+  confirmPairing(pairingId: string, allow: boolean): Promise<PairingConfirmResult>;
+  /**
+   * Owner cancel before issued (`DELETE /api/pairing/{id}`, ui-token).
+   * Idempotent on revoked (200); issued → 409 (revoke the DEVICE instead);
+   * TTL-passed → 410.
+   */
+  cancelPairing(pairingId: string): Promise<PairingConfirmResult>;
+  /**
+   * The DEVICE leg (`POST /api/pairing/exchange`) — deliberately NO auth:
+   * the single-use code IS the credential (ADR 0012 §2.3). Poll semantics:
+   * 202 awaiting_confirmation (+verify) while unconfirmed/scanned, 200
+   * one-shot issuance ({device_id, device_token: mnd_…}), 404 unknown code,
+   * 410 expired/used/revoked, 403 foreign client IP, 429 rate, 503
+   * fail-closed without a configured ui token.
+   */
+  exchangePairing(
+    payload: PairingExchangeInput,
+  ): Promise<PairingExchangeAwaiting | PairingIssuedResult>;
 }
 
 export interface BoardAdapterOptions {
@@ -941,6 +1007,68 @@ export class BoardAdapter implements BoardGateway {
       },
       signal,
     });
+  }
+
+  // --- CV-7 QR pairing + devices (ADR 0012) ----------------------------------
+
+  async listDevices(signal?: AbortSignal): Promise<DevicesPage> {
+    return this.request<DevicesPage>("/devices", { signal, auth: true });
+  }
+
+  async revokeDevice(deviceId: string): Promise<DeviceRevokedResult> {
+    return this.request<DeviceRevokedResult>(
+      `/devices/${encodeURIComponent(deviceId)}`,
+      { method: "DELETE", auth: true },
+    );
+  }
+
+  async createPairing(): Promise<PairingCreatedResult> {
+    // Wire shape: the optional owner label (device_name) stays unset — the
+    // device's self-asserted name at exchange is what the owner confirms.
+    return this.request<PairingCreatedResult>("/pairing", {
+      method: "POST",
+      body: { device_name: "" },
+      auth: true,
+    });
+  }
+
+  async getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus> {
+    return this.request<PairingStatus>(
+      `/pairing/${encodeURIComponent(pairingId)}`,
+      { signal, auth: true },
+    );
+  }
+
+  async confirmPairing(
+    pairingId: string,
+    allow: boolean,
+  ): Promise<PairingConfirmResult> {
+    return this.request<PairingConfirmResult>(
+      `/pairing/${encodeURIComponent(pairingId)}/confirm`,
+      { method: "POST", body: { allow }, auth: true },
+    );
+  }
+
+  async cancelPairing(pairingId: string): Promise<PairingConfirmResult> {
+    return this.request<PairingConfirmResult>(
+      `/pairing/${encodeURIComponent(pairingId)}`,
+      { method: "DELETE", auth: true },
+    );
+  }
+
+  async exchangePairing(
+    payload: PairingExchangeInput,
+  ): Promise<PairingExchangeAwaiting | PairingIssuedResult> {
+    // NO `auth: true` on purpose: the exchange leg answers an unauthenticated
+    // device; a Bearer header here would only leak the owner token to a
+    // route that never asked for it (ADR 0012 §2.3, contract audit point).
+    return this.request<PairingExchangeAwaiting | PairingIssuedResult>(
+      "/pairing/exchange",
+      {
+        method: "POST",
+        body: { code: payload.code, device_name: payload.device_name ?? "" },
+      },
+    );
   }
 
   // --- v0-unsupported mnemos-side views (fail loud, never pretend) ----------

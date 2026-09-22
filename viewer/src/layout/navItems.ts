@@ -18,6 +18,7 @@ import {
   Users,
   Layers,
   Bot,
+  Smartphone,
   Workflow,
 } from "lucide-react";
 import type { TranslateFn, TranslationKey } from "@/i18n";
@@ -130,6 +131,9 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
       { to: "/system/status", key: "nav.status", icon: Activity, end: true },
       { to: "/system/settings", key: "nav.systemSettings", icon: Settings },
       { to: "/system/automation", key: "nav.systemAutomation", icon: Workflow },
+      // Устройства (CV-7, ADR 0012 Consequences): the paired-device list
+      // + QR pairing, in the Система domain per the IA design concept.
+      { to: "/system/devices", key: "nav.devices", icon: Smartphone, end: true },
       { to: "/system/sessions", key: "nav.sessions", icon: Users },
       { to: "/system/traces", key: "nav.traces", icon: Layers, end: true },
     ],
@@ -197,6 +201,8 @@ export function crumbsFor(pathname: string): Crumb[] {
       return [SYSTEM_CRUMB, { key: "nav.systemSettings" }];
     case "/system/automation":
       return [SYSTEM_CRUMB, { key: "nav.systemAutomation" }];
+    case "/system/devices":
+      return [SYSTEM_CRUMB, { key: "nav.devices" }];
     case "/agents/execution":
       return [AGENTS_CRUMB, { key: "nav.agentsExecution" }];
     case "/agents/harnesses":
