@@ -411,12 +411,14 @@ helm 3 переиспользует user-supplied values прошлых апгр
 
 ```bash
 helm upgrade --install vesmaro-eyes deploy/chart/vesmaro-eyes \
+  --set rootApp=app \
   -n $NS --atomic --timeout 5m \
   -f deploy/chart/vesmaro-eyes/values.yaml \
   --set image.tag=<версия>
 kubectl -n $NS rollout status deploy/vesmaro-eyes --timeout=180s
 kubectl get deploy vesmaro-eyes -n $NS -o jsonpath='{.spec.template.spec.containers[0].image}'   # должен совпасть с тегом
 ```
+`--set rootApp=app` обязателен в КАЖДОМ апгрейде: дефолт чарта — `board`, и апгрейд без явного флага возвращает legacy-борд (фолбэк-инциденты: 1.11.x, 2026-09-21, 2026-09-22).
 
 Версионный бамп — отдельный релизный PR (`scripts/sync-version.sh`),
 фича-PR версий не несут (урок волны #35: три конфликта из-за версионных
