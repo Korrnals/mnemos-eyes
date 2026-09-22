@@ -212,6 +212,7 @@ export const ru = {
 
   // --- tags -------------------------------------------------------------------
   "tags.title": "Теги",
+  "tags.familyRowLabel": "Теги этого семейства",
   "tags.filterLabel": "Фильтр тегов",
   "tags.filterPlaceholder": "напр. topic:fts",
   "tags.loading": "Загружаем теги",
@@ -228,6 +229,32 @@ export const ru = {
     "Фильтрация на клиенте — у mnemos нет выборки по тегу (ADR 0003 §9).",
   "tags.nothingCarries": "Под этим тегом ничего нет",
   "tags.nothingCarriesMessage": "Сейчас нет воспоминаний с тегом {{tag}}.",
+  // --- tags cloud (UI-17, spec 2026-09-21 §9; owner-approved copy) -----------
+  "tags.statsLine": "{{count}} тегов · данные на {{time}}",
+  "tags.partialData": "Данные от {{answered}} из {{total}} хранилищ",
+  "tags.partialStores": "Не ответили хранилища: {{servers}}",
+  "tags.family.all": "Все семейства",
+  "tags.family.bare": "без префикса",
+  "tags.family.tags": "{{count}} тегов",
+  "tags.band.core": "Ядро · 1000+",
+  "tags.band.frequent": "Частые · 100–999",
+  "tags.band.middle": "Средние · 10–99",
+  "tags.band.rare": "Редкие · 1–9",
+  "tags.band.showAll": "Показать все {{count}}",
+  "tags.band.showMore": "Ещё {{count}}",
+  "tags.band.collapse": "Свернуть",
+  "tags.searchMatches": "Подходит: {{count}}",
+  "tags.searchCapped": "Показаны первые {{count}} — уточните запрос",
+  "tags.group.heading": "Группа {{group}}",
+  "tags.group.open": "Открыть группу {{group}}",
+  "tags.drill.siblings": "Рядом в семействе {{family}}",
+  "tags.drill.tasks": "Задачи с этим тегом",
+  "tags.drill.tasksEmpty": "Задач с этим тегом нет",
+  "tags.drill.memories": "Записи",
+  "tags.drill.subsetNote":
+    "Показано подмножество: дрилл идёт через поисковый ранжир и может быть неполным (BE-13)",
+  "tags.drill.storeErrors": "Недоступны хранилища: {{servers}}",
+  "tags.drill.openInMemories": "Открыть в Записях",
 
   // --- status -----------------------------------------------------------------
   "status.title": "Статус",
@@ -583,7 +610,6 @@ export const ru = {
   "traces.rawJson": "Сырой JSON",
   "traces.unknownStatus": "неизвестно",
 
-
   // --- agents domain (AGW-2: assignment trigger + execution tab) -------------------
   "agents.list.label": "Поручения задачи",
   "agents.list.loading": "Загружаем поручения",
@@ -632,7 +658,8 @@ export const ru = {
   "agents.executor.revokedReason": "доступ отозван",
   "agents.executor.disabledReason": "отключён владельцем (маршрутизация выключена)",
   "agents.executor.offlineReason": "не на связи — последняя связь {{age}} назад",
-  "agents.executor.staleReason": "пульс пропущен ({{age}} назад) — дефолту нужен строго онлайн",
+  "agents.executor.staleReason":
+    "пульс пропущен ({{age}} назад) — дефолту нужен строго онлайн",
   "agents.executor.staleShort": "пульс пропущен — дефолту нужен строго онлайн",
   "agents.sheet.title": "Взять в работу",
   "agents.sheet.subtitle": "{{id}}: поручение встанет в очередь к исполнителю",
@@ -646,19 +673,20 @@ export const ru = {
   "agents.sheet.submit": "Назначить",
   "agents.sheet.submitting": "Назначаем…",
   "agents.assign.open": "Взять в работу",
-  "agents.assign.terminalTask": "Задача в терминальной колонке — создание поручений закрыто",
+  "agents.assign.terminalTask":
+    "Задача в терминальной колонке — создание поручений закрыто",
   "agents.assign.createFailed": "Не удалось назначить",
   "agents.assign.created": "{{id}}: назначено",
   "agents.assign.createdDetail": "поручение в очереди, ждёт поллера",
   "agents.cancel.label": "Отменить",
-  "agents.cancel.confirm": "Исполнителю будет отправлен сигнал остановки. Отменить поручение?",
+  "agents.cancel.confirm":
+    "Исполнителю будет отправлен сигнал остановки. Отменить поручение?",
   "agents.cancel.reason": "отменено владельцем",
   "agents.cancel.sent": "{{id}}: отмена отправлена",
   "agents.cancel.sentDetail": "исполнитель получит сигнал остановки",
   "agents.cancel.failed": "Не удалось отменить поручение",
   "agents.retry.label": "Перезапустить",
   "agents.badge.title": "Исполнение: {{state}}",
-
 
   // --- agents domain: execution section (AGW-3) -----------------------------------
   "nav.agentsExecution": "Исполнение",
@@ -693,7 +721,8 @@ export const ru = {
   "agents.row.copyId": "Копировать id ({{id}})",
   "agents.timing.expiresIn": "истечёт через ~{{minutes}} мин",
   "agents.timing.noClaimStamp": "без метки взятия",
-  "agents.timing.queuedNotifyHint": "~{{minutes}} мин без исполнителя — poller не забирает (уведомление)",
+  "agents.timing.queuedNotifyHint":
+    "~{{minutes}} мин без исполнителя — poller не забирает (уведомление)",
   "agents.timing.reapOverdue": "истёк — ждёт жнеца",
   "agents.timeline.created": "создано",
   "agents.timeline.claimed": "взято",
@@ -736,7 +765,6 @@ export const ru = {
   "agents.settings.saveFailed": "Не удалось сохранить настройки исполнения",
   "agents.settings.meshIneligible": "mesh-транспорт — маршрутизация недоступна до R4",
 
-
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Автоматизация",
   "automation.title": "Автоматизация",
@@ -771,7 +799,8 @@ export const ru = {
   "automation.hook.subtitle":
     "Событие (on) + условия + действие; создаётся выключенным",
   "automation.hook.empty": "Правил нет",
-  "automation.hook.emptyHint": "Создайте правило на событие борда — действие сработает при включении.",
+  "automation.hook.emptyHint":
+    "Создайте правило на событие борда — действие сработает при включении.",
   "automation.hook.noCondition": "без условий",
   "automation.rule.enabled": "включено",
   "automation.rule.disabled": "выключено",
@@ -804,7 +833,8 @@ export const ru = {
   "automation.form.addClause": "Добавить",
   "automation.form.addClauseTitle": "Добавить условие из словаря",
   "automation.form.removeClause": "Убрать условие {{clause}}",
-  "automation.form.noValueEnum": "У этого поля нет закрытого набора значений — условие недоступно в v1.",
+  "automation.form.noValueEnum":
+    "У этого поля нет закрытого набора значений — условие недоступно в v1.",
   "automation.form.onLabel": "Событие (on)",
   "automation.form.actionLabel": "Действие",
   "automation.form.create": "Создать",
@@ -826,13 +856,15 @@ export const ru = {
   "automation.mutation.createFailed": "Не удалось создать правило",
   "automation.mutation.patchFailed": "Не удалось изменить правило",
   "automation.mutation.deleteFailed": "Не удалось удалить правило",
-  "automation.mutation.deleteConfirm": "Удалить правило «{{name}}»? Имя останется занятым (мягкое удаление с retention) — создать правило с тем же именем нельзя.",
+  "automation.mutation.deleteConfirm":
+    "Удалить правило «{{name}}»? Имя останется занятым (мягкое удаление с retention) — создать правило с тем же именем нельзя.",
   "automation.mutation.deleted": "«{{name}}» удалено",
   "automation.mutation.retainedNote": "мягкое удаление: строка сохранена выключенной",
   "automation.mutation.created": "«{{name}}» создано (выключено)",
   "automation.mutation.runFailed": "Не удалось запустить",
   "automation.mutation.launched": "«{{name}}»: запущено",
-  "automation.mutation.launchedDetail": "поручение в очереди задачи {{id}} — смотрите «Исполнение»",
+  "automation.mutation.launchedDetail":
+    "поручение в очереди задачи {{id}} — смотрите «Исполнение»",
   "automation.mutation.skipped": "«{{name}}»: пропущено",
   "automation.mutation.skippedDetail": "запуск отказан — причина в журнале",
   "overview.agentsAll": "Исполнение",

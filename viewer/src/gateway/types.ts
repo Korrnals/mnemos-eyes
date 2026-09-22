@@ -79,6 +79,8 @@ export interface SearchResult {
 export interface ListMemoriesParams {
   status?: string;
   project?: string;
+  /** Comma-separated tag filter (native listing filter, UI-17 spec §5.6). */
+  tags?: string;
   limit?: number;
   offset?: number;
 }

@@ -3,6 +3,7 @@ import { DEFAULT_TIMEOUT_MS, SEARCH_TIMEOUT_MS, requestJson } from "./http";
 import type { RequestConfig } from "./http";
 import { getToken, notifyUnauthorized } from "./auth";
 import { ApiError } from "@/lib/errors";
+import type { TagDrill, TagDrillParams } from "./boardTypes";
 import type {
   A2ASession,
   HealthStatus,
@@ -89,6 +90,8 @@ export class HttpAdapter implements MemoryGateway {
         query: {
           status: params.status,
           project: params.project,
+          // Native mnemos listing filter (UI-17 §5.6 «Открыть в Записях»).
+          tags: params.tags,
           limit: params.limit,
           offset: params.offset,
         },
@@ -109,6 +112,38 @@ export class HttpAdapter implements MemoryGateway {
 
   async listTags(signal?: AbortSignal): Promise<TagSummary[]> {
     return this.request<TagSummary[]>("/tags", { signal });
+  }
+
+  /**
+   * Tag drill on mnemos mode (UI-17 §5/§10.2). mnemos has no drill endpoint
+   * and no board: the memories slice is composed from a wildcard search with
+   * the tag filter (the same ranker BE-13 documents) and `tasks` stays empty —
+   * honest absence, never a fake board.
+   */
+  async drillTag(
+    tag: string,
+    params: TagDrillParams = {},
+    signal?: AbortSignal,
+  ): Promise<TagDrill> {
+    const hits = await this.search(
+      { query: "*", tags: [tag], limit: params.limit ?? 12 },
+      signal,
+    );
+    return {
+      ok: true,
+      tag,
+      tasks: [],
+      memories: hits.map((hit) => ({
+        id: hit.id,
+        title: hit.title,
+        tags: hit.tags,
+        server: null,
+        created_at: null,
+        status: null,
+        excerpt: hit.content.slice(0, 180),
+      })),
+      errors: [],
+    };
   }
 
   async agentRecall(

@@ -1,4 +1,5 @@
 import type { MemoryGateway } from "./MemoryGateway";
+import type { TagDrill, TagDrillParams } from "./boardTypes";
 import type {
   A2ASession,
   HealthStatus,
@@ -41,6 +42,14 @@ export class TauriAdapter implements MemoryGateway {
 
   listTags(_signal?: AbortSignal): Promise<TagSummary[]> {
     return this.unimplemented("listTags");
+  }
+
+  drillTag(
+    _tag: string,
+    _params?: TagDrillParams,
+    _signal?: AbortSignal,
+  ): Promise<TagDrill> {
+    return this.unimplemented("drillTag");
   }
 
   agentRecall(

@@ -44,6 +44,11 @@ import type {
   ScheduleRule,
   ScheduleRunResult,
   SchedulesPage,
+  TagDrill,
+  TagDrillMemory,
+  TagDrillParams,
+  TagDrillStoreError,
+  TagDrillTask,
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
@@ -80,6 +85,8 @@ import type {
  * - listMemories   GET /api/memories             ?limit&cursor&scope&status&project&…
  * - getMemory      GET /api/memories/item/{id}   (first resolving server)
  * - listTags       GET /api/tags                 (aggregated, count DESC/name ASC)
+ * - mergedTags     GET /api/tags                 (raw TagListOut: + errors[]/servers_scanned, UI-17 §6)
+ * - drillTag       GET /api/tags/{tag}/drill     ?limit (tasks + memories subset, UI-17 §5)
  * - health         GET /api/health
  * - board          GET /api/board                ?status
  * - inbox          GET /api/tasks/inbox          ?scope&project&include_adopted
@@ -165,6 +172,12 @@ export interface BoardGateway extends MemoryGateway {
     params?: BoardListParams,
     signal?: AbortSignal,
   ): Promise<MergedMemoriesPage>;
+  /**
+   * Aggregated tag listing WITH store honesty (`GET /api/tags` raw shape):
+   * the `TagSummary`-projecting `listTags` drops `errors[]`/`servers_scanned`;
+   * the tags cloud needs both for the partial-data line (UI-17 spec §6).
+   */
+  mergedTags(signal?: AbortSignal): Promise<MergedTags>;
   /** SSE stream on `/api/events` (see gateway/events.ts). */
   events(): EventStream;
   /** Merged recency feed (`GET /api/memories/pulse`, Ф1). */
@@ -339,7 +352,14 @@ export class BoardAdapter implements BoardGateway {
     signal?: AbortSignal,
   ): Promise<Memory[]> {
     const page = await this.listMemoriesPage(
-      { limit: params.limit, status: params.status, project: params.project },
+      {
+        limit: params.limit,
+        status: params.status,
+        project: params.project,
+        // UI-17 §5.6: the «Открыть в Записях» path narrows the merged list
+        // by tag — a native mnemos listing filter, pass-through verbatim.
+        tags: params.tags,
+      },
       signal,
     );
     return page.items.map(listItemToMemory);
@@ -395,6 +415,27 @@ export class BoardAdapter implements BoardGateway {
       tag: tag.name,
       count: tag.count,
     }));
+  }
+
+  async mergedTags(signal?: AbortSignal): Promise<MergedTags> {
+    return this.request<MergedTags>("/tags", { signal });
+  }
+
+  /**
+   * Everything tied to one tag (`GET /api/tags/{tag}/drill`, UI-17 §5).
+   * The board answers an anonymous dict — normalised defensively with the
+   * same honest-defaults policy as pulse/boardHealth.
+   */
+  async drillTag(
+    tag: string,
+    params: TagDrillParams = {},
+    signal?: AbortSignal,
+  ): Promise<TagDrill> {
+    const payload = await this.request<Record<string, unknown>>(
+      `/tags/${encodeURIComponent(tag)}/drill`,
+      { query: { limit: params.limit }, signal },
+    );
+    return normalizeTagDrill(payload, tag);
   }
 
   async health(signal?: AbortSignal): Promise<HealthStatus> {
@@ -940,9 +981,53 @@ export function normalizePulse(payload: unknown): MemoryPulse {
   };
 }
 
-/** `GET /api/health` anonymous dict → `BoardHealthDetail` (per-store rows). */
-export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {
+/**
+ * `GET /api/tags/{tag}/drill` anonymous dict → `TagDrill` (UI-17 §5).
+ * Rows missing fields get honest defaults; `ok` mirrors the server flag
+ * (`true` unless every store failed with an empty memory set).
+ */
+export function normalizeTagDrill(payload: unknown, tag: string): TagDrill {
   const source = (payload ?? {}) as Record<string, unknown>;
+  const tasks = Array.isArray(source.tasks) ? source.tasks : [];
+  const memories = Array.isArray(source.memories) ? source.memories : [];
+  const errors = Array.isArray(source.errors) ? source.errors : [];
+  return {
+    ok: source.ok === true || (errors.length === 0 && source.ok !== false),
+    tag: str(source.tag, tag),
+    tasks: tasks.map((row): TagDrillTask => {
+      const task = (row ?? {}) as Record<string, unknown>;
+      return {
+        id: str(task.id),
+        title: str(task.title),
+        col: str(task.col),
+        agents: strArray(task.agents),
+        env: str(task.env),
+      };
+    }),
+    memories: memories.map((row): TagDrillMemory => {
+      const memory = (row ?? {}) as Record<string, unknown>;
+      return {
+        id: str(memory.id),
+        title: str(memory.title),
+        tags: strArray(memory.tags),
+        server: typeof memory.server === "string" ? memory.server : null,
+        created_at: typeof memory.created_at === "string" ? memory.created_at : null,
+        status: typeof memory.status === "string" ? memory.status : null,
+        excerpt: str(memory.excerpt),
+      };
+    }),
+    errors: errors.map((row): TagDrillStoreError => {
+      const error = (row ?? {}) as Record<string, unknown>;
+      return {
+        server: typeof error.server === "string" ? error.server : undefined,
+        status: typeof error.status === "number" ? error.status : undefined,
+      };
+    }),
+  };
+}
+
+/** `GET /api/health` anonymous dict → `BoardHealthDetail` (per-store rows). */
+export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {  const source = (payload ?? {}) as Record<string, unknown>;
   const servers = Array.isArray(source.servers) ? source.servers : [];
   return {
     ok: source.ok === true,

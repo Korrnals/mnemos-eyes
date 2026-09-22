@@ -43,6 +43,60 @@ export type MergedMemoryListItem = Schemas["MemoryListItem"];
 /** Aggregated tag listing — board `TagListOut` schema (`GET /api/tags`). */
 export type MergedTags = Schemas["TagListOut"];
 
+// --- Tag drill (UI-17, spec 2026-09-21-tags-cloud-spec §5; wire types are
+// hand-written because the board serves the drill as an anonymous
+// `dict[str, Any]` — same convention as BoardHealth/MemoryPulse above). ------
+
+/** Drill query params (`GET /api/tags/{tag}/drill?limit=`, server cap 25). */
+export interface TagDrillParams {
+  /** Max memories returned per the merged answer (server clamps to 25). */
+  readonly limit?: number;
+}
+
+/** One board task carrying the drilled tag (server projection of TaskOut). */
+export interface TagDrillTask {
+  readonly id: string;
+  readonly title: string;
+  readonly col: string;
+  readonly agents: readonly string[];
+  readonly env: string;
+}
+
+/**
+ * One memory matching the drilled tag — excerpt-only row (SEC-4 mirror of
+ * the server drill projection; `server` is the contributing store, absent
+ * on single-store mnemos gateways).
+ */
+export interface TagDrillMemory {
+  readonly id: string;
+  readonly title: string;
+  readonly tags: readonly string[];
+  readonly server?: string | null;
+  readonly created_at?: string | null;
+  readonly status?: string | null;
+  readonly excerpt: string;
+}
+
+/** One unreachable store in a drill answer (mirrors the wire error rows). */
+export interface TagDrillStoreError {
+  readonly server?: string;
+  readonly status?: number;
+}
+
+/**
+ * `GET /api/tags/{tag}/drill` — everything tied to one tag (UI-17 §5).
+ * BE-13 honesty: memories ride the search ranker, so `memories` is a
+ * SUBSET — the UI states it (`tags.drill.subsetNote`), the header count
+ * stays sourced from the full `/api/tags` aggregate.
+ */
+export interface TagDrill {
+  readonly ok: boolean;
+  readonly tag: string;
+  readonly tasks: readonly TagDrillTask[];
+  readonly memories: readonly TagDrillMemory[];
+  readonly errors: readonly TagDrillStoreError[];
+}
+
 // --- Ф2 task-domain wire types (generated entity schemas) ---------------------
 
 /** One agent report — board `ReportOut` schema. */
