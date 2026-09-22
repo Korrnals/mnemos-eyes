@@ -52,6 +52,11 @@ from .store import (
     AutomationValidationError,
     DEVICE_TOKEN_PREFIX,
     DeviceQuotaError,
+    ENROLLMENT_MAX_LIVE,
+    ENROLLMENT_TOKEN_PREFIX,
+    EnrollmentNotFoundError,
+    EnrollmentQuotaError,
+    EnrollmentStateError,
     EXECUTOR_TRANSPORTS,
     ExecutorConflictError,
     ExecutorError,
@@ -359,6 +364,7 @@ def _executor_public(e: dict[str, Any]) -> dict[str, Any]:
         "state": e.get("state", "pending"),
         "last_seen": e.get("last_seen", ""),
         "presence": presence_from_last_seen(e.get("last_seen", "")),
+        "registered_via": e.get("registered_via", ""),
         "registered_at": e.get("registered_at", ""),
         "updated_at": e.get("updated_at", ""),
     }
@@ -458,7 +464,10 @@ async def _validation_sweeper() -> None:
 # expires_at to `expired` and emits SSE pairing.expired + notification;
 # it also expires device sessions whose sliding (30 d, no activity) or
 # hard (90 d) clock ran out (no SSE — the §11 dictionary has no device.*
-# kinds; the device learns via 401 on its next request).
+# kinds; the device learns via 401 on its next request). Enrollment tokens
+# (Amd 2 §4 supplement) ride the same cycle: created past the 15-min TTL
+# → expired + SSE enrollment.expired (no notification — owner-initiated
+# surface, the UI dialog carries its own countdown arc).
 _PAIRING_SWEEP_INTERVAL_S = 60.0
 _PAIRING_SWEEP_START_STAGGER_S = 45.0   # never tick in lockstep with the reaper
 _pairing_sweep_log = logging.getLogger("vesmaro.pairing-sweep")
@@ -479,12 +488,20 @@ def _pairing_sweep_once() -> dict[str, int]:
     for row in devices:
         _pairing_sweep_log.info(
             "device session expired id=%s name=%s", row["id"], row["name"])
-    if pairings or devices:
+    enrollments = store.expire_stale_enrollments()
+    for row in enrollments:
+        _broadcast({"kind": "enrollment.expired",
+                    "enrollment_id": row["enrollment_id"]})
         _pairing_sweep_log.info(
-            "pairing sweep pass: pairings_expired=%d devices_expired=%d",
-            len(pairings), len(devices))
+            "enrollment token expired id=%s", row["enrollment_id"])
+    if pairings or devices or enrollments:
+        _pairing_sweep_log.info(
+            "pairing sweep pass: pairings_expired=%d devices_expired=%d "
+            "enrollments_expired=%d",
+            len(pairings), len(devices), len(enrollments))
     return {"pairings_expired": len(pairings),
-            "devices_expired": len(devices)}
+            "devices_expired": len(devices),
+            "enrollments_expired": len(enrollments)}
 
 
 async def _pairing_sweeper() -> None:
@@ -1199,6 +1216,7 @@ class ExecutorOut(_ApiModel):
     state: str = "pending"             # pending | approved | revoked
     last_seen: str = ""
     presence: str = "offline"          # online | stale | offline (computed)
+    registered_via: str = ""           # '' = machine bootstrap; 'enrollment:<id>'
     registered_at: str = ""
     updated_at: str = ""
 
@@ -1224,6 +1242,46 @@ class ExecutorRegisteredOut(_ApiModel):
     ok: bool
     executor: ExecutorOut
     executor_secret: str               # shown EXACTLY once — never again
+
+
+# Enrollment contracts (ADR 0009 Amd 2 §4 supplement): one-time mne_ tokens
+# the owner mints from the UI; the executor presents one on POST
+# /api/executors. Hints are advisory UI material (bootstrap-command text),
+# validated against the closed allowlist at creation, never contract fields.
+class EnrollmentCreateBody(BaseModel):
+    label: str = Field(default="", max_length=64)
+    harness_hint: str = Field(default="", max_length=60)
+    name_hint: str = Field(default="", max_length=120)
+
+
+class EnrollmentOut(_ApiModel):
+    enrollment_id: str
+    label: str = ""
+    harness_hint: str = ""
+    name_hint: str = ""
+    state: str = "created"             # created | used | expired | revoked
+    created_at: str = ""
+    expires_at: str = ""
+    used_at: str = ""
+    used_ip: str = ""
+    executor_id: str = ""
+
+
+class EnrollmentCreatedOut(_ApiModel):
+    ok: bool
+    enrollment: EnrollmentOut
+    token: str                         # the ONLY place mne_… ever appears
+
+
+class EnrollmentListOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[EnrollmentOut]
+
+
+class EnrollmentRevokedOut(_ApiModel):
+    ok: bool
+    enrollment: EnrollmentOut
 
 
 class ExecutorPatch(BaseModel):
@@ -3154,6 +3212,18 @@ _ASSIGNMENT_HEARTBEAT_RATE_WINDOW = 60.0
 _assignment_heartbeat_limiter = RateLimiter(
     limit=_ASSIGNMENT_HEARTBEAT_RATE_LIMIT,
     window=_ASSIGNMENT_HEARTBEAT_RATE_WINDOW)
+# Enrollment budgets (Amd 2 §4 supplement): creation mirrors pairing's
+# owner-initiated 3/10 min; revoke is a cheap ui mutation on the task-drafts
+# family. ENROLLMENT_MAX_LIVE (imported from the store) caps the live-token
+# volume at 3 — pace limits bound requests, quotas bound volume (PR #18 F5).
+_ENROLLMENT_CREATE_RATE_LIMIT = 3       # creations per client ...
+_ENROLLMENT_CREATE_RATE_WINDOW = 600.0  # ... per sliding 10 min (pairing §3.4)
+_enrollment_create_limiter = RateLimiter(
+    limit=_ENROLLMENT_CREATE_RATE_LIMIT, window=_ENROLLMENT_CREATE_RATE_WINDOW)
+_ENROLLMENT_REVOKE_RATE_LIMIT = 10      # revokes per client ...
+_ENROLLMENT_REVOKE_RATE_WINDOW = 60.0   # ... per sliding minute (ui family)
+_enrollment_revoke_limiter = RateLimiter(
+    limit=_ENROLLMENT_REVOKE_RATE_LIMIT, window=_ENROLLMENT_REVOKE_RATE_WINDOW)
 
 
 def _executor_http(exc: ExecutorError) -> HTTPException:
@@ -3173,19 +3243,24 @@ async def register_executor(body: ExecutorRegister,
                             request: Request) -> ExecutorRegisteredOut:
     """Register an executor (ARCH-9, ladder L0 — Amd 2 §4).
 
-    MACHINE-token bootstrap: registration via the board token creates a
-    PENDING record; the owner approves via ui-token PATCH. The board mints
-    ``executor_secret`` (token_hex(24)) and stores ONLY its sha256 hash —
-    the plaintext appears exactly once, in this response (claim_token
-    pattern, long-lived). Capabilities are owner-declared via PATCH, never
-    accepted at registration. 422 unknown harness/transport; 409 duplicate
-    name; 429 rate 10/60 s per client AND a total cap on OPEN pending
-    registrations (PR #18 F5: pace limits bound requests, not volume —
-    approving/revoking/deleting frees quota). The owner NOTIFICATION fires
-    for the first open pending registration per host; later ones from the
-    same host are audit + SSE only (spam guard — the audit event is
-    always written)."""
-    _guard_write(request)
+    MACHINE-token bootstrap OR a one-time ENROLLMENT token (``mne_…``,
+    Amd 2 §4 supplement): both legs create a PENDING record; the owner
+    approves via ui-token PATCH. The board mints ``executor_secret``
+    (token_hex(24)) and stores ONLY its sha256 hash — the plaintext appears
+    exactly once, in this response (claim_token pattern, long-lived).
+    Capabilities are owner-declared via PATCH, never accepted at
+    registration. The enrollment leg spends the token in the same store
+    transaction as the INSERT (single-use; a rolled-back registration never
+    burns it) and broadcasts ``enrollment.used`` (NO duplicate notification
+    — the registration notification below already covers the owner; spam
+    guard per host applies). 422 unknown harness/transport; 409 duplicate
+    name; 410 spent/dead enrollment token; 429 rate 10/60 s per client AND
+    a total cap on OPEN pending registrations (PR #18 F5: pace limits bound
+    requests, not volume — approving/revoking/deleting frees quota). The
+    owner NOTIFICATION fires for the first open pending registration per
+    host; later ones from the same host are audit + SSE only (spam guard —
+    the audit event is always written)."""
+    enrollment = _guard_register(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _executor_register_limiter.acquire(client_ip):
         raise HTTPException(
@@ -3198,14 +3273,25 @@ async def register_executor(body: ExecutorRegister,
         raise HTTPException(422, f"invalid transport: {body.transport}")
     try:
         row, secret = store.register_executor(
-            body.name, body.harness, body.host, body.transport, body.version)
+            body.name, body.harness, body.host, body.transport, body.version,
+            enrollment=enrollment, enrollment_ip=client_ip)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    except EnrollmentStateError as exc:
+        raise HTTPException(410, "enrollment token already used") from exc
     except ExecutorError as exc:
         raise _executor_http(exc) from exc
     event = {"kind": "executor.registered",
              "executor": _executor_public(row),
              "prev_state": None, "state": row["state"]}
+    if enrollment is not None:
+        # Payload audit: id + executor link + presenting IP only — never a
+        # token fragment (the dictionary rule, ADR 0012 §3.3 pattern).
+        _broadcast({"kind": "enrollment.used",
+                    "enrollment_id": enrollment["id"],
+                    "executor_id": row["id"],
+                    "executor_name": row["name"],
+                    "used_ip": client_ip})
     if store.pending_executors_by_host(row.get("host") or "") <= 1:
         _notify_and_broadcast(
             "system", f"Исполнитель {row['name']} зарегистрирован",
@@ -3241,6 +3327,83 @@ async def list_executors() -> ExecutorListOut:
             "sweeper_interval_s": int(_PRESENCE_SWEEP_INTERVAL_S),
         },
     }
+
+
+# -------------------------------------- executor enrollment (Amd 2 §4 suppl.)
+# Owner-side minting of one-time registration tokens (mne_). Declared BEFORE
+# the parametric /api/executors/{executor_id} routes — same-prefix paths must
+# not depend on FastAPI match order. Fail-closed 503 while the ui token is
+# not configured (the _guard_ui_write pattern): no owner, no minting.
+@app.post("/api/executors/enrollment", status_code=201)
+async def create_enrollment(body: EnrollmentCreateBody,
+                            request: Request) -> EnrollmentCreatedOut:
+    """Mint a one-time enrollment token (ui-token; ADR 0009 Amd 2 §4
+    supplement). 201 returns the ``mne_`` token — it appears in exactly one
+    response body, this one; the store keeps only its sha256. TTL 15 min
+    (server constant; renewal = a new token). Rate 3 per 10 min per client
+    (pairing-create pattern); live tokens capped at ENROLLMENT_MAX_LIVE →
+    409 with NO auto-revoke (the owner chooses, device-quota principle).
+    422 unknown harness_hint (the hint feeds the bootstrap command — a
+    bogus hint would mislead the remote leg)."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _enrollment_create_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"enrollment creation rate limit exceeded "
+            f"({_ENROLLMENT_CREATE_RATE_LIMIT} per "
+            f"{_ENROLLMENT_CREATE_RATE_WINDOW:.0f}s per client)",
+        )
+    try:
+        row, token = store.create_enrollment(
+            label=body.label, harness_hint=body.harness_hint,
+            name_hint=body.name_hint)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except EnrollmentQuotaError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    _broadcast({"kind": "enrollment.created",
+                "enrollment_id": row["enrollment_id"],
+                "label": row["label"]})
+    return {"ok": True, "enrollment": row, "token": token}
+
+
+@app.get("/api/executors/enrollment")
+async def list_enrollments(request: Request) -> EnrollmentListOut:
+    """Enrollment tokens for the owner panel (ui-token). Items carry NO
+    token material — token_hash stays in the store (hash-only); the list
+    shows live tokens plus terminal history for the TTL/used audit trail."""
+    _guard_ui_write(request)
+    items = store.list_enrollments()
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@app.delete("/api/executors/enrollment/{enrollment_id}")
+async def revoke_enrollment(enrollment_id: str,
+                            request: Request) -> EnrollmentRevokedOut:
+    """Revoke a LIVE enrollment token (ui-token). created → revoked + SSE
+    ``enrollment.revoked``; already revoked → 200 idempotent; used → 409
+    (the executor EXISTS — kill it via the executor registry, never here);
+    expired → 409 (the TTL already did the job); unknown → 404."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _enrollment_revoke_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"enrollment revoke rate limit exceeded "
+            f"({_ENROLLMENT_REVOKE_RATE_LIMIT} per "
+            f"{_ENROLLMENT_REVOKE_RATE_WINDOW:.0f}s per client)",
+        )
+    try:
+        row, transitioned = store.revoke_enrollment(enrollment_id)
+    except EnrollmentNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except EnrollmentStateError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if transitioned:
+        _broadcast({"kind": "enrollment.revoked",
+                    "enrollment_id": enrollment_id})
+    return {"ok": True, "enrollment": row}
 
 
 @app.post("/api/executors/{executor_id}/heartbeat")
@@ -4204,6 +4367,42 @@ def _guard_machine_write(request: Request) -> dict[str, Any] | None:
             raise HTTPException(
                 403, "executor token is not approved for the machine loop")
         return executor
+    _guard_write(request, classes=("machine",))
+    return None
+
+
+def _guard_register(request: Request) -> dict[str, Any] | None:
+    """Registration guard (ADR 0009 A1 + Amd 2 §4 supplement): accepts the
+    board (machine) token — the L0 bootstrap — OR a single-use ``mne_``
+    enrollment token. Returns the live enrollment row (truthy) on the
+    enrollment leg, None on the machine leg; the route passes it into
+    store.register_executor, which CASes created→used in the same
+    transaction as the executor INSERT.
+
+    Bearer ``mne_…`` semantics (design §3.1): unknown → 401 "enrollment
+    token required or invalid" (a guarded mutation answers 401 for a bad
+    credential — deliberately NOT pairing's 404, which belongs to the
+    dedicated unauthenticated exchange leg); known but expired / used /
+    revoked → 410 with the reason (diagnostic for the remote leg; hash
+    lookups leak nothing). No env 503 on this leg: the token itself is the
+    credential and approval waits downstream anyway (unlike pairing, whose
+    protocol cannot complete without the trusted side)."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith(f"Bearer {ENROLLMENT_TOKEN_PREFIX}"):
+        token = auth[len("Bearer "):].strip()
+        row = store.lookup_enrollment_by_token(token)
+        if row is None:
+            raise HTTPException(401, "enrollment token required or invalid")
+        state = ("expired" if store.enrollment_row_expired(row)
+                 else row["state"])
+        if state == "expired":
+            raise HTTPException(
+                410, "enrollment token expired — request a new one from the owner")
+        if state == "used":
+            raise HTTPException(410, "enrollment token already used")
+        if state == "revoked":
+            raise HTTPException(410, "enrollment token revoked")
+        return row
     _guard_write(request, classes=("machine",))
     return None
 
