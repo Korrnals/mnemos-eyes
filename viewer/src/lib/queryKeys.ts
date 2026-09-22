@@ -111,6 +111,18 @@ export const keys = {
     launches: (params: { limit?: number; cursor?: string } = {}) =>
       ["automation", "launches", params] as const,
   },
+  // CV-7 QR pairing (ADR 0012): device sessions (the owner panel list) and
+  // the trusted-side pairing status per id (the dialog's verify/scan view).
+  // pairing.* SSE invalidates both families; there is NO pairing LIST key —
+  // pairings are single-flight, the dialog holds its own id.
+  devices: {
+    all: ["devices"] as const,
+    list: () => ["devices", "list"] as const,
+  },
+  pairing: {
+    all: ["pairing"] as const,
+    status: (pairingId: string) => ["pairing", "status", pairingId] as const,
+  },
 } as const;
 
 /** Convenience key types for hook signatures. */
