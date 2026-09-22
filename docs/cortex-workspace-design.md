@@ -2,10 +2,13 @@
 
 - Status: **DESIGN — archcom input, not a decision** (owner directive 2026-09-22).
   Branch `docs/cortex-workspace-design`; do not merge before committee + owner.
-- Author: `@GCW: Product Architect`. Fact base: `docs/cortex-workspace-facts.md`
-  (parallel, Senior System Engineer) — **not yet on branch**; harness mechanics
-  below are coded against the three generic shapes (CLI-headless / file store /
-  API) and every concrete claim is marked `[FF]` (по факто-файлу).
+- Author: `@GCW: Product Architect`. Fact base — **on branch**:
+  `docs/cortex-workspace-facts.md` (branch `docs/cortex-workspace-facts`,
+  Senior System Engineer, 2026-09-22) + standards research
+  `docs/cortex-harness-research.md` (branch `docs/cortex-harness-research`,
+  `@GCW: Researcher`). Every `[FF]` (по факто-файлу) placeholder of the draft
+  is resolved below against the fact file; what the facts do NOT cover stays
+  marked `[GAP: …]` — no invented facts.
 - Related: ADR 0005/0006/0009 (+Am2)/0011/0012/0014; `ui-contract.md` §11;
   mesh ROADMAP-v2 §2.1–§2.3, §5 W3/W4; `docs/settings-design-note.md`;
   `deploy/poller/zcode-headless.sh` (headless precedent).
@@ -29,7 +32,8 @@ cockpit over autopilot — components stay self-sufficient.
 harness sessions, term in UI: «сессия харнесса» or rename pass later).
 
 - **Session list** (left): one row per harness session across nodes — host,
-  harness (zcode/vscode/pi), project/cwd, live/idle badge (presence TTL),
+  harness (zcode/vscode/pi; hermes via its gateway API — facts §1),
+  project/cwd, live/idle badge (presence TTL),
   age, last line preview. Filters: host, harness, project, live-only,
   linked-task. Grouped by node (executor), like Agents/Execution today.
 - **Agent/session picker**: zcode-style — choose executor (from the
@@ -53,25 +57,48 @@ keeps exactly one store: the harness store on its host.
 instance of the SAME harness with the SAME session-id; the harness writes
 its own store; Cortex only renders the stream back.
 Pros: drift impossible **by construction**; the local-vs-Cortex view is the
-same file; reuses zcode-headless precedent (`--mode yolo -p`, env glob) with
-a session-resume flag `[FF: zcode resume mechanics]`; vscode/pi legs need
-their own headless/resume story `[FF]`. Cons: a bridge must run on EVERY
-host (poller-pattern systemd unit; W4 loopback-ingress for remote nodes);
-per-harness headless support varies `[FF]`; no access when host is off
-(honest offline, like stores).
+same file; the zcode leg is fact-confirmed end-to-end — `zcode.cjs --resume
+sess_<id> -p "<prompt>" --mode yolo --json` writes the same
+`~/.zcode/cli/db/db.sqlite` the GUI reads (same session-id, same home), and
+the `app-server` subcommand (stdio, «Zcode Protocol») is the programmable
+drive; pi is symmetric (`-p --session-id <id>` — exact-id resume-or-create,
+`--mode rpc` = stdio protocol); hermes continues via its gateway API / task
+queue (T004), not file relay; vscode has NO headless/resume surface at all
+(no chat/session flags in `code --help`, 1.137.0) — its leg is read-only
+until our own extension exists. Cons: a bridge must run on EVERY host
+(poller-pattern systemd unit; W4 loopback-ingress for remote nodes);
+per-harness drive surface varies (full: zcode/pi; API: hermes; none:
+vscode); pi has no file locks — the relay must be the sole writer of a
+session (bare append breaks the `parentId` chain); no access when host is
+off (honest offline, like stores).
 
 **Variant B — Transcript aggregator.** Read-only federation/poll of harness
-stores (file-watcher/API per shape `[FF]`); writes go ONLY into Cortex-own
-sessions (fresh relay sessions, still harness-store-backed).
-Pros: drift impossible (reads can't fork); cheapest; works for harnesses
-with no remote-attach story `[FF: vscode/pi store readability]`.
+stores — per-shape readers, now concrete (facts §2): zcode = read-only SQL
+over `db.sqlite` (`session` → project/title/times, `message`/`part` → full
+transcript, `session_entry` → checkpoints; WAL, never write — a
+22-migration schema racing a live GUI is not a contract); vscode =
+`chatSessions/<uuid>.jsonl` + `workspace.json` folder mapping; pi =
+self-describing JSONL (first record = id+cwd) + `run-history.jsonl` run
+index; hermes = gateway API / read-only `state.db` via pod exec. Writes go
+ONLY into Cortex-own sessions (fresh relay sessions, still
+harness-store-backed).
+Pros: drift impossible (reads can't fork); cheapest; store readability
+fact-confirmed for all four — including the two with no remote-attach story
+(vscode readable-but-frozen; pi readable, idle since ~2026-09-16).
 Cons: **"continue a vscode session from the phone" is NOT possible** — fixed
-honestly: a foreign live session is a view, not a socket. Local transcript
-formats become a parsing dependency `[FF]`.
+honestly: a foreign live session is a view, not a socket; for vscode it is
+stronger still — external continuation is impossible by construction (no
+CLI, version-envelope cached in the open window, external append is not a
+contract). Local transcript formats become a parsing dependency —
+concretely: vscode's internal version-3 envelope with incremental `kind:1`
+patches, pi's `parentId`-chained event log, zcode's sqlite schema (migrations
+must be tracked per runtime upgrade).
 
-**Variant C — Hybrid (recommended if `[FF]` confirms).** B for total
-visibility (every node, every harness, always) + A for continuation
-(zcode first — precedent exists; vscode/pi as their relay legs mature).
+**Variant C — Hybrid (recommended — fact base confirms the legs).** B for
+total visibility (every node, every harness, always) + A for continuation
+(zcode and pi — full headless resume confirmed for both; vscode stays a
+read-only view — no continuation surface exists; hermes continues via its
+own API tier).
 
 | Owner case | A only | B only | C (hybrid) |
 | --- | --- | --- | --- |
@@ -114,13 +141,98 @@ visibility (every node, every harness, always) + A for continuation
   per-heartbeat events; chat output streams over an authenticated
   channel, NOT the unauthenticated `/api/events` (pairing §3.3 lesson).
 - **memory (mnemos)** = session context: session row links memory_id;
-  harness auto-checkpoints already feed mnemos `[FF: which harnesses
-  checkpoint when]` — Workspace renders, never writes, memory.
+  harness→mnemos auto-checkpoint coverage per facts: hermes confirmed
+  (sessions checkpointed under tag `hermes-default`, recall via
+  `mnemos_recall_context`); zcode checkpoints are INTERNAL (`session_entry`
+  workspace_checkpoint, 12.5k rows) — no mnemos feed observed; pi — nothing
+  observed. `[GAP: zcode/pi→mnemos auto-checkpoint — none seen in the
+  fact-find; if absent, Workspace links memory_id manually per session]`
+  — Workspace renders, never writes, memory.
 - **tasks** = assignment envelope already carries session-class execution;
   Workspace reuses task_id/memory_id stable ids and `topics` (Am2 §9) for
   subscribe-filtered awareness (attention budget, ROADMAP §2.1).
 
-## 5. Questions for the archcom (recommendations inline)
+## 5. Standards — protocol spine for the host bridge (research verdict)
+
+Input: `docs/cortex-harness-research.md` (`@GCW: Researcher`, primary
+sources verified 2026-09-22). The owner's hint («у vscode-команды есть
+протокол») resolves to **Agent Client Protocol (ACP)** — which is **Zed's
+protocol, not VS Code's**. Verdict below; **final ratification = archcom
+Q7**, not this paper.
+
+**ACP is alive and is the de-facto open standard** for client↔agent
+communication as of 09.2026: JSON-RPC 2.0 over stdio («LSP for agents» —
+sessions, streaming updates, permissions, plan/diff rendering); launched
+2025-08-27 (Zed × Google for Gemini CLI); neutral `agentclientprotocol`
+org, JetBrains lead maintainer since 2026-02-18; 46 listed agents; native
+IDE clients = Zed + JetBrains (+ Qt Creator plugin); official Rust/TS SDKs
+at 1.0.0; agent registry; v1 stabilized monthly; v2 DRAFT since 2026-07-20.
+**VS Code has NO first-party harness protocol** — it bets on MCP + a
+closed Chat Extension API; Remote Tunnels is a transport, not an agent
+protocol; ACP in VS Code = community extensions only (native = open FR
+microsoft/vscode#265496). Notably, GitHub Copilot CLI itself speaks ACP
+(public preview, 2026-01-28) — Microsoft's own agent does, VS Code does not.
+
+**Adopt — hybrid A+C (protocol layer; composes with Variant C, the
+architecture layer): ACP v1 shapes as the host bridge's agent-facing
+contract.** Native ACP where a harness speaks it, adapters where it
+doesn't, all normalized to one shape: `session/new`, `session/load`,
+`session/list`, `session/resume`, `session/close`, `session/delete` →
+relay verbs (`session/resume` = our exact-id continuation, no
+fork); `session/update` → SSE `session.*` kinds (additive-only rule
+holds); `session/request_permission` → Tier-B typed-confirm gates;
+`authenticate` where the agent requires login. Thin view-only clients are
+conforming (Cursor's minimal example runs with fs callbacks disabled) —
+Cortex-as-view is legal ACP.
+
+**What this means for Cortex.** Our differentiators — multi-host
+aggregation, mnemos memory binding, task binding, ownership tiers,
+presence — live ABOVE the client↔agent protocol layer: ACP replaces none
+of them, and none of them need an own protocol. Fleet tiers as of the
+facts: **zcode** — not ACP-listed; own stdio protocol (`app-server`,
+«Zcode Protocol») + full headless resume → custom-drive tier; **pi** —
+upstream `pi-acp` adapter exists, but native headless (`--session-id`,
+rpc) already covers us → adapter optional; **vscode** — no protocol
+surface at all → store-read tier; **hermes** — ACP-listed upstream, but
+our deployment's surface is the gateway API/queue (T004) → API tier.
+⇒ **no v1 leg needs ACP**; it earns in on NEW harness onboarding
+(claude-code/codex/gemini-lineage/cursor would join through one contract
+and registry metadata instead of N bespoke adapters).
+
+**Honest limitations.**
+- **stdio-only in v1** (client spawns the agent; NDJSON JSON-RPC on
+  stdin/stdout; remote HTTP/WS transport = open RFD). Our case is
+  remote/multi-host by definition → the relay layer (poller-family host
+  bridge + W4 loopback ingress) stays OURS: ACP rides inside the host
+  bridge, it does not replace the relay transport. Research: this
+  matches, not hurts, extend-the-poller.
+- **Adapter-level resume is uneven** (goose: fork/resume not yet exposed
+  over ACP; ACP session-id ≠ native id) → keep the `(harness, host,
+  native-id)` identity triple and add an `acp_session_id ↔ native_id`
+  mapping table. `[GAP: claude-agent-acp / codex-acp resume coverage —
+  matters only when those harnesses onboard]`
+- **ACP ≠ transcript federation**: history depth via `session/list` is
+  agent-dependent → Variant B store-readers stay per-harness, unaffected.
+- **Attach-to-live-foreign-session is not an ACP scenario** (the client
+  spawns the agent) → consistent with v1's own/relayed-only scope;
+  foreign inject stays v2+ behind Q2.
+- **v2 churn**: draft since 2026-07-20 → gate behind `protocolVersion`
+  negotiation; re-examine at v2 stabilization and when the HTTP/WS RFD
+  lands (could then replace bespoke W4 relay framing).
+- **Naming**: an ACP agent literally named «Cortex Code» already exists —
+  collision check owed in the Workspace naming pass (owner-level call).
+
+**Why not our own protocol** (research Strategy B — rejected). The layer's
+whole value is ecosystem gravity (46 agents, two IDE vendors native, CN
+segment adoption, harness-drives-harness already in production via
+goose/OpenHands); an own protocol re-creates the N×M glue ACP removed,
+costs spec maintenance, buys nothing — our value-add sits above it, and
+the inner contract can simply mirror ACP shapes (that mirroring IS the
+A+C hybrid). Prior art validates the case without becoming a dependency:
+Happy (mobile ACP client — the phone→session case), Orca (fleet cockpit +
+phone approvals), goose ACP-providers, ACP Kit WS/HTTP bridges.
+
+## 6. Questions for the archcom (recommendations inline)
 
 1. **Relay infrastructure**: dedicated bridge service per host vs extending
    the reference poller into a host agent? **Rec: extend the poller**
@@ -132,9 +244,12 @@ visibility (every node, every harness, always) + A for continuation
    foreign-session inject** — own-session relay (ui-token) + read-only
    foreign views cover the directive's cases.
 3. **v1 scope**: **Rec: read-only aggregation (B) + zcode session
-   continuation via relay (A)** — minimal useful; vscode/pi join B-first,
-   A-when-`[FF]`-allows. Primary success metric: **zero fork/drift
-   incidents** in the 2-week retro + ≥3 cross-device continuations.
+   continuation via relay (A)** — minimal useful; facts re-scored the
+   legs: pi's A-leg is ready too (`--session-id` + rpc) — fast-follow on
+   the same pattern; vscode is B-forever (no continuation surface, facts
+   §3); hermes = API tier, read via gateway. Primary success metric:
+   **zero fork/drift incidents** in the 2-week retro + ≥3 cross-device
+   continuations.
 4. **Freeze/viewer**: Workspace = new L1 viewer section, vanilla `web/`
    untouched → **no freeze-exception entry** (settings-note §0 precedent).
    Out-of-scope list: transcript editing, cloud relay (ADR 0012 stands —
@@ -145,6 +260,21 @@ visibility (every node, every harness, always) + A for continuation
    (stable ids per swarm §2.1); chat stream authentication channel —
    new authenticated SSE or POST-poll? **Rec: authenticated SSE scope,
    decided with ADR 0014 (owner session cookie).**
-6. **`[FF]` blockers**: zcode resume-by-id, vscode/pi store readability +
-   headless stories, harness auto-checkpoint coverage — facts file gates
-   the A-leg matrix; Workspace phases re-scored against it at archcom.
+6. **`[FF]` blockers — CLOSED by the fact file** (was: zcode resume-by-id,
+   vscode/pi store readability + headless stories, harness auto-checkpoint
+   coverage). Resolutions: zcode resume-by-id = YES (same sqlite, same
+   session-id — drift impossible by construction); pi = YES (`--session-id`,
+   rpc mode); vscode = readable YES / continuable NO; hermes = API tier;
+   mnemos-checkpoint = hermes yes, zcode/pi unobserved (the one fact-side
+   `[GAP]`, §4; the adapter-resume `[GAP]` in §5 is research-side, future
+   onboarding only). **Закрыт ресёрчем + факто-файлом; к archcom — только
+   ратификация пересчитанной A-leg матрицы** (Variant C already accepted
+   by the owner).
+7. **Standards (new)**: ratify ACP v1 as the host bridge's agent-facing
+   normalization contract — hybrid A+C: ACP-shaped spine + per-harness
+   adapters as limbs (§5)? **Rec: adopt as CONTRACT SHAPE, not as a
+   transport commitment** — v1 legs stay native-drive/store-read (zcode
+   `app-server`, pi rpc, vscode JSONL read, hermes API); ACP earns in on
+   new harness onboarding + registry metadata; stdio-only transport rides
+   inside our relay layer anyway. SDK pinned at 1.0.x, v2 behind
+   `protocolVersion` negotiation, revisit at HTTP/WS RFD landing.
