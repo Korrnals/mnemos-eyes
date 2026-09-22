@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { isTaskMutationSource } from "@/gateway/capabilities";
+import {
+  isTaskMutationSource,
+  isUiTokenSessionSource,
+} from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import { useToast } from "@/components/Toast/toastContext";
 import { useT } from "@/i18n";
@@ -15,6 +18,14 @@ import { UiTokenGate } from "./uiTokenGate";
  * tokenPresent (reactive TopBar), openLogin, runAuthorized, logout. No page
  * reloads anywhere — the store transition re-renders the consumers.
  *
+ * ADR 0014 owner session: when the gateway speaks the session wire
+ * (BoardAdapter), the gate verifies at the door (`verifyUiToken`), the
+ * provider boot-probes the live `vesmaro_ui` cookie once per mount
+ * (hydrating `hasUiToken()` — a fresh tab must not re-prompt) and logout
+ * tears the session down SERVER-side first (DELETE — an HttpOnly cookie
+ * cannot be cleared from JS; a failed DELETE leaves the owner signed in
+ * and says so instead of silently flipping to read-only).
+ *
  * fix/login-feedback: the gate's session events surface as toasts — the
  * owner asked the app to CONFIRM a successful login (or shout about a 401)
  * instead of closing the window silently. The subscription lives in an
@@ -27,24 +38,56 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
   const toast = useToast();
   const t = useT();
 
-  // Adapter-owned token policy: BoardAdapter reads sessionStorage, the mock
-  // answers true (no auth wall in the dev playground).
+  // Adapter-owned token policy: BoardAdapter reads sessionStorage + the
+  // live-cookie flag (ADR 0014 Ф2), the mock answers true (no auth wall in
+  // the dev playground). The session wire (verify/probe) is injected only
+  // when the adapter grows it — otherwise the gate keeps the legacy
+  // paste-and-store path.
   const gate = useMemo(
     () =>
       new UiTokenGate({
         hasToken: () => (isTaskMutationSource(gateway) ? gateway.hasUiToken() : false),
+        ...(isUiTokenSessionSource(gateway)
+          ? {
+              verifyToken: (value: string) => gateway.verifyUiToken(value),
+              probe: () => gateway.probeUiSession(),
+            }
+          : {}),
       }),
     [gateway],
   );
 
+  // Boot hydration (ADR 0014 Ф2): one probe per gateway — 204 flips
+  // tokenPresent without any user action, so a second tab (or a reload
+  // past the 6h sliding window's refresh) opens signed-in or stays
+  // read-only, never stuck with a dead prompt.
+  useEffect(() => {
+    if (!isUiTokenSessionSource(gateway)) return;
+    let cancelled = false;
+    void gateway.probeUiSession().then(() => {
+      if (!cancelled) gate.refreshPresence();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [gateway, gate]);
+
   // Login feedback toasts: success is confirmed once the value actually
-  // lands in the tab; a server-side 401 is announced beside the window's
-  // inline line. Events only fire from user actions, always post-mount, so
-  // the effect subscription is attached before the first one can fire.
+  // lands in the tab (with an honest note in legacy mode — the board token
+  // logged the owner in); a server-side 401 is announced beside the
+  // window's inline line. Events only fire from user actions, always
+  // post-mount, so the effect subscription is attached before the first
+  // one can fire.
   useEffect(() => {
     return gate.listen((event) => {
       if (event.type === "loginStored") {
-        toast.push({ kind: "ok", title: t("login.toastSignedIn") });
+        toast.push({
+          kind: "ok",
+          title: t("login.toastSignedIn"),
+          ...(event.tokenClass === "legacy"
+            ? { detail: t("login.toastLegacy") }
+            : {}),
+        });
         return;
       }
       toast.push({
@@ -69,12 +112,31 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
     [gate],
   );
   const openLogin = useCallback(() => gate.openLogin(), [gate]);
-  const logout = useCallback(() => gate.logout(), [gate]);
   const dismiss = useCallback(() => gate.dismiss(), [gate]);
   const submitToken = useCallback(
     (value: string) => gate.submitToken(value),
     [gate],
   );
+
+  // Logout (ADR 0014 Ф2): the provider owns the wire — DELETE first, THEN
+  // the local scrub. A failed DELETE means the cookie (the actual session)
+  // is still live: abort the logout and say so — a silent "signed out"
+  // that isn't would be the same lie ADR 0014 removes everywhere else.
+  const logout = useCallback(() => {
+    if (!isUiTokenSessionSource(gateway)) {
+      gate.logout();
+      return;
+    }
+    void gateway
+      .logoutUiToken()
+      .then(() => gate.logout())
+      .catch(() => {
+        toast.push({
+          kind: "error",
+          title: t("login.logoutFailed"),
+        });
+      });
+  }, [gateway, gate, toast, t]);
 
   return (
     <UiTokenContext.Provider
@@ -84,6 +146,8 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
       <LoginDialog
         open={state.open}
         reason={state.reason}
+        verifyPending={state.verifyPending === true}
+        rejectKind={state.rejectKind}
         rejectDetail={state.rejectDetail}
         onSubmitToken={submitToken}
         onDismiss={dismiss}

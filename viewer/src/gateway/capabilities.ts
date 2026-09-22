@@ -45,6 +45,7 @@ import type {
   SchedulesPage,
 } from "./boardTypes";
 import type { InboxParams } from "./BoardAdapter";
+import type { UiTokenVerifyResult } from "./uiToken";
 
 /**
  * Board-native read capabilities (ADR 0011 Ф1). The three adapters share the
@@ -152,6 +153,33 @@ export function isTaskMutationSource(
     typeof (gateway as Partial<TaskMutationSource>).archiveTask === "function" &&
     typeof (gateway as Partial<TaskMutationSource>).adoptInboxItem === "function" &&
     typeof (gateway as Partial<TaskMutationSource>).hasUiToken === "function"
+  );
+}
+
+/**
+ * ADR 0014 owner-session surface: server-verified login (verify at the
+ * door), the boot/401 probe of the live `vesmaro_ui` cookie and the
+ * server-side logout (an HttpOnly cookie cannot be cleared from JS).
+ * Structural like every guard above: the BoardAdapter grows these methods
+ * (real wire), the mock adapter deliberately does not (the dev playground
+ * has no auth wall and keeps the paste-and-store legacy path).
+ */
+export interface UiTokenSessionSource {
+  verifyUiToken(token: string): Promise<UiTokenVerifyResult>;
+  probeUiSession(): Promise<boolean>;
+  logoutUiToken(): Promise<void>;
+}
+
+/** Gateway type that also speaks the owner-session wire. */
+export type UiTokenSessionGateway = TaskMutationGateway & UiTokenSessionSource;
+
+export function isUiTokenSessionSource(
+  gateway: MemoryGateway,
+): gateway is UiTokenSessionGateway {
+  return (
+    typeof (gateway as Partial<UiTokenSessionSource>).verifyUiToken === "function" &&
+    typeof (gateway as Partial<UiTokenSessionSource>).probeUiSession === "function" &&
+    typeof (gateway as Partial<UiTokenSessionSource>).logoutUiToken === "function"
   );
 }
 

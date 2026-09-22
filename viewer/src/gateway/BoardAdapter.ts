@@ -1,10 +1,11 @@
 import type { MemoryGateway } from "./MemoryGateway";
-import { DEFAULT_TIMEOUT_MS, SEARCH_TIMEOUT_MS, requestJson } from "./http";
+import { DEFAULT_TIMEOUT_MS, SEARCH_TIMEOUT_MS, buildUrl, requestJson } from "./http";
 import type { RequestConfig } from "./http";
 import { EventStream } from "./events";
 import type { BoardEvent } from "./events";
 import { ApiError } from "@/lib/errors";
 import { getUiToken } from "./uiToken";
+import type { UiTokenVerifyResult } from "./uiToken";
 import type {
   ArchivePage,
   ArchiveParams,
@@ -111,6 +112,12 @@ import type {
  * - adoptInboxItem POST   /api/tasks/inbox/{memory_id}/adopt → 201 TaskOut | 409
  * - refreshInbox   POST   /api/tasks/inbox/refresh          → 200 counters
  *
+ * ADR 0014 owner session (one login per browser; cookie `vesmaro_ui` is
+ * HttpOnly — set/reissued/cleared by the SERVER, never by this app):
+ * - verifyUiToken  POST   /api/auth/ui-token → 200 {ok, token_class} | 401/429/503
+ * - probeUiSession GET    /api/auth/ui-token → 204 live cookie | 401 none | 503
+ * - logoutUiToken  DELETE /api/auth/ui-token → 204 (Set-Cookie Max-Age=0)
+ *
  * AGW-1 agents domain (ARCH-9, ADR 0009 Amd 2 — reads open, writes ui-token):
  * - listAssignments      GET  /api/assignments                    ?state&task_id&executor_id
  * - createAssignment     POST /api/assignments                    → 201 | 404/422/409
@@ -210,8 +217,28 @@ export interface BoardGateway extends MemoryGateway {
 
   // --- Ф3 mutations (ui-token gated; see the class docblock) ------------------
 
-  /** True when a ui token is stored (mutation affordances stay visible). */
+  /**
+   * True when a ui token is stored OR a live `vesmaro_ui` session cookie
+   * was seen by the latest boot probe (ADR 0014 Ф2 — one login per
+   * browser: a new tab holds no sessionStorage token but rides the cookie).
+   */
   hasUiToken(): boolean;
+  /**
+   * Verify a pasted token against the server (ADR 0014 Ф1,
+   * `POST /api/auth/ui-token`) — the gate calls this BEFORE storing
+   * anything; a 401 (wrong value / machine-class token) surfaces as a
+   * threshold rejection and nothing is persisted.
+   */
+  verifyUiToken(token: string): Promise<UiTokenVerifyResult>;
+  /**
+   * Boot/session probe (`GET /api/auth/ui-token`): resolves true iff the
+   * server answered 204 (a live `vesmaro_ui` cookie). Also refreshes the
+   * adapter's cookie-live flag that `hasUiToken` answers from.
+   */
+  probeUiSession(): Promise<boolean>;
+  /** Server-side logout (`DELETE /api/auth/ui-token`, 204): an HttpOnly
+   * cookie cannot be cleared from JS — the server must do it. */
+  logoutUiToken(): Promise<void>;
   /** Create a native task (`POST /api/tasks`, 201 → TaskOut). */
   createTask(payload: TaskCreateInput): Promise<BoardTask>;
   /**
@@ -339,6 +366,14 @@ export class BoardAdapter implements BoardGateway {
   private readonly fetchImpl?: typeof fetch;
   private readonly timeoutMs: number;
   private readonly getUiTokenFn: () => string;
+  /**
+   * ADR 0014 Ф2: the adapter's last knowledge of a live `vesmaro_ui`
+   * session cookie. Set only by a 204 boot/re-401 probe (a strict status
+   * check — never "any 2xx"), cleared by the server-side logout. This is
+   * what lets `hasUiToken()` answer true in a freshly opened tab that
+   * carries no sessionStorage token.
+   */
+  private cookieLive = false;
 
   constructor(options: BoardAdapterOptions | string = {}) {
     // Backwards-compatible string form: new BoardAdapter("/api").
@@ -567,7 +602,35 @@ export class BoardAdapter implements BoardGateway {
   // --- Ф3 mutations (ui-token gated; wire contract in the class docblock) ----
 
   hasUiToken(): boolean {
-    return this.getUiTokenFn().length > 0;
+    return this.getUiTokenFn().length > 0 || this.cookieLive;
+  }
+
+  async verifyUiToken(token: string): Promise<UiTokenVerifyResult> {
+    const out = await this.request<{ ok: boolean; token_class: "ui" | "legacy" }>(
+      "/auth/ui-token",
+      { method: "POST", body: { token } },
+    );
+    // Normalize defensively: the server pins the enum ("ui"|"legacy"), a
+    // legacy proxy that drops the field must not widen the type.
+    return { ok: out.ok === true, tokenClass: out.token_class === "legacy" ? "legacy" : "ui" };
+  }
+
+  async probeUiSession(): Promise<boolean> {
+    // Raw fetch on purpose: 204 is the ONLY live answer (a stubbed/proxied
+    // 200-with-JSON must not read as a session); requestJson hides statuses.
+    const url = buildUrl(this.baseUrl, "/auth/ui-token");
+    try {
+      const response = await (this.fetchImpl ?? fetch)(url, { method: "GET" });
+      this.cookieLive = response.status === 204;
+    } catch {
+      this.cookieLive = false; // network down / aborted — fail to "no session"
+    }
+    return this.cookieLive;
+  }
+
+  async logoutUiToken(): Promise<void> {
+    await this.request<void>("/auth/ui-token", { method: "DELETE" });
+    this.cookieLive = false;
   }
 
   async createTask(payload: TaskCreateInput): Promise<BoardTask> {

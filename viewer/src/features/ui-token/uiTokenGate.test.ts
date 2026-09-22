@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearUiToken, hasUiToken, UI_TOKEN_STORAGE_KEY } from "@/gateway/uiToken";
+import type { UiTokenVerifyResult } from "@/gateway/uiToken";
 import { ApiError } from "@/lib/errors";
 import { UiTokenGate } from "./uiTokenGate";
 
@@ -262,5 +263,182 @@ describe("UiTokenGate session events (fix/login-feedback toast source)", () => {
     gate.submitToken("typed-token");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(events).toEqual([]);
+  });
+});
+
+/**
+ * ADR 0014 owner session: server verify at the door, the boot/401 probe of
+ * the live `vesmaro_ui` cookie, and the honest legacy verdict. The gate
+ * keeps the paste-and-store path ONLY when no verify is injected (mock
+ * adapter / SSR harnesses) — covered by the suites above.
+ */
+describe("UiTokenGate server verify (ADR 0014)", () => {
+  /** Storage-backed gate with the session wire injected. */
+  function verifiedGate(overrides?: {
+    hasToken?: () => boolean;
+    verify?: (value: string) => Promise<UiTokenVerifyResult>;
+    probe?: () => Promise<boolean>;
+  }): {
+    gate: UiTokenGate;
+    events: { type: string; tokenClass?: string }[];
+  } {
+    const events: { type: string; tokenClass?: string }[] = [];
+    const gate = new UiTokenGate({
+      hasToken: overrides?.hasToken ?? (() => hasUiToken()),
+      verifyToken: overrides?.verify ?? (async (value) => {
+        // Default double: the real server contract — 401 for anything but
+        // the one "valid" value.
+        if (value !== "valid-ui-token") {
+          throw new ApiError(
+            401,
+            "the pasted token is a machine-class token (VESMARO_BOARD_TOKEN) — this login requires VESMARO_UI_TOKEN",
+          );
+        }
+        return { ok: true, tokenClass: "ui" };
+      }),
+      probe: overrides?.probe,
+    });
+    gate.listen((event) =>
+      events.push(
+        event.type === "loginStored"
+          ? { type: event.type, tokenClass: event.tokenClass }
+          : { type: event.type },
+      ),
+    );
+    return { gate, events };
+  }
+
+  it("verify success stores the token, closes the panel and replays the queued run", async () => {
+    const { gate, events } = verifiedGate();
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await vi.waitFor(() =>
+      expect(gate.getState()).toMatchObject({ open: true, reason: "required" }),
+    );
+    gate.submitToken("valid-ui-token");
+    // Synchronously: the verify is in flight, NOTHING stored yet.
+    expect(hasUiToken()).toBe(false);
+    expect(gate.getState().verifyPending).toBe(true);
+    expect(gate.getState().open).toBe(true);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(hasUiToken()).toBe(true);
+    expect(gate.getState()).toMatchObject({ open: false, tokenPresent: true });
+    expect(gate.getState().verifyPending).toBe(false);
+    expect(events).toEqual([{ type: "loginStored", tokenClass: "ui" }]);
+  });
+
+  it("verify refusal at the door: window stays open, NOTHING stored, no loginStored", async () => {
+    const { gate, events } = verifiedGate();
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await vi.waitFor(() => expect(gate.getState().open).toBe(true));
+    gate.submitToken("board-token-by-mistake");
+    await vi.waitFor(() =>
+      expect(gate.getState()).toMatchObject({
+        open: true,
+        reason: "rejected",
+        verifyPending: false,
+      }),
+    );
+    // The false-success login is gone: no storage write, no queued retry.
+    expect(hasUiToken()).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    // The at-the-door beat + the class-aware server detail ride the state.
+    expect(gate.getState().rejectKind).toBe("verify");
+    expect(gate.getState().rejectDetail).toContain("machine-class token");
+    expect(events).toEqual([]);
+    // A corrected value still completes the flow.
+    gate.submitToken("valid-ui-token");
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(gate.getState().open).toBe(false);
+  });
+
+  it("a verify in flight swallows further submits (one at a time)", async () => {
+    let release!: (result: UiTokenVerifyResult) => void;
+    const verify = vi.fn(
+      (value: string) =>
+        new Promise<UiTokenVerifyResult>((resolve) => {
+          release = resolve;
+          void value;
+        }),
+    );
+    const { gate } = verifiedGate({ verify });
+    gate.openLogin();
+    gate.submitToken("first");
+    expect(verify).toHaveBeenCalledTimes(1);
+    gate.submitToken("second"); // ignored — verifyPending
+    expect(verify).toHaveBeenCalledTimes(1);
+    release({ ok: true, tokenClass: "ui" });
+    await vi.waitFor(() =>
+      expect(gate.getState()).toMatchObject({ open: false, tokenPresent: true }),
+    );
+    expect(hasUiToken()).toBe(true);
+  });
+
+  it("legacy verdict: tokenClass=legacy rides loginStored (the provider toasts the note)", async () => {
+    const { gate, events } = verifiedGate({
+      verify: async () => ({ ok: true, tokenClass: "legacy" }),
+    });
+    gate.openLogin();
+    gate.submitToken("the-board-token");
+    await vi.waitFor(() =>
+      expect(events).toEqual([{ type: "loginStored", tokenClass: "legacy" }]),
+    );
+    expect(gate.getState().open).toBe(false);
+  });
+
+  it("401 mid-flight + LIVE cookie: re-probe replays on the cookie leg, window never opens", async () => {
+    // The adapter policy after a cookie probe: no stored token, live cookie.
+    sessionStorage.removeItem(UI_TOKEN_STORAGE_KEY);
+    let cookieLive = true;
+    const { gate } = verifiedGate({
+      // Mirror the BoardAdapter policy: hasToken = stored || cookieLive.
+      hasToken: () => hasUiToken() || cookieLive,
+      probe: async () => cookieLive,
+    });
+    let attempts = 0;
+    const run = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new ApiError(401, "ui token rejected");
+    });
+    gate.runAuthorized(run);
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    // The window NEVER opened; the stale header value was dropped; the
+    // replay went out on the cookie leg (hasToken still true).
+    expect(gate.getState().open).toBe(false);
+    expect(gate.getState().rejectKind).toBeUndefined();
+    expect(hasUiToken()).toBe(false);
+    expect(gate.getState().tokenPresent).toBe(true);
+  });
+
+  it("401 mid-flight + DEAD cookie: the window opens with the session-expired beat", async () => {
+    sessionStorage.setItem(UI_TOKEN_STORAGE_KEY, "stale-header-token");
+    const { gate, events } = verifiedGate({ probe: async () => false });
+    let attempts = 0;
+    const run = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new ApiError(401, "ui session missing or expired");
+    });
+    gate.runAuthorized(run);
+    await vi.waitFor(() =>
+      expect(gate.getState()).toMatchObject({
+        open: true,
+        reason: "rejected",
+        rejectKind: "session",
+      }),
+    );
+    expect(attempts).toBe(1);
+    expect(hasUiToken()).toBe(false);
+    expect(events).toEqual([{ type: "tokenRejected" }]);
+  });
+
+  it("refreshPresence re-samples the injected hasToken (boot hydration after the probe)", () => {
+    let present = false;
+    const gate = new UiTokenGate({ hasToken: () => present });
+    expect(gate.getState().tokenPresent).toBe(false);
+    present = true; // the adapter's probe came back 204
+    gate.refreshPresence();
+    expect(gate.getState().tokenPresent).toBe(true);
+    expect(gate.getState().open).toBe(false);
   });
 });

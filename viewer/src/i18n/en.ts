@@ -314,12 +314,17 @@ export const en: Record<TranslationKey, string> = {
   "toasts.regionLabel": "Notifications",
   "toasts.dismissAria": "Dismiss notification",
 
-  // --- ui-token login window (Ф3, class ui; fix/login-window) -----------------------
+  // --- ui-token login window (Ф3, class ui; fix/login-window; ADR 0014) ------------
   "login.title": "Sign in",
   "login.description":
-    "Sign in with a ui token to edit tasks. The value stays in this tab only (sessionStorage) and travels only to your board server.",
+    "Sign in with a ui token to edit tasks. The value is verified by the server; the session lives in a cookie of this browser — all tabs, one sign-in, 6 hours of idle time.",
   "login.continueQueued": "Sign in to continue — your action will run automatically",
-  "login.rejected": "The server rejected the token (401) — paste a current value.",
+  // Refusal AT THE DOOR (ADR 0014 Ф1): the verify call said no — nothing stored.
+  "login.rejected":
+    "The server did not accept the token — check the value and try again.",
+  // Mid-flight refusal (ADR 0014 Ф2): a stored token rotted / the session
+  // idled out — a distinct text so it never reads as "you mistyped it".
+  "login.sessionExpired": "Your session expired — sign in again.",
   "login.fieldLabel": "Token",
   "login.showValue": "Reveal the token value",
   "login.hideValue": "Hide the token value",
@@ -327,14 +332,19 @@ export const en: Record<TranslationKey, string> = {
     "Where to get one: the value of the vesmaro-eyes-ui-token secret (e.g. kubectl get secret vesmaro-eyes-ui-token -o yaml via your cluster admin).",
   "login.continueReadOnly": "Continue read-only",
   "login.submit": "Sign in",
+  "login.verifying": "Verifying…",
   "login.signIn": "Sign in",
   "login.signOut": "Sign out",
-  "login.signOutAria": "Remove the ui token from this tab",
+  "login.signOutAria": "End the server session (all tabs of this browser)",
   // Login feedback toasts (fix/login-feedback) — see ru.ts.
   "login.toastSignedIn": "Signed in — control available",
+  "login.toastLegacy":
+    "Board token accepted: no dedicated ui token (vesmaro-eyes-ui-token) is configured — legacy mode is active.",
   "login.toastRejected": "Token rejected",
   "login.toastRejectedDetail":
     "The server answered 401 — the login window is open for a current value.",
+  "login.logoutFailed":
+    "Could not end the server session — you are still signed in. Check the connection and try again.",
 
   // --- tasks (Ф2 — read-only domain, mutations are Ф3) ---------------------------
   "tasks.title": "Tasks",

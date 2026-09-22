@@ -59,6 +59,8 @@ class TestSchemasPresent:
         "MeshNodeOut", "MeshNodesOut", "MeshNodeHealthOut", "MeshNodeSpec",
         # CV-6 Wave 1b (Agents §5): cross-task report feed for codegen
         "ReportsFeedOut",
+        # ADR 0014 (owner session): verify-at-the-door contracts
+        "UiTokenVerifyIn", "UiTokenVerifyOut",
     ])
     def test_schema_exists(self, spec, name):
         assert name in _components(spec)
@@ -371,3 +373,19 @@ class TestKeyRoutesReferenceSchemas:
             <= set(health.get("properties", {}))
         listing = _components(spec)["MeshNodesOut"]
         assert {"ok", "nodes"} <= set(listing.get("properties", {}))
+
+    def test_auth_ui_token(self, spec):
+        """ADR 0014 (owner session): the verify route must reference the
+        login models — UiTokenVerifyOut pins ok + the honest
+        "ui"|"legacy" token_class enum; the DELETE/GET legs are 204s with
+        no body schema by contract."""
+        post = spec["paths"]["/api/auth/ui-token"]["post"]
+        assert _ref_name(post["requestBody"]["content"]
+                         ["application/json"]["schema"]) == "UiTokenVerifyIn"
+        assert _ref_name(_response_schema(spec, "/api/auth/ui-token", "post")) \
+            == "UiTokenVerifyOut"
+        out = _components(spec)["UiTokenVerifyOut"]
+        assert {"ok", "token_class"} <= set(out.get("properties", {}))
+        assert out["properties"]["token_class"].get("enum") == ["ui", "legacy"]
+        assert "delete" in spec["paths"]["/api/auth/ui-token"]
+        assert "get" in spec["paths"]["/api/auth/ui-token"]

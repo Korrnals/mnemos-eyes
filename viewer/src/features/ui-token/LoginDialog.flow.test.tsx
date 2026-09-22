@@ -16,7 +16,7 @@ import { LoginDialog } from "@/features/ui-token/LoginDialog";
 import { Sidebar } from "@/layout/Sidebar";
 import { I18nProvider } from "@/i18n";
 import { keys } from "@/lib/queryKeys";
-import { clearUiToken } from "@/gateway/uiToken";
+import { clearUiToken, hasUiToken } from "@/gateway/uiToken";
 import type * as useTasksModule from "@/features/tasks/useTasks";
 
 // Test-env seam (documented, not a product change): useReportCounts subscribes
@@ -147,6 +147,10 @@ describe("login flow regression (owner repro)", () => {
     const mutationCalls: { auth: string | null }[] = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      // ADR 0014 Ф1: the login verifies at the door before anything is stored.
+      if (url.endsWith("/api/auth/ui-token") && (init?.method ?? "GET") === "POST") {
+        return jsonResponse({ ok: true, token_class: "ui" });
+      }
       if (url.endsWith("/api/tasks") && (init?.method ?? "GET") === "POST") {
         // requestJson passes a plain header record (see gateway/http.ts).
         const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -263,7 +267,14 @@ describe("login flow regression (owner repro)", () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
     const fetchImpl = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(boardPayload),
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        // ADR 0014 Ф1: the manual sign-in verifies against the server too.
+        if (url.endsWith("/api/auth/ui-token") && (init?.method ?? "GET") === "POST") {
+          return jsonResponse({ ok: true, token_class: "ui" });
+        }
+        return jsonResponse(boardPayload);
+      },
     );
     const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
     const queryClient = new QueryClient({
@@ -325,8 +336,8 @@ describe("login flow regression (owner repro)", () => {
     );
 
     // Submit a token: window closes, the slot flips to «Sign out»
-    // reactively — no reload, no wire call (manual login is not validated
-    // against the server until a mutation actually runs).
+    // reactively — no reload. ADR 0014 Ф1: the value went through the
+    // server verify first; only a 200 stores it.
     await act(async () => {
       setInputValue(tokenInput as HTMLInputElement, "ui-manual");
       (tokenInput?.closest("form") as HTMLFormElement | null)?.requestSubmit();
@@ -345,21 +356,29 @@ describe("login flow regression (owner repro)", () => {
     expect(container.textContent).toContain("Signed in — control available");
     expect(container.textContent).toContain("session active");
     expect(container.textContent).not.toContain("read-only");
-    // Reads may fly (board/inbox queries); a manual login must fire no POST.
-    const posts = fetchImpl.mock.calls.filter(
-      ([, init]) => (init?.method ?? "GET") === "POST",
+    // Reads may fly (board/inbox queries) and the verify POST is the login
+    // itself; a manual login must fire NO MUTATION POST.
+    const mutationPosts = fetchImpl.mock.calls.filter(
+      ([input, init]) =>
+        (init?.method ?? "GET") === "POST" &&
+        !String(input).endsWith("/api/auth/ui-token"),
     );
-    expect(posts).toHaveLength(0);
+    expect(mutationPosts).toHaveLength(0);
   });
 
   it("a server-rejected token (401 on the retried action) reopens the window AND pushes the error toast", { timeout: 20000 }, async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-    // Every POST answers 401 — even with the freshly pasted bearer, so the
-    // queued create's retry is REJECTED and the gate reopens the window.
+    // Every POST to /api/tasks answers 401 — even with the freshly pasted
+    // bearer, so the queued create's retry is REJECTED and the gate
+    // reopens the window. The verify POST (ADR 0014 Ф1) succeeds — the
+    // refusal is genuinely mid-flight.
     const mutationCalls: { auth: string | null }[] = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.endsWith("/api/auth/ui-token") && (init?.method ?? "GET") === "POST") {
+        return jsonResponse({ ok: true, token_class: "ui" });
+      }
       if (url.endsWith("/api/tasks") && (init?.method ?? "GET") === "POST") {
         const headers = (init?.headers ?? {}) as Record<string, string>;
         const auth = headers.Authorization ?? null;
@@ -432,8 +451,10 @@ describe("login flow regression (owner repro)", () => {
     expect(document.querySelector('[data-testid="login-dialog"]')).not.toBeNull();
     // Scoped to the dialog: the error toast card also carries role="alert"
     // and lives in an earlier document node than the Radix portal.
+    // ADR 0014: a mid-flight refusal is the SESSION beat — «сессия
+    // истекла» — not the at-the-door "check the value" text.
     const alert = document.querySelector('[data-testid="login-dialog"] [role="alert"]');
-    expect(alert?.textContent).toContain("The server rejected the token (401)");
+    expect(alert?.textContent).toContain("Your session expired — sign in again.");
     // …AND the rejection is announced as an error toast (fix/login-feedback),
     // beside the inline message — not instead of it.
     expect(container.textContent).toContain("Token rejected");
@@ -466,8 +487,11 @@ describe("login flow regression (owner repro)", () => {
     // Masked by default; the eye toggle is the explicit reveal.
     expect(input?.type).toBe("password");
     // Inline sign-in error (assertive) + the queued-action line + the hint.
+    // Default rejectKind is the at-the-door beat (ADR 0014 Ф1).
     const alert = document.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("The server rejected the token (401)");
+    expect(alert?.textContent).toContain(
+      "The server did not accept the token — check the value and try again.",
+    );
     expect(document.body.textContent).toContain(
       "Sign in to continue — your action will run automatically",
     );
@@ -475,5 +499,242 @@ describe("login flow regression (owner repro)", () => {
       "kubectl get secret vesmaro-eyes-ui-token",
     );
     expect(document.body.textContent).not.toContain("mnk_"); // no value examples
+  });
+});
+
+/**
+ * ADR 0014 owner session (Ф2): one login per BROWSER. The board server
+ * keeps the session in the HttpOnly `vesmaro_ui` cookie; a fresh tab holds
+ * no sessionStorage token but rides the cookie — the boot probe (GET
+ * /api/auth/ui-token → 204) must hydrate hasUiToken() so no window opens,
+ * and the logout must tear the session down SERVER-side (DELETE), because
+ * an HttpOnly cookie cannot be cleared from JS.
+ */
+describe("owner session (ADR 0014): boot hydration + server-side logout", () => {
+  beforeEach(() => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
+
+  function probeAwareFetch(options: {
+    probeStatus: number;
+    mutationAuth?: (headers: Record<string, string>) => Response;
+  }) {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/auth/ui-token")) {
+        if (method === "GET") {
+          return new Response(null, { status: options.probeStatus });
+        }
+        if (method === "POST") return jsonResponse({ ok: true, token_class: "ui" });
+        return new Response(null, { status: 204 }); // DELETE logout
+      }
+      if (url.endsWith("/api/tasks") && method === "POST") {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        return (
+          options.mutationAuth?.(headers) ?? jsonResponse({ error: "unauthorized" }, 401)
+        );
+      }
+      return jsonResponse(boardPayload);
+    });
+  }
+
+  it("boot probe 204: a fresh tab (no stored token) is signed in — the window never opens and the create rides the cookie", { timeout: 20000 }, async () => {
+    const fetchImpl = probeAwareFetch({
+      probeStatus: 204,
+      mutationAuth: () => jsonResponse(createdTask, 201), // the server accepts the COOKIE leg
+    });
+    const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await queryClient.prefetchQuery({
+      queryKey: keys.tasks.board(),
+      queryFn: () => gateway.board(),
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <I18nProvider initialLang="en">
+          <GatewayContext.Provider value={gateway}>
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <UiTokenProvider>
+                  <MemoryRouter initialEntries={["/tasks"]}>
+                    <TaskListPage />
+                    <UiTokenSlot />
+                    <ToastViewport />
+                  </MemoryRouter>
+                </UiTokenProvider>
+              </ToastProvider>
+            </QueryClientProvider>
+          </GatewayContext.Provider>
+        </I18nProvider>,
+      );
+    });
+
+    // Hydrated: the slot shows «Sign out» although NOTHING is stored.
+    expect(hasUiToken()).toBe(false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(
+      Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Sign out",
+      ),
+    ).toBe(true);
+
+    // A mutation just RUNS — no login window, and the request ships
+    // headerless (the server reads the cookie).
+    const createButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Task",
+    );
+    await act(async () => {
+      createButton?.click();
+    });
+    const textarea = document.querySelector("textarea");
+    await act(async () => {
+      setInputValue(textarea as HTMLTextAreaElement, "Cookie task");
+    });
+    await act(async () => {
+      buttonByText(document.body, "Create task")?.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    expect(document.getElementById("login-token-value")).toBeNull();
+    // The task landed (the server's createdTask echoes back) and the
+    // success toast fired — the whole create ran with NO login window.
+    expect(container.textContent).toContain("Task TB-42 created");
+    expect(container.textContent).toContain("Repro task");
+    const createCall = fetchImpl.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/api/tasks") && (init?.method ?? "GET") === "POST",
+    );
+    const headers = (createCall?.[1]?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization ?? null).toBeNull(); // cookie leg: no Authorization header
+  });
+
+  it("boot probe 401: nothing stored → the tab stays read-only (accent Sign in)", { timeout: 20000 }, async () => {
+    const fetchImpl = probeAwareFetch({ probeStatus: 401 });
+    const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await queryClient.prefetchQuery({
+      queryKey: keys.tasks.board(),
+      queryFn: () => gateway.board(),
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <I18nProvider initialLang="en">
+          <GatewayContext.Provider value={gateway}>
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <UiTokenProvider>
+                  <MemoryRouter initialEntries={["/tasks"]}>
+                    <UiTokenSlot />
+                    <ToastViewport />
+                  </MemoryRouter>
+                </UiTokenProvider>
+              </ToastProvider>
+            </QueryClientProvider>
+          </GatewayContext.Provider>
+        </I18nProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(
+      Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Sign in",
+      ),
+    ).toBe(true);
+  });
+
+  it("logout fires DELETE /api/auth/ui-token and flips to signed-out only after it", { timeout: 20000 }, async () => {
+    const fetchImpl = probeAwareFetch({ probeStatus: 401 });
+    const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await queryClient.prefetchQuery({
+      queryKey: keys.tasks.board(),
+      queryFn: () => gateway.board(),
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <I18nProvider initialLang="en">
+          <GatewayContext.Provider value={gateway}>
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <UiTokenProvider>
+                  <MemoryRouter initialEntries={["/tasks"]}>
+                    <UiTokenSlot />
+                    <ToastViewport />
+                  </MemoryRouter>
+                </UiTokenProvider>
+              </ToastProvider>
+            </QueryClientProvider>
+          </GatewayContext.Provider>
+        </I18nProvider>,
+      );
+    });
+
+    // Sign in through the real verify flow.
+    const signIn = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Sign in",
+    );
+    await act(async () => {
+      signIn?.click();
+    });
+    const tokenInput = document.getElementById("login-token-value") as HTMLInputElement;
+    await act(async () => {
+      setInputValue(tokenInput, "ui-logout-flow");
+      (tokenInput.closest("form") as HTMLFormElement | null)?.requestSubmit();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const signOut = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Sign out",
+    );
+    expect(signOut).toBeDefined();
+
+    // Sign out: the DELETE rides first (the cookie is HttpOnly — JS cannot
+    // clear it), then the local scrub flips the slot back to «Sign in».
+    await act(async () => {
+      signOut?.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const deleteCall = fetchImpl.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/api/auth/ui-token") &&
+        (init?.method ?? "GET") === "DELETE",
+    );
+    expect(deleteCall).toBeDefined();
+    expect(hasUiToken()).toBe(false);
+    expect(
+      Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Sign in",
+      ),
+    ).toBe(true);
   });
 });
