@@ -8,7 +8,7 @@ import { DocsSearch } from "./DocsSearch";
 
 /**
  * `/docs` — the section index (design spec §3): h1 + one-line lede + the
- * search field, then the 8 category cards (3→2→1 grid). Contemplative
+ * search field, then the 9 category cards (3→2→1 grid). Contemplative
  * surface: spacing comes straight from tokens, no density coupling, no hero.
  */
 

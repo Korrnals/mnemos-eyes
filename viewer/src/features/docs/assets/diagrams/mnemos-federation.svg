@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" role="img" aria-label="Федерация хранилищ mnemos: cluster и laptop синхронизируют записи и теги, поиск в каждом выполняется локально, борд vesmaro-eyes читает данные через API" font-family="system-ui, sans-serif">
+  <title>Федерация хранилищ</title>
+  <style>
+    text { font-family: system-ui, sans-serif; }
+    .ink   { fill: #1a1e2e; }
+    .ink2  { fill: #4a5268; }
+    .acc   { fill: #136e79; }
+    .box   { fill: #eff1f5; stroke: #828aa2; stroke-width: 1.5; }
+    .frame { fill: none; stroke: #828aa2; stroke-width: 1.5; }
+    .ln    { stroke: #828aa2; stroke-width: 1.5; fill: none; }
+    .lna   { stroke: #136e79; stroke-width: 1.5; fill: none; }
+    .mk    { fill: #828aa2; }
+    .mka   { fill: #136e79; }
+    @media (prefers-color-scheme: dark) {
+      .ink   { fill: #e8eaf2; }
+      .ink2  { fill: #8a90a8; }
+      .acc   { fill: #22b5c4; }
+      .box   { fill: #1a1f2e; stroke: #666e90; }
+      .frame { stroke: #666e90; }
+      .ln    { stroke: #666e90; }
+      .lna   { stroke: #22b5c4; }
+      .mk    { fill: #666e90; }
+      .mka   { fill: #22b5c4; }
+    }
+  </style>
+  <defs>
+    <marker id="arwF" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" class="mk"/>
+    </marker>
+    <marker id="arwFa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" class="mka"/>
+    </marker>
+  </defs>
+
+  <!-- хранилище cluster -->
+  <rect x="40" y="60" width="380" height="120" rx="10" class="box"/>
+  <text x="64" y="90" font-size="15" font-weight="600" class="ink">Хранилище cluster</text>
+  <rect x="64" y="104" width="66" height="26" rx="13" class="frame"/>
+  <text x="97" y="122" font-size="13" text-anchor="middle" class="ink">записи</text>
+  <rect x="138" y="104" width="52" height="26" rx="13" class="frame"/>
+  <text x="164" y="122" font-size="13" text-anchor="middle" class="ink">теги</text>
+  <text x="64" y="156" font-size="13" class="ink2">поиск выполняется локально</text>
+
+  <!-- хранилище laptop -->
+  <rect x="40" y="240" width="380" height="120" rx="10" class="box"/>
+  <text x="64" y="270" font-size="15" font-weight="600" class="ink">Хранилище laptop</text>
+  <rect x="64" y="284" width="66" height="26" rx="13" class="frame"/>
+  <text x="97" y="302" font-size="13" text-anchor="middle" class="ink">записи</text>
+  <rect x="138" y="284" width="52" height="26" rx="13" class="frame"/>
+  <text x="164" y="302" font-size="13" text-anchor="middle" class="ink">теги</text>
+  <text x="64" y="336" font-size="13" class="ink2">поиск выполняется локально</text>
+
+  <!-- двусторонняя синхронизация -->
+  <line x1="200" y1="186" x2="200" y2="234" class="lna" marker-start="url(#arwFa)" marker-end="url(#arwFa)"/>
+  <line x1="280" y1="186" x2="280" y2="234" class="lna" marker-start="url(#arwFa)" marker-end="url(#arwFa)"/>
+  <text x="188" y="215" font-size="13" text-anchor="end" class="ink2">записи</text>
+  <text x="292" y="215" font-size="13" class="ink2">теги</text>
+
+  <!-- борд -->
+  <rect x="540" y="170" width="180" height="80" rx="8" class="box"/>
+  <text x="630" y="200" font-size="15" font-weight="600" text-anchor="middle" class="ink">Борд</text>
+  <text x="630" y="222" font-size="13" text-anchor="middle" class="ink2">vesmaro-eyes</text>
+
+  <line x1="540" y1="192" x2="426" y2="124" class="ln" marker-end="url(#arwF)"/>
+  <line x1="540" y1="228" x2="426" y2="296" class="ln" marker-end="url(#arwF)"/>
+  <text x="470" y="210" font-size="13" text-anchor="middle" class="ink2">читает через API</text>
+
+  <text x="380" y="398" font-size="13" text-anchor="middle" class="ink2">запись живёт в хранилище · борд читает через API</text>
+</svg>

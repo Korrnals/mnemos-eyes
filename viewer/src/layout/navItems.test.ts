@@ -174,6 +174,7 @@ describe("docs domain (ADR 0015)", () => {
     expect(docs?.soonKey).toBeUndefined();
     expect(docs?.key).toBe("nav.docs");
     expect(docs?.sections?.map((s) => s.to)).toEqual([
+      "/docs/c/product",
       "/docs/c/getting-started",
       "/docs/c/board",
       "/docs/c/agents",
@@ -229,5 +230,20 @@ describe("docs domain (ADR 0015)", () => {
     expect(isDocsSectionActive("/docs/tokens", "/docs/c/security")).toBe(true);
     // Unhydrated-adjacent: unknown slugs light nothing.
     expect(isDocsSectionActive("/docs/ghost", "/docs/c/maintenance")).toBe(false);
+  });
+
+  it("the «О продукте» section lights on the what-is-*/glossary articles (wave 2)", async () => {
+    await getManifest();
+    expect(isDocsSectionActive("/docs/what-is-mnemos", "/docs/c/product")).toBe(
+      true,
+    );
+    expect(isDocsSectionActive("/docs/what-is-vesmaro-eyes", "/docs/c/product")).toBe(
+      true,
+    );
+    expect(isDocsSectionActive("/docs/glossary", "/docs/c/product")).toBe(true);
+    // …and on nothing else: product articles do not light other sections.
+    expect(isDocsSectionActive("/docs/what-is-mnemos", "/docs/c/getting-started")).toBe(
+      false,
+    );
   });
 });

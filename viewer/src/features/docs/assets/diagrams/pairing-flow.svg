@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 240" role="img" aria-label="QR-пейринг за четыре шага: устройство сканирует QR, борд проверяет запрос и источник в LAN, устройство получает device-токен mnd, устройство видно в списке подключённых" font-family="system-ui, sans-serif">
+  <title>QR-пейринг за 4 шага</title>
+  <style>
+    text { font-family: system-ui, sans-serif; }
+    .ink   { fill: #1a1e2e; }
+    .ink2  { fill: #4a5268; }
+    .acc   { fill: #136e79; }
+    .box   { fill: #eff1f5; stroke: #828aa2; stroke-width: 1.5; }
+    .frame { fill: none; stroke: #828aa2; stroke-width: 1.5; }
+    .ln    { stroke: #828aa2; stroke-width: 1.5; fill: none; }
+    .mk    { fill: #828aa2; }
+    @media (prefers-color-scheme: dark) {
+      .ink   { fill: #e8eaf2; }
+      .ink2  { fill: #8a90a8; }
+      .acc   { fill: #22b5c4; }
+      .box   { fill: #1a1f2e; stroke: #666e90; }
+      .frame { stroke: #666e90; }
+      .ln    { stroke: #666e90; }
+      .mk    { fill: #666e90; }
+    }
+  </style>
+  <defs>
+    <marker id="arwP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" class="mk"/>
+    </marker>
+  </defs>
+
+  <!-- шаг 1 -->
+  <rect x="16" y="70" width="164" height="120" rx="8" class="box"/>
+  <circle cx="48" cy="100" r="14" class="frame"/>
+  <text x="48" y="105" font-size="13" font-weight="600" text-anchor="middle" class="acc">1</text>
+  <text x="34" y="140" font-size="14" font-weight="600" class="ink">Сканирование QR</text>
+  <text x="34" y="160" font-size="13" class="ink2">создан владельцем</text>
+  <text x="34" y="178" font-size="13" class="ink2">под ui-токеном</text>
+
+  <line x1="184" y1="130" x2="200" y2="130" class="ln" marker-end="url(#arwP)"/>
+
+  <!-- шаг 2 -->
+  <rect x="204" y="70" width="164" height="120" rx="8" class="box"/>
+  <circle cx="236" cy="100" r="14" class="frame"/>
+  <text x="236" y="105" font-size="13" font-weight="600" text-anchor="middle" class="acc">2</text>
+  <text x="222" y="140" font-size="14" font-weight="600" class="ink">Проверка запроса</text>
+  <text x="222" y="160" font-size="13" class="ink2">борд проверяет</text>
+  <text x="222" y="178" font-size="13" class="ink2">источник (LAN)</text>
+
+  <line x1="372" y1="130" x2="388" y2="130" class="ln" marker-end="url(#arwP)"/>
+
+  <!-- шаг 3 -->
+  <rect x="392" y="70" width="164" height="120" rx="8" class="box"/>
+  <circle cx="424" cy="100" r="14" class="frame"/>
+  <text x="424" y="105" font-size="13" font-weight="600" text-anchor="middle" class="acc">3</text>
+  <text x="410" y="140" font-size="14" font-weight="600" class="ink">Выдача токена</text>
+  <text x="410" y="160" font-size="13" class="ink2">mnd_… — однократно</text>
+  <text x="410" y="178" font-size="13" class="ink2">действует 30 дней</text>
+
+  <line x1="560" y1="130" x2="576" y2="130" class="ln" marker-end="url(#arwP)"/>
+
+  <!-- шаг 4 -->
+  <rect x="580" y="70" width="164" height="120" rx="8" class="box"/>
+  <circle cx="612" cy="100" r="14" class="frame"/>
+  <text x="612" y="105" font-size="13" font-weight="600" text-anchor="middle" class="acc">4</text>
+  <text x="598" y="140" font-size="14" font-weight="600" class="ink">Подключено</text>
+  <text x="598" y="160" font-size="13" class="ink2">виден в списке</text>
+  <text x="598" y="178" font-size="13" class="ink2">устройств</text>
+
+  <text x="380" y="216" font-size="13" text-anchor="middle" class="ink2">код живёт 3 минуты · подтверждение — на доверенной стороне</text>
+</svg>
