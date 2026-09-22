@@ -771,6 +771,13 @@ export const en: Record<TranslationKey, string> = {
     "Remove {{name}} from the registry? The removal is hard: the executor's secret dies with the record and the name is freed for re-registration; active assignments keep their executor references.",
   "agents.executors.deleted": "{{name}}: deleted",
 
+  // --- agents domain: execution polish (AGW-4) -------------------------------------
+  "agents.execution.openTasks": "Open tasks",
+  "agents.group.terminalIdle": "Last completed — {{date}}",
+  "agents.onboarding.label": "How this works",
+  "agents.onboarding.body":
+    "Take a task in the Tasks section and press «Take into work» on its page — the poller picks the assignment up in ~10 seconds and you watch it here; the feed below fills in live.",
+
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Automation",

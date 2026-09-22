@@ -8,6 +8,9 @@
 
 const TERMINAL_COLLAPSED_KEY = "vesmaro.agents.terminalCollapsed";
 const FEED_COLLAPSED_KEY = "vesmaro.agents.feedCollapsed";
+/** AGW-4 onboarding: the «Как это работает» row auto-expands ONCE — the
+ * first collapse writes the flag and it never auto-expands again. */
+const ONBOARDING_DONE_KEY = "vesmaro.agents.onboardingDone";
 
 /** Spec §1.1: the terminal group starts COLLAPSED (persistent from then on). */
 export const DEFAULT_TERMINAL_COLLAPSED = true;
@@ -57,4 +60,13 @@ export function loadFeedCollapsed(): boolean {
 
 export function saveFeedCollapsed(collapsed: boolean): void {
   writeFlag(FEED_COLLAPSED_KEY, collapsed);
+}
+
+/** The onboarding hint auto-expands until the owner collapses it once. */
+export function loadOnboardingDone(): boolean {
+  return readFlag(ONBOARDING_DONE_KEY, false);
+}
+
+export function saveOnboardingDone(): void {
+  writeFlag(ONBOARDING_DONE_KEY, true);
 }

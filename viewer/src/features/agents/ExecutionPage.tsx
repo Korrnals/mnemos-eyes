@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router";
 import { Search, WifiOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,12 @@ import { ExecutionFeedPanel } from "./ExecutionFeedPanel";
 import { ExecutionRow } from "./ExecutionRow";
 import { ExecutorStrip } from "./ExecutorStrip";
 import { readFeed } from "./executionFeedStore";
-import { loadTerminalCollapsed, saveTerminalCollapsed } from "./executionPrefs";
+import {
+  loadOnboardingDone,
+  loadTerminalCollapsed,
+  saveOnboardingDone,
+  saveTerminalCollapsed,
+} from "./executionPrefs";
 import { useAssignments, useExecutors } from "./useAgents";
 import { useAssignmentMutations } from "./useAssignmentMutations";
 
@@ -155,6 +161,24 @@ export function ExecutionPage() {
     [activeRows, queuedRows, terminalRows, terminalCollapsed],
   );
 
+  /**
+   * AGW-4 polish: the latest terminal stamp OUTSIDE today — when the
+   * «за сегодня» group is empty but terminal rows exist at all, this date
+   * drives the neutral hint that replaces the group (recency pointer, no
+   * counter furniture; the group itself still renders only for today).
+   */
+  const lastTerminalOutsideToday = useMemo(() => {
+    const today = new Date().toDateString();
+    let latest: string | null = null;
+    for (const row of filtered) {
+      if (row.state === "queued" || ACTIVE_ASSIGNMENT_STATES.includes(row.state)) continue;
+      if (!row.finished_at) continue;
+      if (new Date(row.finished_at).toDateString() === today) continue;
+      if (latest === null || row.finished_at > latest) latest = row.finished_at;
+    }
+    return latest;
+  }, [filtered]);
+
   // j/k walk the displayed rows; typing surfaces keep their keys; the
   // drawer owns the keyboard while it is open (review P3-9 — j/k would
   // fight the drawer's own Esc/Tab handling otherwise).
@@ -205,8 +229,11 @@ export function ExecutionPage() {
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-3">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <h1 id="agents-execution-title" className="text-lg font-semibold">
+      <header className="flex flex-wrap items-center justify-end gap-2">
+        {/* AGW-4: the sticky breadcrumb current item + the TopBar label
+         * already carry «Исполнение» — the visible h1 was the third copy.
+         * It stays (sr-only) for the a11y document outline only. */}
+        <h1 id="agents-execution-title" className="sr-only">
           {t("agents.execution.title")}
         </h1>
         {/* Amber SSE marker (§3.2): ONLY while the socket lies down. */}
@@ -232,6 +259,10 @@ export function ExecutionPage() {
         loading={executors.isPending}
         error={executors.isError}
       />
+
+      {/* AGW-4 onboarding: «Как это работает» — collapsed row above the
+       * filters, auto-expanded ONCE (the first collapse persists). */}
+      <OnboardingRow />
 
       {/* Filters: state chips + specialist (client) + text search. */}
       <div className="flex flex-wrap items-center gap-2">
@@ -305,6 +336,12 @@ export function ExecutionPage() {
           variant="empty"
           title={t("agents.execution.emptyTitle")}
           message={t("agents.execution.emptyMessage")}
+          action={
+            // AGW-4: empty states are ACTIONS — the way in is the tasks.
+            <Button asChild variant="outline">
+              <Link to="/tasks">{t("agents.execution.openTasks")}</Link>
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-3">
@@ -331,6 +368,16 @@ export function ExecutionPage() {
               onCancel={mutations.cancelAssignment}
               onRetry={restart}
             />
+          ) : null}
+          {/* AGW-4: no terminal rows TODAY, but the history has some — a
+           * neutral pointer instead of an invisible group (the group itself
+           * still renders only for today, §1.1). */}
+          {terminalRows.length === 0 && lastTerminalOutsideToday !== null ? (
+            <p className="text-xs text-foreground-muted">
+              {t("agents.group.terminalIdle", {
+                date: formatTaskDate(lastTerminalOutsideToday, lang),
+              })}
+            </p>
           ) : null}
           {terminalRows.length > 0 ? (
             <section aria-label={t("agents.group.terminal")}>
@@ -397,6 +444,41 @@ export function ExecutionPage() {
           }}
           prefill={retryPrefill}
         />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * AGW-4 onboarding: «Как это работает» — the way in for the owner's
+ * «как работать — непонятно» feedback. A collapsed row above the filters;
+ * it auto-expands ONCE (first visit), the first collapse persists to
+ * localStorage and it never auto-expands again (manual re-open stays).
+ */
+function OnboardingRow() {
+  const t = useT();
+  const [expanded, setExpanded] = useState(() => !loadOnboardingDone());
+
+  const toggle = (): void => {
+    if (expanded) saveOnboardingDone();
+    setExpanded(!expanded);
+  };
+
+  return (
+    <div className="rounded-md border border-border-subtle bg-well px-3 py-1.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={toggle}
+        className="flex items-center gap-1.5 rounded-sm text-xs font-medium text-foreground-secondary transition-colors duration-instant hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+      >
+        <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+        {t("agents.onboarding.label")}
+      </button>
+      {expanded ? (
+        <p className="mt-1 text-sm text-foreground-secondary">
+          {t("agents.onboarding.body")}
+        </p>
       ) : null}
     </div>
   );
