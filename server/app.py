@@ -631,7 +631,13 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.14.0", lifespan=lifespan)
+# /docs belongs to the SPA documentation section when the viewer owns the
+# root (rootApp=app): FastAPI's built-in swagger would shadow the client
+# route on server-loaded /docs (F5/deep-link). Swagger stays reachable at
+# /api/docs; board mode keeps the historical /docs.
+_docs_url = "/api/docs" if ROOT_APP == "app" else "/docs"
+app = FastAPI(title="vesmaro-eyes", version="1.14.0", lifespan=lifespan,
+              docs_url=_docs_url)
 
 # ------------------------------------- device-token scope guard (ADR 0012 §5)
 # The single scope middleware for PREFIX-CLASSIFIED tokens, standing

@@ -935,6 +935,8 @@ export const ru = {
   // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
   "nav.docs": "Документация",
   "docs.index.lede": "Справочник по бору: от первого запуска до обновления.",
+  "docs.cat.product": "О продукте",
+  "docs.catDesc.product": "Что такое mnemos и vesmaro-eyes: концепции и словарь.",
   "docs.cat.gettingStarted": "Начало работы",
   "docs.catDesc.gettingStarted":
     "Развёртывание борда и первый вход — с нуля до рабочего места.",

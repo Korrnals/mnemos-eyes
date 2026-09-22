@@ -7,13 +7,15 @@ import { Link } from "react-router";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { createHeadingSlugger } from "./headingSlug";
+import { resolveDocImageUrl } from "./docsAssets";
 
 /**
  * The SINGLE react-markdown + remark-gfm point (contract §3, gate §9.4).
  * NO rehype-raw: raw HTML in markdown is never rendered, so the sanitization
  * story is the react-markdown default (URL scheme whitelist + HTML skip).
  * Element classes follow the design-spec token table (§6–§7) — no literal
- * colours anywhere.
+ * colours anywhere. In-body images resolve through docsAssets.ts (the one
+ * asset glob); absolute http(s) srcs and unknown paths render as-is.
  */
 
 // Minimal structural hast shape (avoids importing transitive type packages
@@ -225,7 +227,7 @@ function buildComponents(): Components {
     ),
     img: ({ src, alt, title }) => (
       <img
-        src={typeof src === "string" ? src : undefined}
+        src={resolveDocImageUrl(typeof src === "string" ? src : undefined)}
         alt={alt ?? ""}
         title={title}
         loading="lazy"

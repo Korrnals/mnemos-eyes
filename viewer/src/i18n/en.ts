@@ -919,6 +919,8 @@ export const en: Record<TranslationKey, string> = {
   // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
   "nav.docs": "Documentation",
   "docs.index.lede": "Board reference: from the first launch to upgrades.",
+  "docs.cat.product": "About the product",
+  "docs.catDesc.product": "What mnemos and vesmaro-eyes are: concepts and glossary.",
   "docs.cat.gettingStarted": "Getting started",
   "docs.catDesc.gettingStarted":
     "Deploy the board and sign in — from zero to a workspace.",

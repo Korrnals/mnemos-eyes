@@ -125,17 +125,17 @@ describe("article /docs/:slug", () => {
   });
 
   it("first page has no prev slot (крайние страницы не рисуют пустой слот)", async () => {
-    const { root, container } = await mountDocs("/docs/deploy");
+    // Wave 2: the product category opens the reading order — its first page
+    // is the new крайняя страница (deploy now sits behind glossary).
+    const { root, container } = await mountDocs("/docs/what-is-mnemos");
     await vi.waitFor(() => {
-      expect(container.querySelector("h1")?.textContent).toBe(
-        "Развёртывание и первый запуск",
-      );
+      expect(container.querySelector("h1")?.textContent).toBe("Что такое mnemos");
     });
     const nav = container.querySelector("nav[aria-label='Навигация по страницам']");
     const links = [...(nav?.querySelectorAll("a") ?? [])].map((link) =>
       link.getAttribute("href"),
     );
-    expect(links).toEqual(["/docs/first-login"]); // next only
+    expect(links).toEqual(["/docs/what-is-vesmaro-eyes"]); // next only
     root.unmount();
   });
 
@@ -214,16 +214,18 @@ describe("docs search combobox (design spec §8)", () => {
 });
 
 describe("index and category pages", () => {
-  it("index lists all 8 categories with pluralized page counts", async () => {
+  it("index lists all 9 categories with pluralized page counts", async () => {
     const { root, container } = await mountDocs("/docs");
     await vi.waitFor(() => {
       expect(container.textContent).toContain("Начало работы");
     });
     const text = container.textContent ?? "";
+    expect(text).toContain("О продукте"); // wave-2: first card
+    expect(text).toContain("Что такое mnemos");
     expect(text).toContain("2 страницы"); // getting-started
-    expect(text).toContain("3 страницы"); // maintenance
+    expect(text).toContain("3 страницы"); // product/maintenance
     expect(text).toContain("1 страница"); // board/agents/…
-    expect(container.querySelectorAll("a[href^='/docs/c/']")).toHaveLength(8);
+    expect(container.querySelectorAll("a[href^='/docs/c/']")).toHaveLength(9);
     root.unmount();
   });
 

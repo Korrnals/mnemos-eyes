@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 380" role="img" aria-label="Как устроен vesmaro-eyes: браузер, борд с React viewer и FastAPI (задачи, канбан, агенты, SQLite на томе), хранилища mnemos cluster и laptop, контур исполнения с поллером и агентами zcode" font-family="system-ui, sans-serif">
+  <title>Как устроен vesmaro-eyes</title>
+  <style>
+    text { font-family: system-ui, sans-serif; }
+    .ink   { fill: #1a1e2e; }
+    .ink2  { fill: #4a5268; }
+    .acc   { fill: #136e79; }
+    .box   { fill: #eff1f5; stroke: #828aa2; stroke-width: 1.5; }
+    .frame { fill: none; stroke: #828aa2; stroke-width: 1.5; }
+    .ln    { stroke: #828aa2; stroke-width: 1.5; fill: none; }
+    .mk    { fill: #828aa2; }
+    @media (prefers-color-scheme: dark) {
+      .ink   { fill: #e8eaf2; }
+      .ink2  { fill: #8a90a8; }
+      .acc   { fill: #22b5c4; }
+      .box   { fill: #1a1f2e; stroke: #666e90; }
+      .frame { stroke: #666e90; }
+      .ln    { stroke: #666e90; }
+      .mk    { fill: #666e90; }
+    }
+  </style>
+  <defs>
+    <marker id="arwS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" class="mk"/>
+    </marker>
+  </defs>
+
+  <!-- браузер -->
+  <rect x="24" y="94" width="110" height="64" rx="8" class="box"/>
+  <text x="79" y="121" font-size="14" font-weight="600" text-anchor="middle" class="ink">Браузер</text>
+  <text x="79" y="139" font-size="13" text-anchor="middle" class="ink2">член семьи</text>
+
+  <line x1="138" y1="126" x2="204" y2="126" class="ln" marker-end="url(#arwS)"/>
+  <text x="171" y="112" font-size="13" text-anchor="middle" class="ink2">HTTPS</text>
+
+  <!-- vesmaro-eyes -->
+  <rect x="210" y="36" width="290" height="180" rx="10" class="frame"/>
+  <text x="355" y="60" font-size="15" font-weight="600" text-anchor="middle" class="acc">vesmaro-eyes</text>
+
+  <rect x="228" y="72" width="254" height="44" rx="8" class="box"/>
+  <text x="355" y="99" font-size="14" text-anchor="middle" class="ink">React viewer</text>
+
+  <rect x="228" y="128" width="254" height="72" rx="8" class="box"/>
+  <text x="355" y="147" font-size="14" font-weight="600" text-anchor="middle" class="ink">FastAPI-борд</text>
+  <text x="355" y="166" font-size="13" text-anchor="middle" class="ink2">задачи · канбан · агенты</text>
+  <text x="355" y="182" font-size="13" text-anchor="middle" class="ink2">SQLite на томе</text>
+
+  <!-- хранилища mnemos -->
+  <rect x="580" y="62" width="160" height="40" rx="8" class="box"/>
+  <text x="660" y="86" font-size="14" font-weight="600" text-anchor="middle" class="ink">mnemos · cluster</text>
+
+  <rect x="580" y="154" width="160" height="40" rx="8" class="box"/>
+  <text x="660" y="178" font-size="14" font-weight="600" text-anchor="middle" class="ink">mnemos · laptop</text>
+
+  <line x1="504" y1="82" x2="576" y2="82" class="ln" marker-start="url(#arwS)" marker-end="url(#arwS)"/>
+  <line x1="504" y1="174" x2="576" y2="174" class="ln" marker-start="url(#arwS)" marker-end="url(#arwS)"/>
+  <text x="540" y="121" font-size="13" text-anchor="middle" class="ink2">mnemos API</text>
+
+  <!-- контур исполнения -->
+  <rect x="290" y="252" width="460" height="104" rx="10" class="frame" stroke-dasharray="6 5"/>
+  <text x="306" y="268" font-size="13" class="ink2">контур исполнения</text>
+
+  <rect x="310" y="276" width="180" height="60" rx="8" class="box"/>
+  <text x="400" y="302" font-size="14" font-weight="600" text-anchor="middle" class="ink">Исполнители</text>
+  <text x="400" y="320" font-size="13" text-anchor="middle" class="ink2">агенты zcode</text>
+
+  <rect x="570" y="276" width="160" height="60" rx="8" class="box"/>
+  <text x="650" y="302" font-size="14" font-weight="600" text-anchor="middle" class="ink">Поллер</text>
+  <text x="650" y="320" font-size="13" text-anchor="middle" class="ink2">ноутбук</text>
+
+  <line x1="660" y1="198" x2="660" y2="272" class="ln" marker-end="url(#arwS)"/>
+  <text x="672" y="240" font-size="13" class="ink2">task:queue</text>
+
+  <line x1="566" y1="306" x2="494" y2="306" class="ln" marker-end="url(#arwS)"/>
+  <text x="530" y="292" font-size="13" text-anchor="middle" class="ink2">поручения</text>
+
+  <line x1="440" y1="272" x2="440" y2="220" class="ln" marker-end="url(#arwS)"/>
+  <text x="452" y="244" font-size="13" class="ink2">отчёты на карточки задач</text>
+</svg>

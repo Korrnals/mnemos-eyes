@@ -3,6 +3,7 @@ import {
   Bot,
   HelpCircle,
   KanbanSquare,
+  Lightbulb,
   Rocket,
   ShieldCheck,
   Smartphone,
@@ -27,6 +28,13 @@ export interface DocCategory {
 }
 
 export const DOC_CATEGORIES: readonly DocCategory[] = [
+  {
+    slug: "product",
+    titleKey: "docs.cat.product",
+    descriptionKey: "docs.catDesc.product",
+    icon: Lightbulb,
+    order: 0,
+  },
   {
     slug: "getting-started",
     titleKey: "docs.cat.gettingStarted",
