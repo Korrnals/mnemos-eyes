@@ -2927,9 +2927,14 @@ class Store:
         is refused while the name is LIVE anywhere an executor could act on
         it: a registered executor (its poller.yaml allowlist matches this
         string), a non-terminal assignment (a queued nomination for it) or
-        an automation rule (schedule field / hook condition). Terminal
-        history (done/failed/expired assignments, launch journal) does NOT
-        block — it is archival and stays verbatim.
+        an ENABLED automation rule (schedule field / hook condition).
+        Terminal history (done/failed/expired assignments, launch journal)
+        and DISABLED rules do NOT block — a disabled rule cannot fire, and
+        rules are soft-deleted (retention: the row is never destroyed), so
+        counting them would make a harness undeletable forever. Re-enable
+        of a rule whose harness is gone is the S2 engine's fire-time
+        validation concern (422 at fire, decision logged), not a reason to
+        trap the dictionary.
 
         Raises:
             HarnessNotFoundError — unknown name (HTTP 404 upstream);
@@ -2955,13 +2960,14 @@ class Store:
                     f"harness '{name}' has active assignments — cancel or "
                     "finish them first")
             if db.execute(
-                    "SELECT 1 FROM schedules WHERE harness=? LIMIT 1",
-                    (name,)).fetchone():
+                    "SELECT 1 FROM schedules WHERE harness=? AND enabled=1 "
+                    "LIMIT 1", (name,)).fetchone():
                 raise HarnessInUseError(
                     f"harness '{name}' is referenced by an automation "
                     "schedule — delete the schedule first")
             for hook in db.execute(
-                    "SELECT name, condition FROM hooks").fetchall():
+                    "SELECT name, condition FROM hooks "
+                    "WHERE enabled=1").fetchall():
                 try:
                     clauses = json.loads(hook["condition"] or "[]")
                 except ValueError:

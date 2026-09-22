@@ -256,7 +256,7 @@ class TestDelete:
         assert _delete(client, ui_auth).status_code == 200
         assert CUSTOM not in _names()
 
-    def test_in_use_by_schedule_409(self, client, ui_auth):
+    def test_in_use_by_ENABLED_schedule_409_disabled_does_not_block(self, client, ui_auth):
         assert _add(client, ui_auth).status_code == 201
         r = client.post("/api/automation/schedules",
                         json={"name": "sched-1", "task_id": "t-1",
@@ -265,11 +265,20 @@ class TestDelete:
                               "trigger_value": "PT1H"},
                         headers=ui_auth)
         assert r.status_code == 201, r.text
+        sched_id = r.json()["id"]
+        # creation is DISABLED (S1) — a disabled rule cannot fire, so it
+        # must NOT block the dictionary (soft-deleted rows are never
+        # destroyed; counting them would trap the harness forever)
+        assert _delete(client, ui_auth).status_code == 200
+        assert _add(client, ui_auth).status_code == 201
+        r = client.patch(f"/api/automation/schedules/{sched_id}",
+                         json={"enabled": True}, headers=ui_auth)
+        assert r.status_code == 200, r.text
         r = _delete(client, ui_auth)
         assert r.status_code == 409
         assert "schedule" in r.json()["detail"]
 
-    def test_in_use_by_hook_condition_409(self, client, ui_auth):
+    def test_in_use_by_ENABLED_hook_condition_409(self, client, ui_auth):
         assert _add(client, ui_auth).status_code == 201
         r = client.post("/api/automation/hooks",
                         json={"name": "hook-1", "on": "task.moved",
@@ -278,6 +287,19 @@ class TestDelete:
                               "action": "notify"},
                         headers=ui_auth)
         assert r.status_code == 201, r.text
+        # creation is DISABLED (S1) → no block until enablement
+        assert _delete(client, ui_auth).status_code == 200
+        assert _add(client, ui_auth).status_code == 201
+        r = client.post("/api/automation/hooks",
+                        json={"name": "hook-2", "on": "task.moved",
+                              "condition": [{"field": "harness", "op": "eq",
+                                             "value": CUSTOM}],
+                              "action": "notify"},
+                        headers=ui_auth)
+        hook_id = r.json()["id"]
+        r = client.patch(f"/api/automation/hooks/{hook_id}",
+                         json={"enabled": True}, headers=ui_auth)
+        assert r.status_code == 200, r.text
         r = _delete(client, ui_auth)
         assert r.status_code == 409
         assert "hook" in r.json()["detail"]
