@@ -1,0 +1,9 @@
+# Author identity hygiene (UI-пайп владельца, 2026-09-23): все коммиты в этом
+# репо принадлежат владельцу. Ниже — исторические identity агентов, замапленные
+# на канонический аккаунт, чтобы GitHub-атрибуция (contributors/blame) не
+# создавала ложных «сторонних контрибьюторов». НЕ добавляй сюда новые строки
+# без ведома владельца: новый identity в коммите = ошибка окружения агента.
+Korrnals <153223100+Korrnals@users.noreply.github.com> abyss <abyss@lab>
+Korrnals <153223100+Korrnals@users.noreply.github.com> abyss <abyss@users.noreply.github.com>
+Korrnals <153223100+Korrnals@users.noreply.github.com> zcode <zcode@local>
+Korrnals <153223100+Korrnals@users.noreply.github.com> GCW Senior System Engineer <sse@vesmaro.local>

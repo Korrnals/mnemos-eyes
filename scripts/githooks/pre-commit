@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Identity guard (owner directive 2026-09-23): commits in this repo may only
+# be authored by the owner's canonical identity. Agents working in cloned
+# worktrees MUST inherit user.name/user.email from the repo/global config —
+# a commit under any other identity is an environment bug, not a choice.
+set -euo pipefail
+
+ALLOWED_NAME="Korrnals"
+ALLOWED_EMAIL="153223100+Korrnals@users.noreply.github.com"
+
+name="$(git config user.name || true)"
+email="$(git config user.email || true)"
+
+fail() {
+  echo >&2 "✖ ЗАПРЕЩЁННЫЙ identity коммита:"
+  echo >&2 "    user.name  = '${name:-<пусто>}'"
+  echo >&2 "    user.email = '${email:-<пусто>}'"
+  echo >&2 "  Разрешён только: ${ALLOWED_NAME} <${ALLOWED_EMAIL}>"
+  echo >&2 "  Чинить: git config user.name '${ALLOWED_NAME}' && git config user.email '${ALLOWED_EMAIL}'"
+  echo >&2 "  (и НЕ перезаписывать config агентским окружением — см. .mailmap)"
+  exit 1
+}
+
+[ "$name" = "$ALLOWED_NAME" ] || fail
+[ "$email" = "$ALLOWED_EMAIL" ] || fail
+exit 0
