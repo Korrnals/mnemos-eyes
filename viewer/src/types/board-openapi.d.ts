@@ -767,8 +767,11 @@ export interface paths {
          * Create Assignment
          * @description Queue an execution attempt on a task (ADR 0009 §3). UI-token class
          *     (A1) — the owner nominates, the poller decides (A3). 404 unknown task;
-         *     422 archived/terminal task; 409 while another active assignment holds
-         *     the task (≤1 invariant).
+         *     422 archived/terminal task or unknown harness; 409 while another active
+         *     assignment holds the task (≤1 invariant). The harness gate lives IN the
+         *     store's in-transaction assignment core (wave 3C) — the same gate the
+         *     manual run-now goes through, so no window can mint a nomination on a
+         *     DELETED harness (a zombie queued row launchable by nobody).
          */
         readonly post: operations["create_assignment_api_assignments_post"];
         readonly delete?: never;
