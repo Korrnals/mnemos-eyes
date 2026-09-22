@@ -377,3 +377,71 @@ describe("UI-10 feed panel (layer 3)", () => {
     root.unmount();
   });
 });
+
+describe("AGW-4 polish (actionable empties, terminal hint, onboarding)", () => {
+  it("the empty list is an ACTION: «Open tasks» links to /tasks", async () => {
+    const { root, container } = await mountPage([]);
+    expect(container.textContent).toContain("No assignments");
+    const link = container.querySelector<HTMLAnchorElement>('a[href="/tasks"]');
+    expect(link).not.toBeNull();
+    expect(link?.textContent).toBe("Open tasks");
+    root.unmount();
+  });
+
+  it("the empty UI-10 feed carries the same link", async () => {
+    const { root, container } = await mountPage([]);
+    const toggle = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Execution feed"),
+    )!;
+    await act(async () => {
+      toggle.click();
+    });
+    const feed = container.querySelector('section[aria-label="Execution feed"]')!;
+    expect(feed.textContent).toContain("No execution events yet");
+    expect(feed.querySelector('a[href="/tasks"]')).not.toBeNull();
+    root.unmount();
+  });
+
+  it("no terminal rows today but recent ones exist → a neutral date hint replaces the group", async () => {
+    const yesterday = new Date(NOW - 26 * 3600 * 1000).toISOString();
+    const { root, container } = await mountPage([
+      assignment({ id: 1, state: "running", claimed_by_executor: "x", heartbeat_at: ago(30), started_at: ago(60) }),
+      assignment({ id: 2, state: "done", task_id: "TB-9", finished_at: yesterday }),
+    ]);
+    // The «за сегодня» group stays unrendered — the hint points at history.
+    expect(container.querySelector('section[aria-label="terminal today"]')).toBeNull();
+    expect(container.textContent).toContain("Last completed —");
+    root.unmount();
+  });
+
+  it("terminal rows today → the group renders, the idle hint stays hidden", async () => {
+    const { root, container } = await mountPage([
+      assignment({ id: 1, state: "running", claimed_by_executor: "x", heartbeat_at: ago(30), started_at: ago(60) }),
+      assignment({ id: 2, state: "done", task_id: "TB-6", finished_at: ago(300) }),
+    ]);
+    expect(container.querySelector('section[aria-label="terminal today"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Last completed —");
+    root.unmount();
+  });
+
+  it("onboarding auto-expands ONCE; the first collapse persists (localStorage)", async () => {
+    const first = await mountPage([]);
+    expect(first.container.textContent).toContain("How this works");
+    expect(first.container.textContent).toContain("poller picks the assignment up");
+    const toggle = [...first.container.querySelectorAll("button")].find(
+      (button) => button.getAttribute("aria-expanded") !== null && button.textContent?.includes("How this works"),
+    )!;
+    await act(async () => {
+      toggle.click();
+    });
+    expect(first.container.textContent).not.toContain("poller picks the assignment up");
+    expect(localStorage.getItem("vesmaro.agents.onboardingDone")).toBe("1");
+    first.root.unmount();
+
+    // A fresh mount never auto-expands again (manual re-open stays).
+    const second = await mountPage([]);
+    expect(second.container.textContent).toContain("How this works");
+    expect(second.container.textContent).not.toContain("poller picks the assignment up");
+    second.root.unmount();
+  });
+});

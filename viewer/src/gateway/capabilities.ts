@@ -28,6 +28,8 @@ import type {
   AutomationStatus,
   ExecutionSettings,
   ExecutionSettingsInput,
+  ExecutorPatchInput,
+  ExecutorStateChangeResult,
   ExecutorsPage,
   HookCreateInput,
   HookPatchInput,
@@ -200,6 +202,21 @@ export interface AgentsMutationSource {
   ): Promise<AssignmentCancelledResult>;
   /** Set default/fallback (`PUT /api/settings/execution`; Amd 2 §5 gates). */
   putExecutionSettings(payload: ExecutionSettingsInput): Promise<ExecutionSettings>;
+  /**
+   * Owner PATCH of one executor (`PATCH /api/executors/{id}`, ui-token;
+   * AGW-4): approve (pending→approved), enable/disable (routing
+   * kill-switch), revoke (TERMINAL — the row never leaves revoked).
+   */
+  patchExecutor(
+    executorId: string,
+    patch: ExecutorPatchInput,
+  ): Promise<ExecutorStateChangeResult>;
+  /**
+   * Remove the registry record (`DELETE /api/executors/{id}`, ui-token).
+   * Hard delete — the executor's token dies with the row; active
+   * assignments keep their pins/attribution verbatim (two-clock rule).
+   */
+  deleteExecutor(executorId: string): Promise<void>;
 }
 
 /** Gateway type that also speaks the agents-domain mutation wire. */
@@ -212,7 +229,9 @@ export function isAgentsMutationSource(
     typeof (gateway as Partial<AgentsMutationSource>).createAssignment === "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).cancelAssignment === "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).putExecutionSettings ===
-      "function"
+      "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).patchExecutor === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).deleteExecutor === "function"
   );
 }
 

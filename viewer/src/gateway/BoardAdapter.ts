@@ -23,6 +23,8 @@ import type {
   BoardTask,
   ExecutionSettings,
   ExecutionSettingsInput,
+  ExecutorPatchInput,
+  ExecutorStateChangeResult,
   ExecutorsPage,
   HookCreateInput,
   HookPatchInput,
@@ -114,6 +116,8 @@ import type {
  * - createAssignment     POST /api/assignments                    → 201 | 404/422/409
  * - cancelAssignment     POST /api/assignments/{id}/cancel        → 200 | 409
  * - listExecutors        GET  /api/executors                      (meta: presence TTLs)
+ * - patchExecutor        PATCH /api/executors/{id}                 → 200 | 404/409/422
+ * - deleteExecutor       DELETE /api/executors/{id}                → 200 | 404
  * - getExecutionSettings GET  /api/settings/execution
  * - putExecutionSettings PUT  /api/settings/execution             → 200 | 422
  * SCHED-1 automation (ADR 0013 — hooks consume in a later wave):
@@ -262,6 +266,24 @@ export interface BoardGateway extends MemoryGateway {
    * travel in `meta` — clients read them, never hardcode (spec §5.1).
    */
   listExecutors(signal?: AbortSignal): Promise<ExecutorsPage>;
+  /**
+   * Owner PATCH of one executor (`PATCH /api/executors/{id}`, ui-token;
+   * AGW-4). approve (state=approved), revoke (TERMINAL kill-switch —
+   * re-register instead; 409 on any attempt to leave revoked),
+   * enable/disable (routing kill-switch), rename, owner-declared
+   * capabilities. Idempotent: a no-op PATCH emits nothing server-side.
+   */
+  patchExecutor(
+    executorId: string,
+    patch: ExecutorPatchInput,
+  ): Promise<ExecutorStateChangeResult>;
+  /**
+   * Remove the registry record (`DELETE /api/executors/{id}`, ui-token).
+   * Hard delete: the executor's secret dies with the row (re-registration
+   * mints a new one); active assignments deliberately keep their pins and
+   * attribution strings (two-clock discipline, Amd 2 §3). 404 unknown id.
+   */
+  deleteExecutor(executorId: string): Promise<void>;
   /** Default/fallback executor pair (`GET /api/settings/execution`, open read). */
   getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
   /**
@@ -648,6 +670,36 @@ export class BoardAdapter implements BoardGateway {
 
   async listExecutors(signal?: AbortSignal): Promise<ExecutorsPage> {
     return this.request<ExecutorsPage>("/executors", { signal });
+  }
+
+  async patchExecutor(
+    executorId: string,
+    patch: ExecutorPatchInput,
+  ): Promise<ExecutorStateChangeResult> {
+    return this.request<ExecutorStateChangeResult>(
+      `/executors/${encodeURIComponent(executorId)}`,
+      // Wire shape: the schema's fields are nullable/optional — omitted keys
+      // stay untouched server-side (model_dump(exclude_none=True)).
+      {
+        method: "PATCH",
+        body: {
+          ...(patch.name === undefined ? {} : { name: patch.name }),
+          ...(patch.state === undefined ? {} : { state: patch.state }),
+          ...(patch.capabilities === undefined
+            ? {}
+            : { capabilities: [...patch.capabilities] }),
+          ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
+        },
+        auth: true,
+      },
+    );
+  }
+
+  async deleteExecutor(executorId: string): Promise<void> {
+    await this.request<{ ok: boolean }>(
+      `/executors/${encodeURIComponent(executorId)}`,
+      { method: "DELETE", auth: true },
+    );
   }
 
   async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {

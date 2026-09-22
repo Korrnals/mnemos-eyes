@@ -757,6 +757,61 @@ export const en: Record<TranslationKey, string> = {
   "agents.settings.saveFailed": "Failed to save execution settings",
   "agents.settings.meshIneligible": "mesh transport — routing unavailable until R4",
 
+  // --- agents domain: registry page /agents/harnesses (AGW-4) ----------------------
+  "nav.agentsHarnesses": "Connect",
+  "agents.registry.title": "Agent connections",
+  "agents.registry.loading": "Loading the executor registry",
+  "agents.registry.failed": "Failed to load the executor registry",
+  "agents.registry.empty": "No executors yet — connect the first one with the guide below.",
+  "agents.registry.band.pending": "Awaiting approval",
+  "agents.registry.band.active": "Connected",
+  "agents.registry.band.revoked": "Revoked",
+  "agents.registry.approve": "Approve",
+  "agents.registry.approveHint":
+    "after approving, enable the executor — routing picks only enabled ones",
+  "agents.registry.enable": "Enable",
+  "agents.registry.disable": "Disable",
+  "agents.registry.revoke": "Revoke",
+  "agents.registry.remove": "Delete",
+  "agents.registry.capabilitiesLabel": "Capabilities",
+  "agents.registry.unverifiedChip": "unverified",
+  "agents.registry.hostLabel": "host",
+  "agents.registry.revokedHint": "trust is not restorable — re-register the executor",
+  "agents.connect.label": "How to connect an external agent",
+  "agents.connect.step1":
+    "On the external machine, install the poller: dependencies and scripts live in deploy/poller/README.md (python ≥ 3.10, httpx + pyyaml).",
+  "agents.connect.step2":
+    "Copy poller.example.yaml to ~/.config/mnemos-eyes/poller.yaml (chmod 0600) and fill in board_url, executor_name and the allowlist.",
+  "agents.connect.step3":
+    "The machine token lives only in the environment: VESMARO_BOARD_TOKEN in /etc/vesmaro/poller.env with 0600 permissions — never in the config or in prompts.",
+  "agents.connect.step4":
+    "Run the poller as a service (the systemd unit from the README) or once with --once for a dry-run check.",
+  "agents.connect.step5":
+    "The executor appears above in «Awaiting approval» — approve it here, then enable it for routing.",
+  "agents.connect.note":
+    "Executor registration is a machine-class API (POST /api/executors with the board token): there is no registration button in the UI — this screen runs the approval queue.",
+  "agents.executors.actionFailed": "Failed to update the executor",
+  "agents.executors.approved": "{{name}}: approved",
+  "agents.executors.approvedDetail":
+    "enable the executor — routing picks only enabled ones",
+  "agents.executors.enabled": "{{name}}: enabled",
+  "agents.executors.disabled": "{{name}}: disabled",
+  "agents.executors.revokeConfirm":
+    "Revoke {{name}}'s access? Trust is not restorable: the state is terminal and the executor must re-register (a new record and a new secret).",
+  "agents.executors.revoked": "{{name}}: revoked",
+  "agents.executors.revokedDetail": "terminal state — re-registration only",
+  "agents.executors.deleteConfirm":
+    "Remove {{name}} from the registry? The removal is hard: the executor's secret dies with the record and the name is freed for re-registration; active assignments keep their executor references.",
+  "agents.executors.deleted": "{{name}}: deleted",
+
+  // --- agents domain: execution polish (AGW-4) -------------------------------------
+  "agents.execution.openTasks": "Open tasks",
+  "agents.group.terminalIdle": "Last completed — {{date}}",
+  "agents.onboarding.label": "How this works",
+  "agents.onboarding.body":
+    "Take a task in the Tasks section and press «Take into work» on its page — the poller picks the assignment up in ~10 seconds and you watch it here; the feed below fills in live.",
+
+
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Automation",
   "automation.title": "Automation",

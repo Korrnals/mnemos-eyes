@@ -97,9 +97,17 @@ export function ExecutionFeedPanel() {
         </span>
       </div>
       {collapsed ? null : rows.length === 0 ? (
-        <p className="border-t border-border-subtle px-3 py-4 text-sm text-foreground-muted">
-          {t("agents.feed.empty")}
-        </p>
+        <div className="border-t border-border-subtle px-3 py-4 text-sm text-foreground-muted">
+          {t("agents.feed.empty")}{" "}
+          {/* AGW-4: the empty feed is an action too — the same way in as
+           * the list's empty state (empty states with actions, §3.2). */}
+          <Link
+            to="/tasks"
+            className="text-iris-bright underline underline-offset-2 transition-colors duration-instant hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+          >
+            {t("agents.execution.openTasks")}
+          </Link>
+        </div>
       ) : (
         <ul
           aria-live="off"

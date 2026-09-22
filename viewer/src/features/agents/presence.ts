@@ -1,4 +1,5 @@
 import type { ExecutorListMeta, ExecutorPresence } from "@/gateway/boardTypes";
+import type { TranslationKey } from "@/i18n";
 
 /**
  * Presence computation from the server-owned TTL contract (spec §2.1/§5.1):
@@ -55,4 +56,41 @@ export function formatPulseAge(ageS: number, unit: {
       : `${hours}${unit.hours}`;
   }
   return `${Math.floor(hours / 24)}${unit.days}`;
+}
+
+// --- presence visuals (shared by the strip AND the registry rows, AGW-4) ---------
+
+/**
+ * Presence dot classes (spec §3.2 — semantic aliases only, NO new colours:
+ * iris / warning / muted). Offline is a HOLLOW dot — shape carries the
+ * meaning with the colour; unknown is the same hollow shape with a muted
+ * ring, visibly NOT a verdict.
+ */
+export const PRESENCE_DOT: Readonly<Record<string, string>> = {
+  online: "bg-iris-bright",
+  stale: "bg-warning",
+  offline: "border border-border bg-transparent",
+  unknown: "border border-border-subtle bg-transparent",
+};
+
+/** Presence age text tone next to the dot (secondary while alive, muted dead). */
+export const PRESENCE_TEXT: Readonly<Record<string, string>> = {
+  online: "text-foreground-secondary",
+  stale: "text-foreground-secondary",
+  offline: "text-foreground-muted",
+  unknown: "text-foreground-muted",
+};
+
+/** SR label key for a presence verdict (including the unknown non-verdict). */
+export function presenceLabelKey(presence: string): TranslationKey {
+  switch (presence) {
+    case "online":
+      return "agents.presence.online";
+    case "stale":
+      return "agents.presence.stale";
+    case "offline":
+      return "agents.presence.offline";
+    default:
+      return "agents.presence.unknown";
+  }
 }
