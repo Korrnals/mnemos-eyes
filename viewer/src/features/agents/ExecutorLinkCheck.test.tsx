@@ -130,4 +130,16 @@ describe("ExecutorLinkCheck — the honest check", () => {
     expect(html).not.toContain("Check for real");
     mount.root.unmount();
   });
+
+  it("P2: a PENDING row offers the check but NOT the second stage (no presence yet)", async () => {
+    const pending: ExecutorItem = { ...FRESH, state: "pending", last_seen: "" };
+    const mount = await mountCheck(pending, "card", true);
+    const html = mount.text();
+    // The verdict is honest without any check: «has never answered a poll».
+    expect(html).toContain("has never answered a poll");
+    expect(html).toContain("Check connection");
+    // The real probe needs a routable pin — pending cannot take one.
+    expect(html).not.toContain("Check for real");
+    mount.root.unmount();
+  });
 });

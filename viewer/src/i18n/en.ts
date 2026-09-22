@@ -850,6 +850,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.linktest.rowAria": "Open «Take into work» with {{name}} pinned",
   "agents.sheet.pinnedHint":
     "Executor pinned: the assignment waits for them to come back online — submit stays active.",
+  "agents.sheet.pinnedInvalidHint":
+    "The pinned executor cannot take tasks right now — pick «Default» or another executor.",
   // AGW-6 B: executor settings card (drawer)
   "agents.card.title": "Executor card",
   "agents.card.description":

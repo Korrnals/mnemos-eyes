@@ -865,6 +865,8 @@ export const ru = {
   "agents.linktest.rowAria": "Открыть «Взять в работу» с пином на {{name}}",
   "agents.sheet.pinnedHint":
     "Пин на исполнителя: поручение дождётся его выхода на связь — отправка активна.",
+  "agents.sheet.pinnedInvalidHint":
+    "Запиненный исполнитель сейчас не может взять задачу — выберите «По умолчанию» или другого исполнителя.",
   // AGW-6 B: карточка настроек исполнителя (drawer)
   "agents.card.title": "Карточка исполнителя",
   "agents.card.description":

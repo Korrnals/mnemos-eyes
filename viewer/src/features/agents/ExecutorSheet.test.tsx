@@ -28,6 +28,7 @@ import type { ExecutorsPage } from "@/gateway/boardTypes";
 interface Mount {
   root: Root;
   gateway: MockAdapter;
+  queryClient: QueryClient;
   text: () => string;
   query: <T extends Element>(selector: string) => T[];
 }
@@ -70,6 +71,7 @@ async function mountCard(
   return {
     root,
     gateway,
+    queryClient,
     text: () => document.body.textContent ?? "",
     query: <T extends Element>(selector: string) => [
       ...document.querySelectorAll<T>(selector),
@@ -174,6 +176,55 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
       .query<HTMLButtonElement>("button")
       .find((candidate) => candidate.textContent?.includes("Save"));
     expect(save?.disabled).toBe(true);
+    mount.root.unmount();
+  });
+
+  it("P3: chip-by-chip removal down to [] hits the SAME wipe confirm on Save", async () => {
+    const mount = await mountCard("exec-laptop-zcode"); // 2 declared caps
+    const confirm = stubConfirm(false); // DECLINE first — the bypass probe
+    const spy = vi.spyOn(mount.gateway, "patchExecutor");
+    const removeButtons = () =>
+      mount.query<HTMLButtonElement>("button[aria-label^='Remove capability']");
+    expect(removeButtons()).toHaveLength(2);
+    await act(async () => {
+      removeButtons()[0].click();
+    });
+    await act(async () => {
+      removeButtons()[0].click();
+    });
+    // The bulk «Clear» was never touched, yet the diff is [] — Save must
+    // still confirm, and a decline must send NOTHING.
+    expect(confirm).not.toHaveBeenCalled();
+    await clickButton(mount, "Save");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(spy).not.toHaveBeenCalled();
+    // Accepting lets the deliberate wipe travel.
+    stubConfirm(true);
+    await clickButton(mount, "Save");
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy).toHaveBeenCalledWith("exec-laptop-zcode", { capabilities: [] });
+    mount.root.unmount();
+  });
+
+  it("P3: a foreign row update does NOT clobber an in-progress edit", async () => {
+    const mount = await mountCard("exec-laptop-zcode");
+    await setName(mount, "work-in-progress");
+    // A foreign PATCH lands underneath (SSE → invalidated registry row).
+    const page = await mount.gateway.listExecutors();
+    const bumped: ExecutorsPage = {
+      ...page,
+      items: page.items.map((row) =>
+        row.id === "exec-laptop-zcode"
+          ? { ...row, updated_at: "2026-12-01T00:00:00+00:00", version: "9.9.9" }
+          : row,
+      ),
+    };
+    await act(async () => {
+      mount.queryClient.setQueryData(keys.agents.executors.list(), bumped);
+    });
+    // The form was NOT remounted: the in-progress name survives the update.
+    const input = mount.query<HTMLInputElement>("input[maxlength='120']")[0];
+    expect(input?.value).toBe("work-in-progress");
     mount.root.unmount();
   });
 

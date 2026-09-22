@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Check, Copy, Plus, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,6 +60,26 @@ export function ExecutorSheet({
     if (open && !executors.isPending && row === null) onOpenChange(false);
   }, [open, executors.isPending, row, onOpenChange]);
 
+  // P3: a foreign row update (another surface's PATCH / SSE) must NOT
+  // clobber an in-progress edit. The remount stamp FREEZES at the
+  // clean→dirty transition and stays frozen while dirty; once the diff
+  // empties (saved or reverted), it unfreezes and the form re-seeds from
+  // the server's current truth. The freeze is state-driven (the report
+  // comes from the form's dirty effect) — no refs touched during render.
+  const [formDirty, setFormDirty] = useState(false);
+  const [frozenStamp, setFrozenStamp] = useState<string | null>(null);
+  const stamp = row === null ? "" : `${row.id}|${row.updated_at}|${row.state}|${row.enabled}`;
+  const handleDirty = useCallback(
+    (next: boolean) => {
+      setFormDirty(next);
+      // Freeze ONCE at the transition; a repeated report (any parent
+      // re-render re-runs the child's effect via the callback identity)
+      // must NOT chase the stamp while dirty.
+      setFrozenStamp((prev) => (next ? (prev ?? stamp) : null));
+    },
+    [stamp],
+  );
+
   if (row === null) return null;
 
   return (
@@ -81,12 +101,10 @@ export function ExecutorSheet({
           <DialogDescription className="sr-only">
             {t("agents.card.description")}
           </DialogDescription>
-          {/* Keyed inner form: the card re-seeds whenever the ROW changes
-           * underneath (own save bumps updated_at; approve/revoke flip
-           * state) — the form always edits the server's current truth. */}
           <ExecutorSheetForm
-            key={`${row.id}|${row.updated_at}|${row.state}|${row.enabled}`}
+            key={formDirty && frozenStamp !== null ? frozenStamp : stamp}
             executor={row}
+            onDirtyChange={handleDirty}
           />
         </div>
       </DialogContent>
@@ -95,7 +113,13 @@ export function ExecutorSheet({
 }
 
 /** The card body: sections + the diff-save. Re-seeds via the parent key. */
-function ExecutorSheetForm({ executor }: { executor: ExecutorItem }) {
+function ExecutorSheetForm({
+  executor,
+  onDirtyChange,
+}: {
+  executor: ExecutorItem;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const t = useT();
   const { lang } = useI18n();
   const mutations = useExecutorMutations();
@@ -115,9 +139,26 @@ function ExecutorSheetForm({ executor }: { executor: ExecutorItem }) {
 
   const diff = executorPatchDiff(executor, { name, capabilities });
   const diffEmpty = Object.keys(diff).length === 0;
+  const dirty = !diffEmpty;
+
+  // P3: the parent freezes the remount stamp while dirty — report the flag
+  // up whenever it flips (the effect, not render: no cascading setState).
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
 
   const save = (): void => {
     if (diffEmpty) return;
+    // P3: ONE wipe checkpoint, on Save — chip-by-chip removal down to []
+    // hits the SAME confirm as the bulk «Clear» (the server treats [] as a
+    // deliberate wipe; an accidental one must be as hard to make).
+    if (
+      diff.capabilities !== undefined &&
+      diff.capabilities.length === 0 &&
+      !window.confirm(t("agents.card.capsClearConfirm"))
+    ) {
+      return;
+    }
     mutations.updateExecutor(executor, diff, "agents.card.saved");
   };
 
@@ -151,7 +192,7 @@ function ExecutorSheetForm({ executor }: { executor: ExecutorItem }) {
     : t("agents.registry.viaMachine");
 
   const facts: { label: string; value: string }[] = [
-    { label: t("agents.enrollment.harness"), value: executor.harness },
+    { label: t("agents.card.harnessLabel"), value: executor.harness },
     {
       label: t("agents.card.transportLabel"),
       value:

@@ -153,13 +153,49 @@ function AssignExecutorForm({
   const executorName = (id: string): string =>
     executorRows.find((row) => row.id === id)?.name ?? id;
 
+  // --- P2: the pin is a CLAIM, never a lie ----------------------------------
+  // The server stores executor_id as a plain designation (no eligibility
+  // check at create; eligibility applies at claim). A deep-link pin on a
+  // pending/revoked/disabled executor would queue an assignment nobody can
+  // ever claim — holding the ≤1-active slot until manual cleanup. So the
+  // pin may only SURVIVE when it is routable (approved+enabled; offline is
+  // the ratified link-test case — the queue waits).
+  const pinnedRow = pinnedExecutorId
+    ? (executorRows.find((executor) => executor.id === pinnedExecutorId) ?? null)
+    : null;
+  const pinSelectable =
+    pinnedRow !== null && pinnedRow.state === "approved" && pinnedRow.enabled;
+
+  /**
+   * The choice that would ACTUALLY travel (submit guard, second line of
+   * defense behind the disabled radio):
+   * - the owner moved off the pin themselves → their choice stands;
+   * - no pin → the seeded/selected default;
+   * - pin selectable → the pin (offline allowed);
+   * - pin row GONE from the registry (deleted) → honest fallback to
+   *   default — there is no executor to show, nothing to stand on;
+   * - pin row exists but is NOT routable → null: submit BLOCKED, the
+   *   pinned radio stays checked-but-disabled, the hint names the way out
+   *   (pick «Default» or another executor). No silent substitution.
+   */
+  const effectiveChoice = ((): string | null => {
+    if (pinnedExecutorId === null || executorChoice !== pinnedExecutorId) {
+      return executorChoice;
+    }
+    if (pinSelectable) return pinnedExecutorId;
+    if (pinnedRow === null) return "default";
+    return null;
+  })();
+  const pinBlocked = effectiveChoice === null;
+
   /**
    * LIVE preview — the shared resolver over the live registry + settings.
    * The project-default tier is server-only data (no endpoint); the preview
-   * label carries that honesty.
+   * label carries that honesty. The preview resolves from the EFFECTIVE
+   * choice — a blocked pin never produces a lying «route: X» preview.
    */
   const preview = resolveRoutingAnnotation({
-    pin: executorChoice === "default" ? "" : executorChoice,
+    pin: effectiveChoice !== null && effectiveChoice !== "default" ? effectiveChoice : "",
     specialist,
     taskSpecialists: task.specialists,
     executors: executorRows,
@@ -173,7 +209,8 @@ function AssignExecutorForm({
 
   const submit = (): void => {
     const value = specialist.trim();
-    if (value.length === 0 || submitting) return;
+    // P2 second line: a blocked pin NEVER reaches the wire.
+    if (value.length === 0 || submitting || effectiveChoice === null) return;
     setSubmitting(true);
     mutations.createAssignment(
       task,
@@ -181,7 +218,7 @@ function AssignExecutorForm({
         task_id: task.id,
         specialist: value,
         harness,
-        executor_id: executorChoice === "default" ? "" : executorChoice,
+        executor_id: effectiveChoice === "default" ? "" : effectiveChoice,
       },
       {
         onQueued: onDone,
@@ -255,7 +292,9 @@ function AssignExecutorForm({
               <input
                 type="radio"
                 name="assign-executor"
-                checked={executorChoice === "default"}
+                /* The EFFECTIVE default: also lit when a deleted pin fell
+                 * back silently — the owner always sees what will travel. */
+                checked={effectiveChoice === "default"}
                 onChange={() => setExecutorChoice("default")}
                 className="mt-1 accent-iris-bright"
               />
@@ -271,10 +310,12 @@ function AssignExecutorForm({
               </span>
             </label>
             {executorRows.map((executor) => {
-              const selectable = selectablePinnedExecutor(
-                executor,
-                executor.id === pinnedExecutorId,
-              );
+              const isPin = executor.id === pinnedExecutorId;
+              const selectable = selectablePinnedExecutor(executor, isPin);
+              // A BLOCKED pin keeps its radio checked-but-disabled: the
+              // owner sees exactly what the deep-link named and why the
+              // submit is held (no silent substitution, no dead-looking UI).
+              const checked = executorChoice === executor.id || (isPin && executorChoice === pinnedExecutorId);
               return (
                 <label
                   key={executor.id}
@@ -289,7 +330,7 @@ function AssignExecutorForm({
                   <input
                     type="radio"
                     name="assign-executor"
-                    checked={executorChoice === executor.id}
+                    checked={checked}
                     disabled={!selectable}
                     onChange={() => setExecutorChoice(executor.id)}
                     className="mt-1 accent-iris-bright"
@@ -306,10 +347,12 @@ function AssignExecutorForm({
               );
             })}
           </div>
-          {/* Link-test pin: the honest wait spelled out at the pin itself. */}
-          {pinnedExecutorId ? (
+          {/* Link-test pin: the honest wait spelled out at the pin itself —
+           * or, when the pin is unroutable, the way out named just as
+           * plainly (P2: the slot must not be held by a ghost). */}
+          {pinnedExecutorId !== null ? (
             <p className="mt-1 border-t border-border-subtle pt-1 text-xs text-foreground-muted">
-              {t("agents.sheet.pinnedHint")}
+              {pinBlocked ? t("agents.sheet.pinnedInvalidHint") : t("agents.sheet.pinnedHint")}
             </p>
           ) : null}
         </fieldset>
@@ -351,7 +394,7 @@ function AssignExecutorForm({
             type="button"
             size="sm"
             onClick={submit}
-            disabled={submitting || specialist.trim().length === 0}
+            disabled={submitting || specialist.trim().length === 0 || pinBlocked}
           >
             {submitting ? t("agents.sheet.submitting") : t("agents.sheet.submit")}
           </Button>

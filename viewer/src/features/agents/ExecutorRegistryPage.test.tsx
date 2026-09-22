@@ -332,6 +332,19 @@ describe("AGW-6 link check + settings card", () => {
     expect(container.textContent).not.toContain("read-only except Delete");
     root.unmount();
   });
+
+  it("P3: %-garbage in either hash form never takes the page down", async () => {
+    // Both decode sites (scroll + card deep-link) must swallow the URIError.
+    const { root, container } = await mountPage(false, "/agents/harnesses#executor-sheet-%zz");
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Awaiting approval");
+    });
+    expect(document.body.textContent).not.toContain("Executor card");
+    const scroll = await mountPage(false, "/agents/harnesses#executor-%zz");
+    expect(scroll.container.textContent).toContain("Awaiting approval");
+    scroll.root.unmount();
+    root.unmount();
+  });
 });
 
 describe("AGW-5 registry row context menu", () => {

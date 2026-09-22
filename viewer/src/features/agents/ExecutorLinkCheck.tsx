@@ -117,8 +117,12 @@ export function ExecutorLinkCheck({
           <p className="mt-1 text-xs text-foreground-muted">
             {t("agents.linkcheck.disclaimer")}
           </p>
-          {/* Second stage — the real probe is a real assignment (A.3). */}
-          {!revoked ? (
+          {/* Second stage — the real probe is a real assignment (A.3).
+           * P2 review: APPROVED only. A pending executor has no presence
+           * history at all (the «never answered» verdict is already the
+           * honest answer) and a test pin on it would be dead on arrival
+           * (unroutable, the slot would be held by a ghost). */}
+          {!revoked && executor.state === "approved" ? (
             <Button
               type="button"
               variant="ghost"

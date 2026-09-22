@@ -33,6 +33,18 @@ import { useEnrollments } from "./useEnrollment";
 import { useExecutorMutations } from "./useExecutorMutations";
 
 /**
+ * P3: %-garbage in a hash must never take the page down —
+ * decodeURIComponent throws URIError, the caller renders null instead.
+ */
+function safeDecodeHash(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * `/agents/harnesses` — «Подключение агентов» (AGW-4, spec §1 wave 2): the
  * executor registry with management, answering the owner's «где интерфейс
  * подключения внешних агентов?». The page renders THREE bands from
@@ -70,11 +82,13 @@ export function ExecutorRegistryPage() {
   const items = executors.data?.items ?? [];
   // The enrollment flow lands here: a used token's link points at the row
   // its registration minted (#executor-<id>) — scroll it into view.
+  // P3: undecodable hashes are skipped, never thrown.
   useEffect(() => {
     if (!location.hash.startsWith("#executor-") || location.hash.startsWith("#executor-sheet-"))
       return;
-    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
-    target?.scrollIntoView({ block: "center" });
+    const decoded = safeDecodeHash(location.hash.slice(1));
+    if (decoded === null) return;
+    document.getElementById(decoded)?.scrollIntoView({ block: "center" });
   }, [location.hash]);
 
   // AGW-6 B: the settings-card deep-link (#executor-sheet-<id>) — the
@@ -83,9 +97,10 @@ export function ExecutorRegistryPage() {
   // hash names a row (the drawer itself waits out the registry load);
   // closing rewrites the URL without the hash.
   const sheetPrefix = "#executor-sheet-";
-  const cardId = location.hash.startsWith(sheetPrefix)
-    ? decodeURIComponent(location.hash.slice(sheetPrefix.length))
+  const sheetRaw = location.hash.startsWith(sheetPrefix)
+    ? safeDecodeHash(location.hash.slice(sheetPrefix.length))
     : null;
+  const cardId = sheetRaw;
   const closeCard = (): void => {
     navigate(
       { pathname: location.pathname, search: location.search, hash: "" },
