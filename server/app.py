@@ -631,7 +631,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.13.1", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.14.0", lifespan=lifespan)
 
 # ------------------------------------- device-token scope guard (ADR 0012 §5)
 # The single scope middleware for PREFIX-CLASSIFIED tokens, standing
