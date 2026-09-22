@@ -187,3 +187,43 @@ describe("EnrollmentDialog — token screen", () => {
   });
 
 });
+
+describe("EnrollmentDialog — honest copy (review P2-2)", () => {
+  it("a REJECTED write shows the failure hint, never a fake «Copied» flash", async () => {
+    const { root, container } = await mount();
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("shown ONCE");
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+      configurable: true,
+    });
+    await act(async () => {
+      button(container, "Copy").click();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.body.textContent).toContain("Copy failed — the token stays visible");
+    expect(document.body.textContent).not.toContain("Copied");
+    // The token is still on screen (masked) — recoverable by hand.
+    expect(document.querySelector("code")!.textContent).toMatch(/^mne_•+$/);
+    root.unmount();
+  });
+
+  it("an ABSENT clipboard API shows the hint too (non-secure context)", async () => {
+    const { root, container } = await mount();
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("shown ONCE");
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    await act(async () => {
+      button(container, "Copy").click();
+    });
+    expect(document.body.textContent).toContain("Copy failed — the token stays visible");
+    root.unmount();
+  });
+});

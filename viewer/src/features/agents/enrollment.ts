@@ -67,8 +67,11 @@ export interface BootstrapContext {
  */
 export function buildBootstrapSteps(ctx: BootstrapContext): readonly string[] {
   return [
-    // 4б — registration with the one-time token.
+    // 4б — registration with the one-time token. The export line leads the
+    // step (REMOTE-EXECUTOR.md §4б): without it $BOARD_URL is an unbound
+    // variable on a fresh shell — paste-as-is must actually paste.
     "# 1. регистрация (одноразовый enrollment-токен, TTL 15 мин):\n" +
+      'export BOARD_URL="https://<board-через-оверлей>"\n' +
       'curl -sS -X POST "$BOARD_URL/api/executors" \\\n' +
       '  -H "Authorization: Bearer ' +
       ctx.token +

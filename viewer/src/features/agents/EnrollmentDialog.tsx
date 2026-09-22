@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, Copy, Eye, EyeOff, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -17,7 +17,7 @@ import {
   effectiveEnrollmentState,
   formatTtlCountdown,
 } from "./enrollment";
-import { useEnrollmentActions } from "./useEnrollment";
+import { useEnrollmentActions, useHonestCopy } from "./useEnrollment";
 
 /**
  * «Добавить исполнителя» — the enrollment dialog (AGW-5 phase 2, design
@@ -178,24 +178,11 @@ function TokenScreen({
   const t = useT();
   const now = useValidationNow();
   const [revealed, setRevealed] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
+  // Review P2-2: flash ONLY on a resolved write — clipboard absent or a
+  // rejection is a visible failure (the token is shown once; a lying
+  // «Скопировано» quietly loses it).
+  const { copied, failed, copy } = useHonestCopy();
   const row: EnrollmentItem = created.enrollment;
-
-  // Reset the copied flash (2 s) — colour-only feedback, no motion.
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(null), 2000);
-    return () => clearTimeout(timer);
-  }, [copied]);
-
-  const copy = (key: string, text: string): void => {
-    try {
-      void navigator.clipboard?.writeText(text);
-    } catch {
-      // Clipboard may be absent (tests/embedded) — the flash just skips.
-    }
-    setCopied(key);
-  };
 
   const ttl = formatTtlCountdown(row, now);
   const state = effectiveEnrollmentState(row, now);
@@ -253,6 +240,15 @@ function TokenScreen({
           {copied === "token" ? t("agents.enrollment.copied") : t("agents.enrollment.copy")}
         </Button>
       </div>
+
+      {/* Review P2-2: the honest failure path — the token is STILL on
+       * screen (the dialog stays open, the code is selectable), the owner
+       * just has to select it by hand. */}
+      {failed ? (
+        <p role="alert" className="text-xs text-error">
+          {t("agents.enrollment.copyFailedToken")}
+        </p>
+      ) : null}
 
       {/* Live TTL: mm:ss off the shared ticker; past-TTL reads «истёк» via
        * the effective state even before the sweeper frame arrives. */}

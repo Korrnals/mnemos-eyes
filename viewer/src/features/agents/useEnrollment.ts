@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type {
@@ -171,6 +171,56 @@ export function createEnrollmentActions(deps: EnrollmentActionDeps) {
 }
 
 export type EnrollmentActions = ReturnType<typeof createEnrollmentActions>;
+
+/**
+ * Honest copy feedback (review P2-2; the Markdown.tsx CopyButton canon):
+ * the «Скопировано» flash fires ONLY on a resolved write — clipboard absent
+ * (non-secure context) or a rejection is a FAILURE the caller must show.
+ * A lying flash on a once-only enrollment token quietly loses it.
+ * `copied` carries the flash KEY (a dialog copies several values); `failed`
+ * stays set until the next copy attempt, so the manual-selection hint has
+ * time to be read.
+ */
+export function useHonestCopy(resetMs = 2000): {
+  copied: string | null;
+  failed: boolean;
+  copy: (key: string, text: string) => void;
+} {
+  const [copied, setCopied] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const copy = useCallback(
+    (key: string, text: string) => {
+      setFailed(false);
+      let write: Promise<void> | undefined;
+      try {
+        write = navigator.clipboard?.writeText(text);
+      } catch {
+        write = undefined;
+      }
+      if (!write) {
+        setFailed(true);
+        return;
+      }
+      void write.then(
+        () => {
+          setCopied(key);
+          if (timer.current !== null) window.clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => setCopied(null), resetMs);
+        },
+        () => setFailed(true),
+      );
+    },
+    [resetMs],
+  );
+  return { copied, failed, copy };
+}
 
 /** React wiring: contexts → factory (stable identity across renders). */
 export function useEnrollmentActions(): EnrollmentActions {

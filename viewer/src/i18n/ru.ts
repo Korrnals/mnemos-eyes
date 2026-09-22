@@ -852,6 +852,10 @@ export const ru = {
   "agents.enrollment.hide": "Скрыть",
   "agents.enrollment.copy": "Копировать",
   "agents.enrollment.copied": "Скопировано",
+  "agents.enrollment.copyFailedToken":
+    "Скопировать не удалось — токен остаётся видимым, выделите его вручную.",
+  "agents.enrollment.copyFailed":
+    "Скопировать не удалось — значение в строке, выделите вручную.",
   "agents.enrollment.copyAll": "Скопировать всё",
   "agents.enrollment.copyStepAria": "Копировать шаг {{step}}",
   "agents.enrollment.ttl": "истечёт через {{time}}",

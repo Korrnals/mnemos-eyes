@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Check, KeyRound, ScrollText } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -7,7 +6,7 @@ import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
 import { useValidationNow } from "@/features/tasks/useValidationClock";
 import { effectiveEnrollmentState, formatTtlCountdown } from "./enrollment";
-import { useEnrollmentActions } from "./useEnrollment";
+import { useEnrollmentActions, useHonestCopy } from "./useEnrollment";
 
 /**
  * The persistent token-status panel under the registry (AGW-5 phase 2):
@@ -109,16 +108,12 @@ function EnrollmentRow({
   const minted = row.executor_id
     ? executors.find((executor) => executor.id === row.executor_id) ?? null
     : null;
-  const [copied, setCopied] = useState(false);
+  // Review P2-2: the flash fires ONLY on a resolved write; a failure is
+  // shown inline (the id stays visible in the row for manual selection).
+  const { copied, failed, copy } = useHonestCopy(1500);
 
   const copyId = (): void => {
-    try {
-      void navigator.clipboard?.writeText(row.enrollment_id);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard absent — the visual flash just skips.
-    }
+    copy("id", row.enrollment_id);
   };
 
   return (
@@ -135,6 +130,11 @@ function EnrollmentRow({
         {copied ? <Check className="inline size-3" aria-hidden="true" /> : null}
         {row.enrollment_id}
       </button>
+      {failed ? (
+        <span role="alert" className="text-xs text-error">
+          {t("agents.enrollment.copyFailed")}
+        </span>
+      ) : null}
 
       {/* The state, in words (WCAG 1.4.1): live = neutral, used = iris-ish
        * neutral emphasis, dead = muted. No new colours — foreground only. */}

@@ -837,6 +837,10 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.hide": "Hide",
   "agents.enrollment.copy": "Copy",
   "agents.enrollment.copied": "Copied",
+  "agents.enrollment.copyFailedToken":
+    "Copy failed — the token stays visible, select it manually.",
+  "agents.enrollment.copyFailed":
+    "Copy failed — the value is in the row, select it manually.",
   "agents.enrollment.copyAll": "Copy all",
   "agents.enrollment.copyStepAria": "Copy step {{step}}",
   "agents.enrollment.ttl": "expires in {{time}}",
