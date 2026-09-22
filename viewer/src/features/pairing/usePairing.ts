@@ -375,3 +375,113 @@ export function useCopyFlash(
   );
   return { copied, failed, copy };
 }
+
+// --- Device-leg copy with fallback (ADR 0012 §2.3, live owner feedback) ---------
+
+/** The three honest outcomes of a device-side copy attempt. */
+export type CopyOutcome =
+  /** `navigator.clipboard.writeText` resolved. */
+  | "copied"
+  /** Clipboard blocked → textarea + `execCommand("copy")` succeeded. */
+  | "copied-fallback"
+  /** Both writers failed → the token was selected for a manual copy. */
+  | "manual";
+
+/**
+ * Legacy clipboard path for mobile browsers where `navigator.clipboard` is
+ * absent (plain-HTTP LAN context) or rejects (permission denied): an
+ * off-screen readonly textarea, selected, copied via the deprecated-but-
+ * universal `document.execCommand("copy")`. Returns whether the copy took.
+ */
+export function copyViaExecCommand(text: string): boolean {
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    const copied = document.execCommand("copy") === true;
+    document.body.removeChild(textarea);
+    return copied;
+  } catch {
+    return false;
+  }
+}
+
+/** Select an element's contents (the manual-copy affordance: the owner gets
+ * a highlighted token instead of a bare "it failed"). */
+export function selectElementText(element: HTMLElement): void {
+  const doc = element.ownerDocument;
+  const selection = doc.defaultView?.getSelection();
+  if (!selection) return;
+  const range = doc.createRange();
+  range.selectNodeContents(element);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+/**
+ * The device-leg copy hook: clipboard first, exec-command fallback, and —
+ * when both writers refuse — the token is SELECTED in its row with the
+ * honest «скопируйте вручную» verdict. `copied`/`copied-fallback` flash and
+ * self-reset; `manual` PERSISTS (a failure must not quietly repaint itself
+ * as success), until the next attempt.
+ */
+export function useCopyWithFallback(
+  resetMs = 2000,
+): { outcome: CopyOutcome | null; copy: (text: string, selectTarget?: HTMLElement | null) => void } {
+  const [outcome, setOutcome] = useState<CopyOutcome | null>(null);
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  const flash = useCallback(
+    (value: Exclude<CopyOutcome, "manual">) => {
+      setOutcome(value);
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setOutcome(null), resetMs);
+    },
+    [resetMs],
+  );
+
+  const copy = useCallback(
+    (text: string, selectTarget?: HTMLElement | null) => {
+      setOutcome(null);
+      let write: Promise<void> | undefined;
+      try {
+        write = navigator.clipboard?.writeText(text);
+      } catch {
+        write = undefined;
+      }
+      if (write) {
+        void write.then(
+          () => flash("copied"),
+          () => {
+            setOutcome(
+              copyViaExecCommand(text) ? "copied-fallback" : manualOutcome(selectTarget),
+            );
+          },
+        );
+        return;
+      }
+      setOutcome(copyViaExecCommand(text) ? "copied-fallback" : manualOutcome(selectTarget));
+    },
+    [flash],
+  );
+
+  return { outcome, copy };
+}
+
+/** Total clipboard failure → select the row contents; the owner copies by hand. */
+function manualOutcome(selectTarget?: HTMLElement | null): CopyOutcome {
+  if (selectTarget) selectElementText(selectTarget);
+  return "manual";
+}

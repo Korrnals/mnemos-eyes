@@ -78,6 +78,7 @@ function mountExchange(script: ExchangeScript, initialEntry = "/pair") {
           <MemoryRouter initialEntries={[initialEntry]}>
             <Routes>
               <Route path="/pair" element={<PairPage />} />
+              <Route path="/" element={<div>BOARD-HOME</div>} />
             </Routes>
             <HashProbe />
           </MemoryRouter>
@@ -119,8 +120,37 @@ async function submitForm(): Promise<void> {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  localStorage.clear();
+  delete (window.navigator as { clipboard?: unknown }).clipboard;
+  delete (document as { execCommand?: unknown }).execCommand;
   vi.restoreAllMocks();
 });
+
+/** Deterministic clipboard / exec-command seams for the copy-outcome tests. */
+function stubClipboard(writeText?: () => Promise<void>): void {
+  Object.defineProperty(window.navigator, "clipboard", {
+    value: writeText ? { writeText } : undefined,
+    configurable: true,
+  });
+}
+
+function stubExecCommand(result: boolean): ReturnType<typeof vi.fn> {
+  const execCommand = vi.fn(() => result);
+  Object.defineProperty(document, "execCommand", {
+    value: execCommand,
+    configurable: true,
+    writable: true,
+  });
+  return execCommand;
+}
+
+async function reachIssuedScreen(): Promise<ReturnType<typeof mountExchange>> {
+  const page = mountExchange({ results: [ISSUED] }, "/pair#t=CODE-ISSUED");
+  await flush();
+  await submitForm();
+  await flush();
+  return page;
+}
 
 describe("PairPage — deep link", () => {
   it("prefills the code from #t= and strips the hash after the first exchange", async () => {
@@ -182,7 +212,7 @@ describe("PairPage — awaiting → issued", () => {
       expect(body).toContain("Device connected");
       expect(body).toContain("mnd_secret-token-value");
       expect(body).toContain("dev-9");
-      expect(body).toContain("save it now");
+      expect(body).toContain("stored on this device");
     } finally {
       vi.useRealTimers();
     }
@@ -266,5 +296,78 @@ describe("PairPage — honest verdicts", () => {
       );
     });
     expect(document.body.textContent).toContain("Pairing is unavailable in this mode");
+  });
+});
+
+describe("PairPage — issued phase (ADR 0012 §5: the token lives on the device)", () => {
+  it("saves the identity to localStorage under the vesmaro.device* keys", async () => {
+    await reachIssuedScreen();
+    expect(localStorage.getItem("vesmaro.deviceToken")).toBe("mnd_secret-token-value");
+    expect(localStorage.getItem("vesmaro.deviceId")).toBe("dev-9");
+    // The self-asserted name travels from the form into the stored identity.
+    const storedName = localStorage.getItem("vesmaro.deviceName") ?? "";
+    expect(storedName.length).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain("bound to this browser");
+  });
+
+  it("«Start working» is the primary forward path onto the board home", async () => {
+    await reachIssuedScreen();
+    await act(async () => {
+      button("Start working").click();
+    });
+    expect(document.body.textContent).toContain("BOARD-HOME");
+    expect(document.body.textContent).not.toContain("bound to this browser");
+  });
+
+  it("Copy token reports success via navigator.clipboard", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    stubClipboard(writeText);
+    await reachIssuedScreen();
+    await act(async () => {
+      button("Copy token").click();
+      await Promise.resolve();
+    });
+    expect(writeText).toHaveBeenCalledWith("mnd_secret-token-value");
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("Copied");
+    expect(body).not.toContain("fallback path");
+  });
+
+  it("a blocked clipboard falls back to execCommand and says so honestly", async () => {
+    stubClipboard(() => Promise.reject(new DOMException("denied")));
+    const execCommand = stubExecCommand(true);
+    await reachIssuedScreen();
+    await act(async () => {
+      button("Copy token").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(document.body.textContent).toContain("Copied via the browser's fallback path");
+  });
+
+  it("both writers failing selects the token and shows the manual verdict", async () => {
+    stubClipboard(() => Promise.reject(new DOMException("denied")));
+    const execCommand = stubExecCommand(false);
+    await reachIssuedScreen();
+    await act(async () => {
+      button("Copy token").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("Copy failed — the token is selected in the row");
+  });
+
+  it("a missing clipboard API (plain-HTTP context) also lands in the fallback", async () => {
+    stubClipboard(undefined);
+    stubExecCommand(true);
+    await reachIssuedScreen();
+    await act(async () => {
+      button("Copy token").click();
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toContain("Copied via the browser's fallback path");
   });
 });
