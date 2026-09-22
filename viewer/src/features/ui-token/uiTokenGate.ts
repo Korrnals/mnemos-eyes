@@ -150,8 +150,13 @@ export class UiTokenGate {
       // behind a fresh value.
       clearUiToken();
       this.pending = onDeferred ? { run, onDeferred } : { run };
-      this.setState({ open: true, reason: "rejected", tokenPresent: false,
-                      rejectDetail: error.detail });
+      this.setState({
+        open: true, reason: "rejected", tokenPresent: false,
+        // The FastAPI detail rides error.message (http.extractErrorMessage);
+        // the generic "401 Unauthorized" fallback stays hidden — the dialog
+        // already says (401) in the localized line.
+        rejectDetail: error.message.startsWith("401") ? undefined : error.message,
+      });
       this.emit({ type: "tokenRejected" });
       onDeferred?.();
     }
