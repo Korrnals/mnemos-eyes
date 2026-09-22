@@ -2970,7 +2970,7 @@ class Store:
                     (name,)).fetchone():
                 raise HarnessInUseError(
                     f"harness '{name}' is used by a registered executor — "
-                    "revoke or delete that executor first")
+                    "delete that executor first (revoked executors keep blocking: the row and the poller.yaml allowlist drift stay)")
             if db.execute(
                     "SELECT 1 FROM task_assignments WHERE harness=? AND "
                     "state IN ('queued','claimed','running') LIMIT 1",

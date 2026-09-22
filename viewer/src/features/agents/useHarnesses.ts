@@ -69,3 +69,15 @@ export function useHarnessNames(): string[] | undefined {
     .map((item: HarnessesPage["items"][number]) => item.name)
     .sort((a, b) => a.localeCompare(b));
 }
+
+/**
+ * The default NOMINATION value: the FIRST entry of the LIVE dictionary
+ * (wave 3C review — no hardcoded harness constant in the forms; the seed
+ * happens to be alphabetical, so the first seed row wins today, an
+ * owner-added dictionary can change that). Empty string while the
+ * dictionary is loading — callers resolve `choice || default`.
+ */
+export function useDefaultHarness(): string {
+  const harnesses = useHarnesses();
+  return harnesses.data?.items[0]?.name ?? "";
+}

@@ -996,7 +996,7 @@ export class MockAdapter implements MemoryGateway {
     if (this.executors.some((executor) => executor.harness === name)) {
       throw new ApiError(
         409,
-        `harness '${name}' is used by a registered executor — revoke or delete that executor first`,
+        `harness '${name}' is used by a registered executor — delete that executor first (revoked executors keep blocking — server parity)`,
         { url: "mock:/api/harnesses" },
       );
     }

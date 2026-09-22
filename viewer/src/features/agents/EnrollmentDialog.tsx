@@ -23,6 +23,7 @@ import {
 } from "./enrollment";
 import { useEnrollmentActions, useHonestCopy } from "./useEnrollment";
 import { HarnessSelect } from "./HarnessSelect";
+import { useDefaultHarness } from "./useHarnesses";
 
 /**
  * «Добавить исполнителя» — the enrollment dialog (AGW-5 phase 2, design
@@ -98,7 +99,10 @@ function EnrollmentForm({
   const t = useT();
   const actions = useEnrollmentActions();
   const [label, setLabel] = useState("");
-  const [harness, setHarness] = useState<string>("zcode");
+  // Wave 3C review: the default is the first entry of the LIVE dictionary.
+  const defaultHarness = useDefaultHarness();
+  const [harnessChoice, setHarnessChoice] = useState<string>("");
+  const harness = harnessChoice || defaultHarness;
   const [nameHint, setNameHint] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -131,7 +135,7 @@ function EnrollmentForm({
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t("agents.enrollment.harness")}
-        <HarnessSelect id="enroll-harness" value={harness} onChange={setHarness} />
+        <HarnessSelect id="enroll-harness" value={harness} onChange={setHarnessChoice} />
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t("agents.enrollment.nameHint")}
@@ -166,6 +170,9 @@ function TokenScreen({
 }) {
   const t = useT();
   const now = useValidationNow();
+  // The bootstrap command shows the minted hint or the first LIVE
+  // dictionary entry (wave 3C review — no hardcoded harness constant).
+  const defaultHarness = useDefaultHarness();
   const [revealed, setRevealed] = useState(false);
   // Review P2-2: flash ONLY on a resolved write — clipboard absent or a
   // rejection is a visible failure (the token is shown once; a lying
@@ -178,7 +185,7 @@ function TokenScreen({
   const steps = buildBootstrapSteps({
     token: created.token,
     name: row.name_hint || row.label || "executor",
-    harness: row.harness_hint || "zcode",
+    harness: row.harness_hint || defaultHarness,
   });
   // A used token links to the row it minted (enrollment.used carries the
   // executor_id; the registry list query has it after the invalidation).

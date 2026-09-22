@@ -14,6 +14,7 @@ import type {
 import { useT } from "@/i18n";
 import { ConditionEditor } from "./ConditionEditor";
 import { HarnessSelect } from "@/features/agents/HarnessSelect";
+import { useDefaultHarness } from "@/features/agents/useHarnesses";
 
 /**
  * Interval-trigger presets (moved here from the deleted gateway/harnesses.ts
@@ -83,7 +84,10 @@ function ScheduleForm({
   const [name, setName] = useState("");
   const [taskId, setTaskId] = useState("");
   const [specialist, setSpecialist] = useState("");
-  const [harness, setHarness] = useState<string>("zcode");
+  // Wave 3C review: the default is the first entry of the LIVE dictionary.
+  const defaultHarness = useDefaultHarness();
+  const [harnessChoice, setHarnessChoice] = useState<string>("");
+  const harness = harnessChoice || defaultHarness;
   const [triggerKind, setTriggerKind] = useState<"time-of-day" | "interval">(
     "time-of-day",
   );
@@ -166,7 +170,7 @@ function ScheduleForm({
           <HarnessSelect
             id="schedule-harness"
             value={harness}
-            onChange={setHarness}
+            onChange={setHarnessChoice}
             className={FIELD_CLASS}
           />
         </label>

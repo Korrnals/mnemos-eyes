@@ -18,6 +18,7 @@ import { formatAge } from "./assignmentStatus";
 import { useExecutors, useExecutionSettings } from "./useAgents";
 import { useAssignmentMutations } from "./useAssignmentMutations";
 import { HarnessSelect } from "./HarnessSelect";
+import { useDefaultHarness } from "./useHarnesses";
 
 /**
  * AssignExecutorSheet (ARCH-8, spec §2.3 — matrix A of concept §4.4 plus the
@@ -138,7 +139,13 @@ function AssignExecutorForm({
   const [specialist, setSpecialist] = useState(
     prefill?.specialist ?? task.specialists[0] ?? "",
   );
-  const [harness, setHarness] = useState<string>(prefill?.harness ?? "zcode");
+  // Wave 3C review: no hardcoded harness default — the first entry of the
+  // LIVE dictionary resolves the initial selection (a retry prefill wins).
+  const defaultHarness = useDefaultHarness();
+  const [harnessChoice, setHarnessChoice] = useState<string>(
+    prefill?.harness ?? "",
+  );
+  const harness = harnessChoice || defaultHarness;
   const [executorChoice, setExecutorChoice] = useState<string>(
     pinnedExecutorId ?? "default",
   );
@@ -219,7 +226,11 @@ function AssignExecutorForm({
   const submit = (): void => {
     const value = specialist.trim();
     // P2 second line: a blocked pin NEVER reaches the wire.
-    if (value.length === 0 || submitting || effectiveChoice === null) return;
+    // P2 second line: a blocked pin NEVER reaches the wire; an unloaded
+    // dictionary (empty harness) must not nominate a blank either.
+    if (value.length === 0 || !harness || submitting || effectiveChoice === null) {
+      return;
+    }
     setSubmitting(true);
     mutations.createAssignment(
       task,
@@ -275,7 +286,7 @@ function AssignExecutorForm({
           <label htmlFor="assign-harness" className="mb-1 block text-sm font-medium">
             {t("agents.sheet.harnessLabel")}
           </label>
-          <HarnessSelect id="assign-harness" value={harness} onChange={setHarness} />
+          <HarnessSelect id="assign-harness" value={harness} onChange={setHarnessChoice} />
         </div>
       </div>
 
