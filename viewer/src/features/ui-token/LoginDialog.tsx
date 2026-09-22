@@ -29,17 +29,26 @@ export interface LoginDialogProps {
   open: boolean;
   /** Why the window is up — drives the contextual line / inline error. */
   reason: UiTokenWindowReason;
-  /** «Войти»: store the token; the gate retries any queued action. */
+  /** Server verify in flight (ADR 0014 Ф1) — submit + field disabled. */
+  verifyPending?: boolean;
+  /** Which refusal beat applies: "verify" = refused at the door (the
+   * value/class was wrong), "session" = the mid-flight «сессия истекла»
+   * (a stored token rotted or the session idled out). */
+  rejectKind?: "verify" | "session";
+  /** «Войти»: verify against the server; the gate retries any queued
+   * action after a 200. */
   onSubmitToken: (value: string) => void;
   /** Esc / cross / «continue read-only»: drop any queued action, close. */
   onDismiss: () => void;
-  /** Server-provided 401 detail for the rejected case (optional). */
+  /** Server-provided detail for the rejected case (optional). */
   rejectDetail?: string;
 }
 
 export function LoginDialog({
   open,
   reason,
+  verifyPending = false,
+  rejectKind,
   onSubmitToken,
   onDismiss,
   rejectDetail,
@@ -51,6 +60,7 @@ export function LoginDialog({
   // The field resets through the callbacks (submit / dismiss), never through
   // an effect: a half-typed secret never survives the window either way.
   const dismiss = () => {
+    if (verifyPending) return; // a verify in flight owns the window
     onDismiss();
     setValue("");
     setReveal(false);
@@ -58,7 +68,7 @@ export function LoginDialog({
 
   const submit = () => {
     const trimmed = value.trim();
-    if (trimmed.length === 0) return;
+    if (trimmed.length === 0 || verifyPending) return;
     onSubmitToken(trimmed);
     setValue("");
   };
@@ -86,12 +96,13 @@ export function LoginDialog({
             {t("login.continueQueued")}
           </p>
         ) : null}
-        {/* Inline sign-in error: the server rejected the previous value
-         * (401 on the retried action) — assertive, inside the window. */}
+        {/* Inline sign-in error — two distinct beats (ADR 0014): refused
+         * AT THE DOOR (wrong value or a machine-class token) vs the
+         * mid-flight «сессия истекла». Assertive, inside the window. */}
         {reason === "rejected" ? (
           <>
             <p role="alert" className="text-xs text-error">
-              {t("login.rejected")}
+              {t(rejectKind === "session" ? "login.sessionExpired" : "login.rejected")}
             </p>
             {rejectDetail ? (
               <p className="text-xs text-foreground-secondary">{rejectDetail}</p>
@@ -121,13 +132,15 @@ export function LoginDialog({
                 autoComplete="off"
                 spellCheck={false}
                 autoFocus
+                disabled={verifyPending}
                 aria-describedby="login-token-hint"
-                className="h-9 min-w-0 flex-1 rounded-md border border-border bg-well px-2 font-mono text-sm text-foreground focus-visible:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+                className="h-9 min-w-0 flex-1 rounded-md border border-border bg-well px-2 font-mono text-sm text-foreground focus-visible:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright disabled:opacity-60"
               />
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
+                disabled={verifyPending}
                 onClick={() => setReveal((current) => !current)}
                 aria-label={t(reveal ? "login.hideValue" : "login.showValue")}
                 aria-pressed={reveal}
@@ -149,11 +162,15 @@ export function LoginDialog({
           </p>
 
           <div className="flex flex-wrap justify-end gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={dismiss}>
+            <Button type="button" variant="outline" size="sm" onClick={dismiss} disabled={verifyPending}>
               {t("login.continueReadOnly")}
             </Button>
-            <Button type="submit" size="sm" disabled={value.trim().length === 0}>
-              {t("login.submit")}
+            <Button
+              type="submit"
+              size="sm"
+              disabled={verifyPending || value.trim().length === 0}
+            >
+              {verifyPending ? t("login.verifying") : t("login.submit")}
             </Button>
           </div>
         </form>

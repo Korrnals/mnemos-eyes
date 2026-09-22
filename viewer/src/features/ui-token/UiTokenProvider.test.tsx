@@ -70,7 +70,7 @@ describe("UiTokenSlot (TopBar board-mode sign-in pair)", () => {
       </I18nProvider>,
     );
     expect(html).toContain("Sign out");
-    expect(html).toContain('aria-label="Remove the ui token from this tab"');
+    expect(html).toContain('aria-label="End the server session (all tabs of this browser)"');
     expect(html).not.toContain("bg-iris-strong");
   });
 });

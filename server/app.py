@@ -19,11 +19,13 @@ import json
 import logging
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.routing import APIRoute
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -154,6 +156,14 @@ if not UI_WRITE_TOKEN:
         "VESMARO_UI_TOKEN is not set — single-token legacy mode: "
         "VESMARO_BOARD_TOKEN serves both UI and machine token classes")
     UI_WRITE_TOKEN = BOARD_WRITE_TOKEN
+
+# ADR 0014 Ф1 (archcom open question #2): login security rests on the
+# ui token's entropy — the verify limiter only slows a guesser down. One
+# startup line when the configured secret is suspiciously short.
+if UI_WRITE_TOKEN and len(UI_WRITE_TOKEN) < 20:
+    logging.getLogger("vesmaro.auth").warning(
+        "VESMARO_UI_TOKEN is shorter than 20 chars — owner-login strength "
+        "rests on token entropy; consider a longer secret")
 
 write_config_template(DATA_DIR / "memories.yaml")
 
@@ -636,8 +646,40 @@ COLUMN_RU = {
 # route on server-loaded /docs (F5/deep-link). Swagger stays reachable at
 # /api/docs; board mode keeps the historical /docs.
 _docs_url = "/api/docs" if ROOT_APP == "app" else "/docs"
-app = FastAPI(title="vesmaro-eyes", version="1.15.0", lifespan=lifespan,
+app = FastAPI(title="vesmaro-eyes", version="1.14.0", lifespan=lifespan,
               docs_url=_docs_url)
+
+
+class _UiCookieReissueRoute(APIRoute):
+    """Route wrapper applying a PENDING ``vesmaro_ui`` reissue (ADR 0014 Ф2,
+    the owner's sliding 6h idle TTL). The auth DECISION stays in the guards
+    — ``_guard_write``/``_guard_ui_write`` mark ``request.state`` when a
+    request passed on the cookie leg and the per-IP throttle allows a
+    reissue; this wrapper only transfers the header onto the outgoing
+    response. Deliberately NOT a middleware (ADR 0014: no auth middleware):
+    the request path is untouched, and a request without the marker gets a
+    byte-identical default handler."""
+
+    def get_route_handler(self):
+        original = super().get_route_handler()
+
+        async def reissue_handler(request: Request) -> Response:
+            response = await original(request)
+            if getattr(request.state, "vesmaro_ui_reissue", False):
+                request.state.vesmaro_ui_reissue = False
+                _commit_ui_cookie_reissue(request)
+                response.set_cookie(
+                    _UI_COOKIE_NAME, _token_classes()["ui"],
+                    max_age=_UI_COOKIE_MAX_AGE_S, httponly=True,
+                    samesite="strict", path="/",
+                    secure=request.url.scheme == "https",
+                )
+            return response
+
+        return reissue_handler
+
+
+app.router.route_class = _UiCookieReissueRoute
 
 # ------------------------------------- device-token scope guard (ADR 0012 §5)
 # The single scope middleware for PREFIX-CLASSIFIED tokens, standing
@@ -2766,10 +2808,17 @@ async def create_task_report(task_id: str, body: ReportCreate,
     ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
     refusal: the report is still accepted)."""
     executor = None
-    if _bearer_is_class(request, "ui") or not _token_classes().get("machine"):
-        # ui bearer rides the ui leg; when the machine class is not
-        # configured at all the endpoint stays reachable through ui (a
-        # wrong-class bearer then gets 401, not a 503 disable)
+    header_present = bool(request.headers.get("Authorization", ""))
+    cookie_ui = not header_present and _cookie_ui_ok(request)
+    if (cookie_ui or _bearer_is_class(request, "ui")
+            or not _token_classes().get("machine")):
+        # Leg pick (ADR 0014 Ф2 + review gap matrix): a live `vesmaro_ui`
+        # cookie picks the ui leg ONLY when no header rides along — the
+        # determinism rule keeps a header-present request on its own leg
+        # (a valid machine bearer + a valid cookie is a machine request,
+        # never a ui one). When the machine class is not configured at all
+        # the endpoint stays reachable through ui REGARDLESS of the bearer
+        # (a wrong-class bearer then gets 401, not a 503 disable).
         _guard_write(request, classes=("ui",))
     else:
         executor = _guard_machine_write(request)
@@ -4305,10 +4354,29 @@ def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -
             "enable board writes (fail-closed; see compose.yaml for local dev)",
         )
     auth = request.headers.get("Authorization", "")
-    for token in allowed:
-        expected = f"Bearer {token}"
-        if hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+    if auth:
+        # Determinism rule (ADR 0014 Ф2): a header present → the header leg
+        # ONLY, including the cross-class mismatch detail. No cookie fallback.
+        for token in allowed:
+            expected = f"Bearer {token}"
+            if hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+                # Review P1 (sliding TTL): a request that proved ui-token
+                # possession on the HEADER leg extends the owner session too —
+                # the dialog flow keeps the token in sessionStorage, so its
+                # mutations never touch the cookie leg. Machine/executor
+                # matches (reports composite) must NOT touch the session.
+                if "ui" in classes and token == effective.get("ui"):
+                    _schedule_ui_cookie_reissue(request)
+                return
+        raise HTTPException(401, _token_mismatch_detail(auth, effective, classes))
+    # Header absent → the cookie leg (owner session, ADR 0014 Ф2). Only
+    # guards that include the ui class consult the cookie — a machine route
+    # can never be opened by it (its 401 detail is unchanged).
+    if "ui" in classes:
+        if _cookie_ui_ok(request):
+            _schedule_ui_cookie_reissue(request)
             return
+        raise HTTPException(401, _ui_session_expired_detail(classes))
     raise HTTPException(401, _token_mismatch_detail(auth, effective, classes))
 
 
@@ -4347,6 +4415,32 @@ def _bearer_is_class(request: Request, cls: str) -> bool:
     return hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8"))
 
 
+def _cookie_ui_ok(request: Request) -> bool:
+    """Constant-time check of the ``vesmaro_ui`` session cookie (ADR 0014
+    Ф2): does it carry the effective ui-class token? Fail-closed on an
+    unconfigured class (False → the guards answer 503/401 exactly as
+    before). The session is STATELESS: the cookie value IS the token, so a
+    ui-token rotation invalidates every cookie immediately and
+    authoritatively — no server-side session store to reason about."""
+    token = _token_classes().get("ui", "")
+    if not token:
+        return False
+    supplied = request.cookies.get(_UI_COOKIE_NAME, "")
+    if not supplied:
+        return False
+    return hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
+
+
+def _ui_session_expired_detail(classes: tuple[str, ...]) -> str:
+    """401 detail for a headerless request whose cookie leg failed (ADR
+    0014 Ф2): the owner-facing «сессия истекла» beat — the browser killed
+    the 6h-idle cookie or the token was rotated mid-flight. The dialog
+    keys its distinct text on the 401; the words stay free of any value."""
+    need = " or ".join(dict.fromkeys(_TOKEN_CLASS_ENV[c] for c in classes))
+    return (f"ui session missing or expired — sign in again "
+            f"(owner login verifies {need})")
+
+
 def _guard_ui_write(request: Request) -> None:
     """UI-class mutation guard (ADR 0009 A1): assignment create/cancel are
     owner-UI actions and take VESMARO_UI_TOKEN. Fail-closed exactly like
@@ -4363,9 +4457,20 @@ def _guard_ui_write(request: Request) -> None:
             "enable assignment UI actions (fail-closed)",
         )
     auth = request.headers.get("Authorization", "")
-    expected = f"Bearer {UI_WRITE_TOKEN}"
-    if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
-        raise HTTPException(401, "ui write token required")
+    if auth:
+        # Header present → header leg only (ADR 0014 determinism rule).
+        expected = f"Bearer {UI_WRITE_TOKEN}"
+        if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+            raise HTTPException(401, "ui write token required")
+        # Review P1: this guard IS the ui class — a passed header mutation
+        # extends the sliding session exactly like a cookie-leg one.
+        _schedule_ui_cookie_reissue(request)
+        return
+    # Header absent → the cookie leg (owner session, ADR 0014 Ф2).
+    if _cookie_ui_ok(request):
+        _schedule_ui_cookie_reissue(request)
+        return
+    raise HTTPException(401, _ui_session_expired_detail(("ui",)))
 
 
 def _authenticate_executor(request: Request) -> dict[str, Any] | None:
@@ -4464,6 +4569,188 @@ def _report_identity_mismatch(executor: dict[str, Any] | None,
     covers = ((name_tokens and name_tokens <= declared)
               or (harness_tokens and harness_tokens <= declared))
     return not covers
+
+
+# --------------------------------------- owner session login (ADR 0014, Ф1+Ф2)
+# Owner login = server verification at the door + a stateless session
+# cookie. POST /api/auth/ui-token checks the pasted value against the
+# effective ui-class token and SETS `vesmaro_ui` (HttpOnly, SameSite=Strict,
+# Secure by request scheme, Max-Age 21600); every ui-guarded mutation that
+# passes on the cookie leg reissues it (sliding idle TTL — the owner's
+# ratification amendment: activity extends, 6h of silence logs out).
+# DELETE is the SERVER-side logout: an HttpOnly cookie cannot be cleared
+# from JS. The read injection lives INSIDE _guard_write/_guard_ui_write —
+# deliberately no auth middleware; determinism: header present → header leg
+# only, header absent → cookie leg, machine class and mnd_ device tokens
+# are never opened by the cookie. Invariants: the token is never echoed in
+# a response body nor logged (not even truncated); POST-only verify;
+# body ≤512 chars; no CORS headers on this surface.
+_UI_COOKIE_NAME = "vesmaro_ui"
+_UI_COOKIE_MAX_AGE_S = 6 * 3600    # 21600 — sliding idle TTL (owner, 2026-09-22)
+
+# Flat limiters on the verify leg (the _pairing_ip_limiter pattern), keyed
+# on the real client IP (--proxy-headers + RUNBOOK §10.1). Per-IP 10/60s is
+# the brute-force budget; global 60/60s caps the whole-board noise. The
+# EXPONENTIAL per-IP lockout is deliberately postponed (ADR 0014
+# Alternatives rejected): behind traefik the whole household shares one NAT
+# IP — an exponent would let one stale tab DoS the owner. Trigger to
+# revisit: attack metrics or a multi-tenant deployment.
+_AUTH_VERIFY_RATE_LIMIT = 10           # verify attempts per client ...
+_AUTH_VERIFY_RATE_WINDOW = 60.0        # ... per sliding minute
+_auth_verify_ip_limiter = RateLimiter(
+    limit=_AUTH_VERIFY_RATE_LIMIT, window=_AUTH_VERIFY_RATE_WINDOW)
+_AUTH_VERIFY_GLOBAL_RATE_LIMIT = 60    # verify attempts board-wide ...
+_AUTH_VERIFY_GLOBAL_WINDOW = 60.0      # ... per sliding minute
+_auth_verify_global_limiter = RateLimiter(
+    limit=_AUTH_VERIFY_GLOBAL_RATE_LIMIT, window=_AUTH_VERIFY_GLOBAL_WINDOW)
+
+# Sliding-reissue throttle (ADR 0014 Ф2): at most one Set-Cookie per
+# client IP per 5 minutes, so an active owner doesn't get Set-Cookie on
+# literally every response. In-memory per-IP NOTE only — the session
+# itself stays stateless; the table is bounded against unbounded growth.
+_UI_REISSUE_THROTTLE_S = 300.0
+_UI_REISSUE_MAX_IPS = 256
+_ui_reissue_last: dict[str, float] = {}
+
+
+def _schedule_ui_cookie_reissue(request: Request) -> None:
+    """Sliding idle TTL, server half (ADR 0014 Ф2): a ui-guarded request
+    that passed (either leg — review P1) marks the request so
+    ``_UiCookieReissueRoute`` reissues the cookie with a fresh Max-Age —
+    activity extends the session, 6h of silence lets the browser kill the
+    cookie and the next mutation lands on the «сессия истекла» 401.
+    The throttle BUDGET is only READ here; the table is written by the
+    route wrapper AFTER a successful response (review P3: a handler that
+    raises 409/500 must not spend the 5-minute sliding budget)."""
+    ip = request.client.host if request.client else "unknown"
+    last = _ui_reissue_last.get(ip)
+    if last is not None and time.monotonic() - last < _UI_REISSUE_THROTTLE_S:
+        return
+    request.state.vesmaro_ui_reissue = True
+
+
+def _commit_ui_cookie_reissue(request: Request) -> None:
+    """Wrapper-side half: the request proved the reissue right and the
+    response is on its way — spend the budget, touch the IP LRU-wise."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    if len(_ui_reissue_last) >= _UI_REISSUE_MAX_IPS and ip not in _ui_reissue_last:
+        _ui_reissue_last.pop(next(iter(_ui_reissue_last)))  # oldest entry
+    _ui_reissue_last.pop(ip, None)  # re-insert → true LRU touch on refresh
+    _ui_reissue_last[ip] = now
+
+
+class UiTokenVerifyIn(_ApiModel):
+    """Owner login body. 1..512: non-empty and bounded — the verify leg is
+    the one unauthenticated surface that handles secret material."""
+    token: str = Field(min_length=1, max_length=512)
+
+
+class UiTokenVerifyOut(_ApiModel):
+    ok: bool
+    token_class: Literal["ui", "legacy"]
+
+
+def _ui_verify_mismatch_detail(supplied: str, effective: dict[str, str]) -> str:
+    """Class-aware 401 detail for the login — the ``_token_mismatch_detail``
+    analogue for a RAW pasted value (owner feedback 2026-09-22: the board
+    token pasted at login must say WHICH class arrived; the two secret
+    names are near-identical and that exact mistake started ADR 0014).
+    Constant-time per class; never echoes the value, not even truncated."""
+    machine = effective.get("machine", "")
+    if (machine and machine != effective.get("ui", "")
+            and hmac.compare_digest(supplied.encode("utf-8"),
+                                    machine.encode("utf-8"))):
+        return ("the pasted token is a machine-class token "
+                f"({_TOKEN_CLASS_ENV['machine']}) — this login requires "
+                f"{_TOKEN_CLASS_ENV['ui']}")
+    return f"invalid ui token — this login requires {_TOKEN_CLASS_ENV['ui']}"
+
+
+@app.post("/api/auth/ui-token")
+async def verify_ui_token(body: UiTokenVerifyIn, request: Request,
+                          response: Response) -> UiTokenVerifyOut:
+    """Verify the owner's ui token at the door (ADR 0014 Ф1) and open the
+    session (Ф2): on success the ``vesmaro_ui`` cookie is set right here —
+    HttpOnly, SameSite=Strict, Secure when the request is https, Max-Age
+    21600 (sliding idle TTL; guards reissue on activity). ``token_class``
+    is honest about legacy mode: with no dedicated VESMARO_UI_TOKEN the ui
+    class is served by the board token and the login says ``legacy``.
+    Errors: 401 class-aware (never a generic "not accepted"), 429 on the
+    flat limiters, 503 fail-closed while no token class is configured."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not _auth_verify_ip_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"login rate limit exceeded "
+            f"({_AUTH_VERIFY_RATE_LIMIT} per "
+            f"{_AUTH_VERIFY_RATE_WINDOW:.0f}s per client)",
+        )
+    if not _auth_verify_global_limiter.acquire("global"):
+        raise HTTPException(
+            429,
+            f"login rate limit exceeded "
+            f"({_AUTH_VERIFY_GLOBAL_RATE_LIMIT} per "
+            f"{_AUTH_VERIFY_GLOBAL_WINDOW:.0f}s board-wide)",
+        )
+    effective = _token_classes()
+    ui = effective.get("ui", "")
+    if not ui:
+        raise HTTPException(
+            503,
+            "owner login is not configured: set VESMARO_UI_TOKEN "
+            "(or VESMARO_BOARD_TOKEN for single-token legacy mode) to "
+            "enable it (fail-closed)",
+        )
+    supplied = body.token
+    if not hmac.compare_digest(supplied.encode("utf-8"), ui.encode("utf-8")):
+        raise HTTPException(401, _ui_verify_mismatch_detail(supplied, effective))
+    _set_ui_cookie(response, request)
+    return {"ok": True,
+            "token_class": "legacy" if ui == effective.get("machine") else "ui"}
+
+
+@app.get("/api/auth/ui-token", status_code=204)
+async def probe_ui_session(request: Request) -> None:
+    """Boot probe for the viewer's session hydration (ADR 0014 Ф2): 204 =
+    a live ``vesmaro_ui`` cookie (hasUiToken() → true, no login window);
+    401 = none; 503 = login not configured (fail-closed). The viewer also
+    re-probes in its 401 branch BEFORE opening the window — a stale header
+    token beside a live cookie must replay, not re-prompt (the incident's
+    mid-flight beat). No limiter: it is a constant-time boolean oracle
+    with the same profile as the guards themselves; token entropy is the
+    defence, as everywhere."""
+    if not _token_classes().get("ui"):
+        raise HTTPException(
+            503,
+            "owner login is not configured: set VESMARO_UI_TOKEN "
+            "(or VESMARO_BOARD_TOKEN for single-token legacy mode) to "
+            "enable it (fail-closed)",
+        )
+    if not _cookie_ui_ok(request):
+        raise HTTPException(401, _ui_session_expired_detail(("ui",)))
+
+
+@app.delete("/api/auth/ui-token", status_code=204)
+async def logout_ui_token(response: Response) -> None:
+    """Server-side logout (ADR 0014 Ф2; PA's special opinion). NO guard by
+    design: a logout that 401s on an already-expired cookie is a trap —
+    the route is how the browser gets RID of the cookie. Max-Age=0 kills
+    it; HttpOnly means no JS path could have done this client-side."""
+    response.set_cookie(_UI_COOKIE_NAME, "", max_age=0, httponly=True,
+                        samesite="strict", path="/")
+
+
+def _set_ui_cookie(response: Response, request: Request) -> None:
+    """Set the ``vesmaro_ui`` session cookie (ADR 0014 Ф2). Secure follows
+    the REQUEST scheme: the compose deploy is plain http 8090, and an
+    unconditional Secure flag would silently drop the cookie there — a
+    login loop no console message would explain."""
+    response.set_cookie(
+        _UI_COOKIE_NAME, _token_classes()["ui"],
+        max_age=_UI_COOKIE_MAX_AGE_S, httponly=True, samesite="strict",
+        path="/", secure=request.url.scheme == "https",
+    )
 
 
 # ------------------------------------------- QR pairing + devices (CV-7, ADR 0012)

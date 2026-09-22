@@ -11,6 +11,17 @@
  */
 export const UI_TOKEN_STORAGE_KEY = "vesmaro.uiToken";
 
+/**
+ * Server verdict of the verify-at-the-door call (ADR 0014 Ф1,
+ * `POST /api/auth/ui-token`). `tokenClass` is honest about legacy mode:
+ * with no dedicated ui token the board token logs the owner in and the
+ * server says `legacy` (the UI surfaces that as a note, not an error).
+ */
+export type UiTokenVerifyResult = {
+  ok: boolean;
+  tokenClass: "ui" | "legacy";
+};
+
 /** The stored ui token, or "" when absent/unavailable. */
 export function getUiToken(): string {
   try {

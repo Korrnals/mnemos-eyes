@@ -322,13 +322,18 @@ export const ru = {
   "toasts.regionLabel": "Уведомления",
   "toasts.dismissAria": "Закрыть уведомление",
 
-  // --- ui-token login window (Ф3, class ui; fix/login-window) -----------------------
+  // --- ui-token login window (Ф3, class ui; fix/login-window; ADR 0014) ------------
   "login.title": "Вход",
   "login.description":
-    "Войдите с ui-токеном, чтобы изменять задачи. Значение останется только в этой вкладке (sessionStorage) и уйдёт только на ваш board-сервер.",
+    "Войдите с ui-токеном, чтобы изменять задачи. Значение проверяется сервером; сессия живёт в cookie этого браузера — все вкладки, один вход, 6 часов бездействия.",
   "login.continueQueued":
     "Войдите, чтобы продолжить — действие выполнится автоматически",
-  "login.rejected": "Сервер отклонил токен (401) — вставьте актуальное значение.",
+  // Отказ «у порога» (ADR 0014 Ф1): verify вернул отказ — ничего не сохранено.
+  "login.rejected":
+    "Сервер не принял токен — проверьте значение и попробуйте ещё раз.",
+  // Отказ «в полёте» (ADR 0014 Ф2): сохранённый токен протух / сессия истекла
+  // по idle-таймауту — отдельный текст, чтобы не читалось как «опечатка».
+  "login.sessionExpired": "Сессия истекла — войдите ещё раз.",
   "login.fieldLabel": "Токен",
   "login.showValue": "Показать значение токена",
   "login.hideValue": "Скрыть значение токена",
@@ -336,15 +341,20 @@ export const ru = {
     "Где взять: значение секрета vesmaro-eyes-ui-token (например, kubectl get secret vesmaro-eyes-ui-token -o yaml у администратора кластера).",
   "login.continueReadOnly": "Продолжить только чтение",
   "login.submit": "Войти",
+  "login.verifying": "Проверка…",
   "login.signIn": "Войти",
   "login.signOut": "Выйти",
-  "login.signOutAria": "Убрать ui-токен из этой вкладки",
+  "login.signOutAria": "Завершить сессию на сервере (все вкладки этого браузера)",
   // Login feedback toasts (fix/login-feedback): confirm the stored token,
   // shout about the server-side 401 (alongside the inline window line).
   "login.toastSignedIn": "Вход выполнен — доступно управление",
+  "login.toastLegacy":
+    "Принят board-токен: отдельный ui-токен (vesmaro-eyes-ui-token) не настроен — работает legacy-режим.",
   "login.toastRejected": "Токен отклонён",
   "login.toastRejectedDetail":
     "Сервер вернул 401 — окно входа открыто, вставьте актуальное значение.",
+  "login.logoutFailed":
+    "Не удалось завершить сессию на сервере — вы всё ещё вошли. Проверьте связь и повторите.",
 
   // --- tasks (Ф2 reads + Ф3 mutations) --------------------------------------------
   "tasks.title": "Задачи",

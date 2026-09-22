@@ -375,6 +375,17 @@ def client(app_module):
     return TestClient(app_module.app)
 
 
+@pytest.fixture(autouse=True)
+def _clean_session_cookie(client):
+    """ADR 0014: ui mutations now issue the `vesmaro_ui` session cookie —
+    on the SHARED session-scoped jar it would leak into later tests whose
+    headerless requests must keep answering 401. Every test starts with a
+    clean jar (within one test the cookie persists as intended)."""
+    client.cookies.clear()
+    yield
+    client.cookies.clear()
+
+
 @pytest.fixture()
 def auth():
     """Board (machine-class) token headers; passes ui-class guards too in

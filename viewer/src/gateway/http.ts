@@ -112,6 +112,9 @@ export async function requestJson<T>(
       });
     }
 
+    // 204 No Content (ADR 0014 session routes: probe/logout) — a body-less
+    // success; response.json() would throw on the empty payload.
+    if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
   } catch (error) {
     // Caller-initiated cancellation propagates untouched: TanStack Query
