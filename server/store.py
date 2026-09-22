@@ -140,6 +140,13 @@ class TaskNotAssignableError(AssignmentError):
     """Target task is archived or workflow-terminal (HTTP 422 upstream)."""
 
 
+class UnknownHarnessError(AssignmentError):
+    """Nomination references a harness absent from the dictionary (wave 3C;
+    HTTP 422 upstream). Raised from the IN-TRANSACTION assignment core so
+    every minting window is gated — the UI route, the manual run-now and
+    any future S2 engine mint through the same private code path."""
+
+
 # ----------------------------------------------------------- executors
 # ARCH-9 (ADR 0009 Amendment 2 §3-§4): the executor registry — the third
 # entity (specialist ≠ harness ≠ executor). Registry state model is
@@ -2023,6 +2030,15 @@ class Store:
             raise TaskNotAssignableError(
                 f"task {task_id} is terminal ({task['status']}) — "
                 "assignment refused")
+        # Wave 3C: the nomination gate lives HERE, in-transaction, not on
+        # the UI route alone — the manual run-now (and the future S2
+        # engine) mint through this same private path, and a gate on the
+        # route only would let them nominate a DELETED harness (a zombie
+        # queued row holding the ≤1-active slot, launchable by nobody).
+        known = self._harness_names_db(db)
+        if harness not in known:
+            raise UnknownHarnessError(
+                f"unknown harness: {harness}; known: {sorted(known)}")
         active = db.execute(
             "SELECT COUNT(*) AS n FROM task_assignments "
             "WHERE task_id=? AND state IN ('queued','claimed','running')",
@@ -2082,6 +2098,9 @@ class Store:
         Raises:
             AssignmentNotFoundError — task id unknown (404 upstream);
             TaskNotAssignableError — task archived or workflow-terminal (422);
+            UnknownHarnessError — harness absent from the dictionary (422;
+                          wave 3C — the gate lives in the in-transaction
+                          core, so run-now and the S2 engine are gated too);
             AssignmentConflictError — the task already has an active
                                       assignment: the ≤1 invariant (409).
         """
@@ -3746,11 +3765,15 @@ class Store:
         — never accepted from a client (schedule-clock family is
         server-owned)."""
         name = self._rule_name(payload.get("name"))
-        fields = self._validate_schedule_fields({
-            k: v for k, v in payload.items() if k != "name"})
+        rest = {k: v for k, v in payload.items() if k != "name"}
+        # The harness default applies BEFORE validation: the effective
+        # value must pass the live-dictionary gate like any provided one
+        # (wave 3C review — a defaulted 'zcode' must not bypass the gate;
+        # with the seed deleted the omission is an honest 422).
+        rest.setdefault("harness", "zcode")
+        fields = self._validate_schedule_fields(rest)
         # target_kind was validated against the v1 dictionary ('task' only)
-        # inside _validate_schedule_fields; harness/executor pin defaults:
-        fields.setdefault("harness", "zcode")
+        # inside _validate_schedule_fields; executor pin default:
         fields.setdefault("executor_id", "")
         fields.setdefault("max_runs_per_day", SCHEDULE_DEFAULT_MAX_RUNS_PER_DAY)
         fields.setdefault("cooldown_s", SCHEDULE_DEFAULT_COOLDOWN_S)

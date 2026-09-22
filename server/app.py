@@ -81,6 +81,7 @@ from .store import (
     TASK_STATUSES,
     TaskLockedError,
     TaskNotAssignableError,
+    UnknownHarnessError,
     VALID_STATUSES,
     presence_from_last_seen,
 )
@@ -2967,12 +2968,13 @@ def _assignment_public(a: dict[str, Any], include_snapshot: bool = False) -> dic
 
 def _assignment_http(exc: AssignmentError) -> HTTPException:
     """Map store assignment errors onto the HTTP contract (ADR 0009):
-    404 unknown id / 403 token / 422 not assignable / 409 state+invariant."""
+    404 unknown id / 403 token / 422 not assignable or unknown harness /
+    409 state+invariant."""
     if isinstance(exc, AssignmentNotFoundError):
         return HTTPException(404, str(exc))
     if isinstance(exc, AssignmentTokenError):
         return HTTPException(403, str(exc))
-    if isinstance(exc, TaskNotAssignableError):
+    if isinstance(exc, (TaskNotAssignableError, UnknownHarnessError)):
         return HTTPException(422, str(exc))
     if isinstance(exc, AssignmentConflictError):
         return HTTPException(409, str(exc))
@@ -3064,19 +3066,13 @@ async def create_assignment(body: AssignmentCreate,
                             request: Request) -> AssignmentCreatedOut:
     """Queue an execution attempt on a task (ADR 0009 §3). UI-token class
     (A1) — the owner nominates, the poller decides (A3). 404 unknown task;
-    422 archived/terminal task; 409 while another active assignment holds
-    the task (≤1 invariant)."""
+    422 archived/terminal task or unknown harness; 409 while another active
+    assignment holds the task (≤1 invariant). The harness gate lives IN the
+    store's in-transaction assignment core (wave 3C) — the same gate the
+    manual run-now goes through, so no window can mint a nomination on a
+    DELETED harness (a zombie queued row launchable by nobody)."""
     _guard_ui_write(request)
     _assignment_rate_limit(request, ui=True)
-    known = store.harness_names()
-    if body.harness not in known:
-        # assignments feed the poller's (harness, specialist) → command
-        # allowlist: an unknown harness can never launch — refuse early.
-        # Wave 3C: the gate reads the LIVE harness dictionary (the seed
-        # constant is no longer the source of truth).
-        raise HTTPException(
-            422, f"unknown harness: {body.harness}; "
-                 f"known: {sorted(known)}")
     try:
         a = store.create_assignment(
             body.task_id, body.specialist, body.harness,

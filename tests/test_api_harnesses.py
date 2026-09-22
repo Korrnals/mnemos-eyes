@@ -49,10 +49,11 @@ def fresh_harness_state(app_module, monkeypatch):
     """Per-test isolation: fresh harness limiter (module globals accumulate
     across the session-scoped client) and a RESEEDED dictionary (wiped then
     refilled from the seed — sibling tests may have added/deleted rows)."""
-    limiter = app_module._harness_write_limiter
-    monkeypatch.setattr(
-        app_module, "_harness_write_limiter",
-        RateLimiter(limit=limiter.limit, window=limiter.window))
+    for name in ("_harness_write_limiter", "_automation_limiter"):
+        limiter = getattr(app_module, name)
+        monkeypatch.setattr(
+            app_module, name,
+            RateLimiter(limit=limiter.limit, window=limiter.window))
     with app_module.store._lock, app_module.store._conn() as db:
         db.execute("DELETE FROM harnesses")
         db.execute("DELETE FROM executors")
@@ -386,3 +387,73 @@ class TestSseAndAudit:
                 "ORDER BY id DESC LIMIT 1").fetchone()["payload"])
         assert payload["name"] == CUSTOM
         assert payload["added_via"] == "owner"
+
+
+# ------------------------------------------- the gate lives in the CORE
+class TestGateInTheAssignmentCore:
+    """P2 review fix: the harness gate must sit in the IN-TRANSACTION
+    assignment core, not on the UI route — the manual run-now mints through
+    the same private path, and a route-only gate would let it nominate a
+    DELETED harness (a zombie queued row holding the ≤1-active slot)."""
+
+    def test_run_now_on_deleted_harness_skips_not_500s(self, client, ui_auth,
+                                                       make_task):
+        assert _add(client, ui_auth).status_code == 201
+        task = make_task(title="run-now core gate")
+        r = client.post("/api/automation/schedules",
+                        json={"name": "sched-run-now", "task_id": task["id"],
+                              "specialist": "s", "harness": CUSTOM,
+                              "trigger_kind": "interval",
+                              "trigger_value": "PT1H"},
+                        headers=ui_auth)
+        assert r.status_code == 201, r.text
+        sched_id = r.json()["id"]
+        assert _delete(client, ui_auth).status_code == 200
+        # run-now: honest 422 (NOT 500) + the journal carries the skip
+        r = client.post(f"/api/automation/schedules/{sched_id}/run",
+                        headers=ui_auth)
+        assert r.status_code == 422, r.text
+        assert "unknown harness" in r.json()["detail"]
+        page = client.get("/api/automation/launches",
+                          params={"rule_id": sched_id}).json()
+        assert page["total"] == 1
+        row = page["items"][0]
+        assert row["decision"] == "skipped"
+        assert "unknown harness" in row["reason"]
+        # no zombie nomination: nothing queued on the deleted harness
+        r = client.get("/api/assignments")
+        assert all(row["harness"] != CUSTOM for row in r.json()["items"])
+
+    def test_schedule_without_harness_gets_validated_default(self, client,
+                                                             ui_auth):
+        # the omission defaults to 'zcode' BEFORE validation — the effective
+        # value passes the same live-dictionary gate as a provided one
+        r = client.post("/api/automation/schedules",
+                        json={"name": "s-noh-1", "task_id": "t-1",
+                              "specialist": "s", "trigger_kind": "interval",
+                              "trigger_value": "PT1H"},
+                        headers=ui_auth)
+        assert r.status_code == 201, r.text
+        assert r.json()["harness"] == "zcode"
+        # with the zcode seed deleted, the defaulted value is an honest 422
+        assert _delete(client, ui_auth, "zcode").status_code == 200
+        r = client.post("/api/automation/schedules",
+                        json={"name": "s-noh-2", "task_id": "t-1",
+                              "specialist": "s", "trigger_kind": "interval",
+                              "trigger_value": "PT1H"},
+                        headers=ui_auth)
+        assert r.status_code == 422
+        assert "unknown harness: 'zcode'" in r.json()["detail"]
+
+    def test_route_gate_still_422_via_store(self, client, ui_auth, make_task):
+        """The UI route keeps its contract (422 + the known list) — the
+        message now comes from the store error mapped by _assignment_http,
+        a single source of truth for every minting window."""
+        task = make_task(title="route gate via store")
+        r = client.post("/api/assignments",
+                        json={"task_id": task["id"], "specialist": "s",
+                              "harness": "never-added"},
+                        headers=ui_auth)
+        assert r.status_code == 422
+        assert "unknown harness: never-added" in r.json()["detail"]
+        assert "known:" in r.json()["detail"]
