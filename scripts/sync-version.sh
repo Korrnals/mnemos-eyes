@@ -10,6 +10,13 @@
 #   scripts/sync-version.sh            # apply: read app.py, patch consumers
 #   scripts/sync-version.sh --check    # CI mode: exit 1 on drift, no writes
 #   scripts/sync-version.sh 1.2.0      # convenience: bump app.py first, then sync
+#   scripts/sync-version.sh --force 1.2.0  # allow a DOWNGRADE (conscious rollback)
+#
+# Release guard: the script REFUSES to lower the version below the one in
+# Chart.yaml on disk without --force. Incident 2026-09: two sessions held
+# stale worktrees and one deployed a DECREASING image tag — a rollback no
+# one had decided on. Lowering the version is a release decision, never a
+# sync side effect.
 #
 # Run this after bumping the version in server/app.py and BEFORE building
 # the image / cutting the release. CI (verify step) should run --check.
@@ -25,10 +32,12 @@ SEMVER_RE='[0-9]+\.[0-9]+\.[0-9]+'
 
 MODE="apply"
 CHECK=0
+FORCE=0
 VERSION_ARG=""
 for arg in "$@"; do
   case "$arg" in
     --check) MODE="check"; CHECK=1 ;;
+    --force) FORCE=1 ;;
     *) VERSION_ARG="$arg" ;;
   esac
 done
@@ -48,6 +57,22 @@ else
 fi
 
 echo "source version: $VERSION ($APP_PY)"
+
+# --- release guard: refuse to LOWER the version without --force -----------
+# The Chart.yaml on disk is the last-deployed intent; a target below it is
+# a conscious rollback, not a sync side effect (see the header). Equal
+# versions pass; --check never writes, so the guard applies to apply-mode.
+if [[ $CHECK -eq 0 ]]; then
+  DISK_VERSION="$(grep -oP "^version: \K$SEMVER_RE" "$CHART_YAML" | head -1 || true)"
+  if [[ -n "$DISK_VERSION" && $FORCE -eq 0 && "$VERSION" != "$DISK_VERSION" ]]; then
+    if [[ "$VERSION" == "$(printf '%s\n' "$DISK_VERSION" "$VERSION" | sort -V | head -1)" ]]; then
+      echo "refusing version DOWNGRADE: $VERSION < $DISK_VERSION (Chart.yaml on disk)" >&2
+      echo "a decreasing version is a release rollback decision — re-run with --force to confirm," >&2
+      echo "or fix the version source (server/app.py FastAPI(version=...))." >&2
+      exit 2
+    fi
+  fi
+fi
 
 fail=0
 apply() { # apply <file> <description> <sed-expr>
