@@ -241,6 +241,30 @@ ADR 0009 §8); UI обязан рендерить его как текст.
 не источник правды; после (re)connect клиент пере-fetch
 `GET /api/pairing/{id}` / `GET /api/devices`.
 
+### Словарь `enrollment.*` (ADR 0009 Amd 2 §4, дополнение 2026-09-22 — эмиттеры в этой же фазе)
+
+Домен enrollment: одноразовые registration-токены (`mne_…`) для
+подключения УДАЛЁННЫХ исполнителей (арендованный VPS) без выдачи
+машина-токена. Серверные эмиттеры вводятся волной enrollment-сервера
+(то же правило `assignment.*`: словарь той же фазой, что эмиттеры).
+Payload-инвариант (блокирующий, как §3.3 ADR 0012): в payload НИКОГДА нет
+`token`, его фрагментов и `token_hash` — `/api/events` неаутентифицирован;
+в аудите только `token_id` (хвост hash −8). `label` — подсказка владельца,
+рендерить текстом. Клиент после (re)connect пере-fetch
+`GET /api/executors/enrollment`.
+
+| kind | Payload (v1) | Эмиттер | Клиент |
+| --- | --- | --- | --- |
+| `enrollment.created` | `enrollment_id: str, label?: str` | POST `/api/executors/enrollment` (ui) | до UI-волны enrollment (AGW-4+) не обрабатывается |
+| `enrollment.used` | `enrollment_id: str, executor_id: str, executor_name: str, used_ip: str` | POST `/api/executors` (лег `mne_`; CAS `created→used`) | до UI-волны не обрабатывается; БЕЗ дублирующего notification — уведомление несёт существующий путь `executor.registered` (spam-guard по хосту) |
+| `enrollment.revoked` | `enrollment_id: str` | DELETE `/api/executors/enrollment/{id}` (только живой `created`; used/expired → 409) | до UI-волны не обрабатывается |
+| `enrollment.expired` | `enrollment_id: str` | TTL-sweep (15 мин, цикл pairing-sweeper) | до UI-волны не обрабатывается |
+
+REST-контракт той же фазы: `POST/GET /api/executors/enrollment`,
+`DELETE /api/executors/enrollment/{id}` — все ui-класс; регистрация по
+токену — существующий `POST /api/executors` с `Bearer mne_…`. Полный
+контракт — `docs/design/2026-09-22-executor-enrollment.md`.
+
 ### Встроенные объекты
 
 - `Task`: `id`, `col` (`open|in-progress|blocked|resolved|done`),

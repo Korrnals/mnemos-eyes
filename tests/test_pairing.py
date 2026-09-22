@@ -750,7 +750,15 @@ class TestIdempotencyAndSse:
             blob = json.dumps(event, ensure_ascii=False)
             for secret in secrets:
                 assert secret not in blob, (event["kind"], secret)
-        for note in app_module.store.notifications(limit=100):
+        # §3.3 scopes the notification invariant to pairing notifications.
+        # The 4 verify digits are short enough to occur by chance inside ANY
+        # unrelated notification's digits (timestamps, hex ids) — the session
+        # accumulates hundreds of them, so checking the whole tail made this
+        # test randomly order-dependent (~1 full-suite run in 3).
+        notes = [n for n in app_module.store.notifications(limit=100)
+                 if "пейринг" in f"{n['title']} {n['message']}".lower()]
+        assert notes, "the pairing flow must leave a notification trail"
+        for note in notes:
             blob = json.dumps(note, ensure_ascii=False)
             for secret in secrets:
                 assert secret not in blob, (note["title"], secret)

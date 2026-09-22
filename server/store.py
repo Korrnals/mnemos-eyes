@@ -254,6 +254,40 @@ class DeviceQuotaError(DeviceError):
     choose explicitly; auto-eviction is FORBIDDEN by ADR §5)."""
 
 
+# ---------------------------------------------------- enrollment (ADR 0009 Amd 2 §4 supplement)
+# One-time registration tokens for REMOTE executors (rented VPS): the owner
+# mints an ``mne_``-prefixed secret from the UI; the executor presents it on
+# POST /api/executors and receives its own executor_secret. Scope is
+# REGISTRATION ONLY — a leaked token yields at most one PENDING executor the
+# owner must still approve (never the machine loop). Mirror of the pairing
+# pattern (ADR 0012): hash-only storage, single TTL, single-use CAS, audit
+# without material. The plaintext exists exactly once, in the POST response.
+ENROLLMENT_TTL_S = 900.0              # 15 min: ssh/copy-paste slack (design §11-2)
+ENROLLMENT_TOKEN_PREFIX = "mne_"
+ENROLLMENT_MAX_LIVE = 3               # live (created) tokens; 4th → 409, NO auto-revoke
+ENROLLMENT_STATES = frozenset({"created", "used", "expired", "revoked"})
+ENROLLMENT_LIVE_STATES = ("created",)  # TTL-sweep candidates
+
+
+class EnrollmentError(Exception):
+    """Base class for enrollment-token lifecycle violations."""
+
+
+class EnrollmentNotFoundError(EnrollmentError):
+    """Unknown enrollment id (HTTP 404 upstream — the ui leg only; the
+    registration leg answers 401 for an unknown bearer, never 404)."""
+
+
+class EnrollmentStateError(EnrollmentError):
+    """Illegal enrollment-state transition (HTTP 409 on the ui revoke leg;
+    HTTP 410 on the registration leg — the token is spent/dead)."""
+
+
+class EnrollmentQuotaError(EnrollmentError):
+    """Live (created) enrollment tokens at ENROLLMENT_MAX_LIVE (HTTP 409 —
+    the owner revokes or waits for TTL; auto-revoke is FORBIDDEN)."""
+
+
 def _iso_in(seconds: float, now: datetime | None = None) -> str:
     """UTC ISO stamp ``seconds`` into the future (TTL arithmetic helper)."""
     base = now or datetime.now(timezone.utc)
@@ -674,21 +708,22 @@ ON task_assignments (task_id) WHERE state IN ('queued','claimed','running');
 -- the register response. last_seen is the presence clock; NOTHING writes
 -- it except authenticated presence ticks (the sweeper only reads).
 CREATE TABLE IF NOT EXISTS executors (
-    id            TEXT PRIMARY KEY,
-    name          TEXT NOT NULL UNIQUE,
-    harness       TEXT NOT NULL,
-    host          TEXT NOT NULL DEFAULT '',
-    transport     TEXT NOT NULL DEFAULT 'local-poll'
-                  CHECK (transport IN ('local-poll','mesh-r4')),
-    capabilities  TEXT NOT NULL DEFAULT '[]',
-    version       TEXT NOT NULL DEFAULT '',
-    enabled       INTEGER NOT NULL DEFAULT 0,
-    state         TEXT NOT NULL DEFAULT 'pending'
-                  CHECK (state IN ('pending','approved','revoked')),
-    secret_hash   TEXT NOT NULL DEFAULT '',
-    last_seen     TEXT NOT NULL DEFAULT '',
-    registered_at TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL UNIQUE,
+    harness        TEXT NOT NULL,
+    host           TEXT NOT NULL DEFAULT '',
+    transport      TEXT NOT NULL DEFAULT 'local-poll'
+                   CHECK (transport IN ('local-poll','mesh-r4')),
+    capabilities   TEXT NOT NULL DEFAULT '[]',
+    version        TEXT NOT NULL DEFAULT '',
+    enabled        INTEGER NOT NULL DEFAULT 0,
+    state          TEXT NOT NULL DEFAULT 'pending'
+                   CHECK (state IN ('pending','approved','revoked')),
+    secret_hash    TEXT NOT NULL DEFAULT '',
+    last_seen      TEXT NOT NULL DEFAULT '',
+    registered_via TEXT NOT NULL DEFAULT '',
+    registered_at  TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
 );
 -- SCHED-1 S1 (ADR 0013 §2): automation contracts — additive only, no
 -- SEED_VERSION bump (task_assignments precedent). Three tables:
@@ -789,6 +824,31 @@ CREATE TABLE IF NOT EXISTS pairing_requests (
     expires_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pairing_code_hash ON pairing_requests (code_hash);
+-- Enrollment (ADR 0009 Amd 2 §4 supplement, 2026-09-22): one-time
+-- registration tokens for REMOTE executors. token_hash is sha256 of the
+-- mne_-prefixed secret — the plaintext exists exactly once, in the
+-- POST /api/executors/enrollment 201 response. Single-use: the CAS
+-- created→used rides the SAME transaction as the executor INSERT (the
+-- design contract — a rolled-back registration never burns a token).
+-- used_ip/executor_id are written by that CAS for the owner's approve-time
+-- review. Additive table riding the _SCHEMA executescript — NO SEED_VERSION
+-- bump (pairing_requests/task_assignments precedent).
+CREATE TABLE IF NOT EXISTS enrollment_tokens (
+    id           TEXT PRIMARY KEY,
+    token_hash   TEXT NOT NULL,
+    label        TEXT NOT NULL DEFAULT '',
+    harness_hint TEXT NOT NULL DEFAULT '',
+    name_hint    TEXT NOT NULL DEFAULT '',
+    state        TEXT NOT NULL DEFAULT 'created'
+                 CHECK (state IN ('created','used','expired','revoked')),
+    created_by   TEXT NOT NULL DEFAULT 'owner',
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    used_at      TEXT NOT NULL DEFAULT '',
+    used_ip      TEXT NOT NULL DEFAULT '',
+    executor_id  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_enrollment_token_hash ON enrollment_tokens (token_hash);
 -- CV-7 (ADR 0012 §5): paired device sessions. token_hash is sha256 of the
 -- mnd_-prefixed token — plaintext exists exactly once, in the exchange 200
 -- response. expires_at is the SLIDING 30-day clock (refreshed on every
@@ -966,6 +1026,17 @@ class Store:
             db.execute(
                 "ALTER TABLE task_assignments "
                 "ADD COLUMN topics TEXT NOT NULL DEFAULT '[]'")
+        # Enrollment (Amd 2 §4 supplement): origin fact on the executor row
+        # ('' = machine-token bootstrap; 'enrollment:<id>' = one-time token).
+        # Additive ALTER for pre-enrollment databases — the '' DEFAULT covers
+        # existing rows; new rows are filled at registration. The enrollments
+        # table itself rides the _SCHEMA executescript (IF NOT EXISTS).
+        ecols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(executors)").fetchall()}
+        if "registered_via" not in ecols:
+            db.execute(
+                "ALTER TABLE executors "
+                "ADD COLUMN registered_via TEXT NOT NULL DEFAULT ''")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
@@ -2467,8 +2538,9 @@ class Store:
                 (host,)).fetchone()["n"]
 
     def register_executor(self, name: str, harness: str, host: str = "",
-                          transport: str = "local-poll",
-                          version: str = "") -> tuple[dict[str, Any], str]:
+                          transport: str = "local-poll", version: str = "",
+                          enrollment: dict[str, Any] | None = None,
+                          enrollment_ip: str = "") -> tuple[dict[str, Any], str]:
         """Create a PENDING registry record and mint its secret (L0, Amd 2
         §4). The board mints executor_secret (token_hex(24)); ONLY the
         sha256 hash is stored — the plaintext exists exactly once, in the
@@ -2476,13 +2548,23 @@ class Store:
         are NOT accepted here: they are owner-declared via update_executor,
         never executor-self-expanded.
 
+        ``enrollment`` (Amd 2 §4 supplement): a live one-time registration
+        token row (mne_ leg, _guard_register at the route). The CAS
+        created→used rides THIS transaction — a rolled-back registration
+        (duplicate name, quota) never burns the token, and two competing
+        registrations of one token produce exactly one winner (the loser
+        sees state≠created and raises). ``registered_via`` records the
+        origin for the owner's approve-time review.
+
         Raises:
             ValueError — empty name / unknown harness / unknown transport
                          (HTTP 422 upstream);
             ExecutorConflictError — name already registered (409);
             ExecutorQuotaError — open-pending backlog at EXECUTOR_PENDING_CAP
                          (429; PR #18 F5 — pace limits bound requests, not
-                         total volume; approve/revoke/delete frees quota).
+                         total volume; approve/revoke/delete frees quota);
+            EnrollmentStateError — the token was spent between the guard's
+                         lookup and the write (HTTP 410 upstream).
         """
         name = name.strip()[:120]
         if not name:
@@ -2495,6 +2577,7 @@ class Store:
         secret = secrets.token_hex(24)
         secret_hash = hashlib.sha256(secret.encode("utf-8")).hexdigest()
         now = _now()
+        registered_via = ""
         with self._lock, self._conn() as db:
             pending = db.execute(
                 "SELECT COUNT(*) AS n FROM executors WHERE state='pending'"
@@ -2514,14 +2597,29 @@ class Store:
             while db.execute("SELECT 1 FROM executors WHERE id=?",
                              (executor_id,)).fetchone():
                 executor_id = "ex-" + secrets.token_hex(6)
+            if enrollment is not None:
+                # Single-use CAS, same transaction as the INSERT below: the
+                # guard already verified created+live, so rowcount!=1 means
+                # a competing registration won — honest 410, never a second
+                # executor on one token.
+                cur = db.execute(
+                    """UPDATE enrollment_tokens
+                       SET state='used', used_at=?, used_ip=?, executor_id=?
+                       WHERE id=? AND state='created'""",
+                    (now, (enrollment_ip or "")[:64], executor_id,
+                     enrollment["id"]))
+                if cur.rowcount != 1:
+                    raise EnrollmentStateError(
+                        f"enrollment token {enrollment['id']} already used")
+                registered_via = f"enrollment:{enrollment['id']}"
             db.execute(
                 """INSERT INTO executors
                        (id, name, harness, host, transport, capabilities,
                         version, enabled, state, secret_hash, last_seen,
-                        registered_at, updated_at)
-                       VALUES (?,?,?,?,?,'[]',?,0,'pending',?,'',?,?)""",
+                        registered_via, registered_at, updated_at)
+                       VALUES (?,?,?,?,?,'[]',?,0,'pending',?,'',?,?,?)""",
                 (executor_id, name, harness, host.strip()[:200], transport,
-                 version.strip()[:60], secret_hash, now, now),
+                 version.strip()[:60], secret_hash, registered_via, now, now),
             )
             # token_id = tail of the stored hash: identifies the secret
             # version in the audit trail without exposing any material
@@ -2530,6 +2628,13 @@ class Store:
                 "harness": harness, "transport": transport,
                 "token_id": secret_hash[-8:],
             })
+            if enrollment is not None:
+                self._log(db, "enrollment.used", None, {
+                    "enrollment_id": enrollment["id"],
+                    "token_id": enrollment["token_hash"][-8:],
+                    "executor_id": executor_id, "executor_name": name,
+                    "used_ip": (enrollment_ip or "")[:64],
+                })
             row = self._executor(db, executor_id)
         return row, secret  # type: ignore[return-value]
 
@@ -3101,6 +3206,180 @@ class Store:
                     self._log(db, "device.expired", None,
                               {"device_id": row["id"]})
                     transitioned.append(self._device_public(row))
+        return transitioned
+
+    # ------------------------------------------------ enrollment (Amd 2 §4 suppl.)
+    # One-time registration tokens (mne_) for REMOTE executors. Same
+    # discipline as pairing (ADR 0012): hash-only, one TTL, single-use CAS,
+    # audit without material — but ONE protocol step (present the token on
+    # POST /api/executors), no verify digits, no IP binding: the human gate
+    # is the existing pending→approve flow, not a mid-protocol confirm.
+
+    @staticmethod
+    def _enrollment_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+        """Public enrollment shape — token_hash NEVER leaves the store."""
+        return {
+            "enrollment_id": row["id"], "label": row["label"],
+            "harness_hint": row["harness_hint"], "name_hint": row["name_hint"],
+            "state": row["state"], "created_at": row["created_at"],
+            "expires_at": row["expires_at"], "used_at": row["used_at"],
+            "used_ip": row["used_ip"], "executor_id": row["executor_id"],
+        }
+
+    @staticmethod
+    def enrollment_row_expired(row: sqlite3.Row | dict[str, Any]) -> bool:
+        """Effective TTL verdict: a created token past expires_at is expired
+        even before the sweep has flipped the column (the sweep owns the
+        persisted transition + SSE; reads compute it)."""
+        return (row["state"] == "created"
+                and _iso_past(row["expires_at"]))
+
+    def create_enrollment(self, *, label: str = "", harness_hint: str = "",
+                          name_hint: str = "", created_by: str = "owner",
+                          ttl_s: float = ENROLLMENT_TTL_S,
+                          ) -> tuple[dict[str, Any], str]:
+        """Mint a one-time enrollment token (ui leg). Returns (public row,
+        token) — the plaintext ``mne_…`` exists exactly once, right here;
+        the store keeps only sha256(token). The live-token quota is checked
+        under the store lock (HTTP 409 upstream via EnrollmentQuotaError —
+        no auto-revoke, the owner chooses). ``harness_hint`` is validated
+        against the closed allowlist when non-empty: the UI renders it in
+        the bootstrap command, a typo'd hint would mislead the VPS leg."""
+        if label:
+            label = label.strip()[:64]
+        if name_hint:
+            name_hint = name_hint.strip()[:120]
+        harness_hint = (harness_hint or "").strip()[:60]
+        if harness_hint and harness_hint not in self.KNOWN_HARNESSES:
+            raise ValueError(
+                f"unknown harness: {harness_hint}; "
+                f"known: {sorted(self.KNOWN_HARNESSES)}")
+        token = ENROLLMENT_TOKEN_PREFIX + secrets.token_urlsafe(24)
+        now = datetime.now(timezone.utc)
+        enrollment_id = "enr-" + secrets.token_hex(6)
+        row = {
+            "id": enrollment_id,
+            "token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            "label": label, "harness_hint": harness_hint,
+            "name_hint": name_hint, "state": "created",
+            "created_by": (created_by or "owner")[:120],
+            "created_at": now.isoformat(timespec="seconds"),
+            "expires_at": _iso_in(ttl_s, now),
+            "used_at": "", "used_ip": "", "executor_id": "",
+        }
+        with self._lock, self._conn() as db:
+            live = db.execute(
+                "SELECT COUNT(*) AS n FROM enrollment_tokens "
+                "WHERE state='created'").fetchone()["n"]
+            if live >= ENROLLMENT_MAX_LIVE:
+                raise EnrollmentQuotaError(
+                    f"live enrollment tokens are capped at {ENROLLMENT_MAX_LIVE} "
+                    "— revoke one or wait for TTL before creating more")
+            db.execute(
+                """INSERT INTO enrollment_tokens
+                       (id, token_hash, label, harness_hint, name_hint,
+                        state, created_by, created_at, expires_at,
+                        used_at, used_ip, executor_id)
+                       VALUES (:id, :token_hash, :label, :harness_hint,
+                        :name_hint, :state, :created_by, :created_at,
+                        :expires_at, :used_at, :used_ip, :executor_id)""",
+                row,
+            )
+            self._log(db, "enrollment.created", None, {
+                "enrollment_id": enrollment_id,
+                "token_id": row["token_hash"][-8:],
+                "label": label, "harness_hint": harness_hint,
+                "expires_at": row["expires_at"],
+            })
+        return self._enrollment_public(row), token
+
+    def list_enrollments(self) -> list[dict[str, Any]]:
+        """All enrollment tokens, newest first (ui leg — token list panel
+        shows live ones plus recent terminal history). No hash, no token."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM enrollment_tokens "
+                "ORDER BY created_at DESC, id DESC").fetchall()
+        return [self._enrollment_public(r) for r in rows]
+
+    def get_enrollment(self, enrollment_id: str) -> dict[str, Any] | None:
+        """Raw public row by id; None when unknown."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM enrollment_tokens WHERE id=?",
+                (enrollment_id,)).fetchone()
+        return self._enrollment_public(row) if row is not None else None
+
+    def revoke_enrollment(self, enrollment_id: str,
+                          ) -> tuple[dict[str, Any], bool]:
+        """Revoke a LIVE (created) token (ui leg). Returns (public row,
+        transitioned): created → revoked (transitioned=True, caller emits
+        SSE); already revoked → (row, False) idempotent (pairing-cancel
+        pattern); used → EnrollmentStateError — the executor EXISTS, kill
+        it via the executor registry (DELETE /api/executors/{id}), burning
+        this row would orphan the audit link; expired → EnrollmentStateError
+        (the TTL already did the job)."""
+        now = _now()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM enrollment_tokens WHERE id=?",
+                (enrollment_id,)).fetchone()
+            if row is None:
+                raise EnrollmentNotFoundError(
+                    f"enrollment {enrollment_id} not found")
+            if row["state"] == "created":
+                cur = db.execute(
+                    "UPDATE enrollment_tokens SET state='revoked' "
+                    "WHERE id=? AND state='created'", (enrollment_id,))
+                if cur.rowcount != 1:  # pragma: no cover — store lock is exclusive
+                    raise EnrollmentStateError(
+                        "enrollment token moved concurrently; re-read it")
+                self._log(db, "enrollment.revoked", None, {
+                    "enrollment_id": enrollment_id,
+                    "token_id": row["token_hash"][-8:],
+                })
+                row = db.execute(
+                    "SELECT * FROM enrollment_tokens WHERE id=?",
+                    (enrollment_id,)).fetchone()
+                return self._enrollment_public(row), True
+            if row["state"] == "revoked":
+                return self._enrollment_public(row), False
+            raise EnrollmentStateError(
+                f"enrollment token is {row['state']} — nothing to revoke")
+
+    def lookup_enrollment_by_token(self, token: str) -> dict[str, Any] | None:
+        """Raw row matching a presented ``mne_`` token (sha256 lookup),
+        newest first. Deliberately returns ANY state — the registration
+        guard must distinguish 401 (unknown) from 410 (known but dead).
+        Hash-indexed; constant work for garbage tokens."""
+        digest = hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM enrollment_tokens WHERE token_hash=? "
+                "ORDER BY created_at DESC LIMIT 1", (digest,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def expire_stale_enrollments(self) -> list[dict[str, Any]]:
+        """TTL sweep, enrollment side: flip created tokens past expires_at
+        to expired (rides the pairing sweeper cycle). Returns the
+        transitioned rows (caller emits SSE); CAS per row."""
+        transitioned: list[dict[str, Any]] = []
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM enrollment_tokens WHERE state='created'"
+            ).fetchall()
+            for row in rows:
+                if not _iso_past(row["expires_at"]):
+                    continue
+                cur = db.execute(
+                    "UPDATE enrollment_tokens SET state='expired' "
+                    "WHERE id=? AND state='created'", (row["id"],))
+                if cur.rowcount == 1:
+                    self._log(db, "enrollment.expired", None, {
+                        "enrollment_id": row["id"],
+                        "token_id": row["token_hash"][-8:],
+                    })
+                    transitioned.append(self._enrollment_public(row))
         return transitioned
 
     # ------------------------------------------------ automation (SCHED-1 S1)
