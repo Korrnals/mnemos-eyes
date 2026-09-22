@@ -24,11 +24,53 @@ import { useT } from "@/i18n";
  * cannot see inner containers. `FocusMain` moves focus to <main> on route
  * change so keyboard/SR users land at the new content (WCAG 2.4.3).
  *
- * Collapse state lives here so it survives route changes.
+ * Collapse state lives here so it survives route changes, and persists under
+ * "vesmaro.sidebarCollapsed" (UI-19 owner feedback: the collapsed rail must
+ * survive F5; the `vesmaro.*` namespace, guarded read/write exactly like
+ * executionPrefs.ts — the node test environment has no DOM).
  */
+
+/** localStorage key for the sidebar collapsed rail (UI-19 owner feedback). */
+export const SIDEBAR_COLLAPSED_STORAGE_KEY = "vesmaro.sidebarCollapsed";
+
+/** Guarded localStorage handle — undefined outside a browser/test stub. */
+function safeStorage(): Storage | undefined {
+  try {
+    return typeof localStorage === "undefined" ? undefined : localStorage;
+  } catch {
+    return undefined; // private mode / disabled storage
+  }
+}
+
+/** Read the persisted collapse flag; absent/corrupt data falls back to open. */
+function loadSidebarCollapsed(storage: Storage | undefined = safeStorage()): boolean {
+  if (!storage) return false;
+  try {
+    if (storage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1") return true;
+  } catch {
+    // private mode — fall through to the default
+  }
+  return false;
+}
+
+/** Persist the collapse flag; storage failures are non-fatal. */
+function saveSidebarCollapsed(
+  collapsed: boolean,
+  storage: Storage | undefined = safeStorage(),
+): void {
+  try {
+    storage?.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Swallow: the in-memory state still switches for this session.
+  }
+}
+
 export function Shell() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);
   const toggle = useCallback(() => setCollapsed((value) => !value), []);
+  // Persist on every change (SSR-safe: effects never run on the server; the
+  // initial render also re-affirms the stored value — a no-op write).
+  useEffect(() => saveSidebarCollapsed(collapsed), [collapsed]);
   const location = useLocation();
   const t = useT();
   // Content-derived docs titles ride crumbs; brand is the fallback.
