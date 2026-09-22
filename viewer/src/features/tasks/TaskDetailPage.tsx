@@ -247,7 +247,14 @@ export function TaskDetailPage() {
         {tab === "history" ? <HistoryTab taskId={id} lang={lang} /> : null}
         {tab === "memory" ? <MemoryTab taskId={id} lang={lang} /> : null}
         {tab === "details" ? <DetailsTab taskId={id} lang={lang} /> : null}
-        {tab === "execution" ? <TaskExecutionTab task={current} /> : null}
+        {tab === "execution" ? (
+          <TaskExecutionTab
+            task={current}
+            /* AGW-6 A.3 link-test deep-link (?assign=<executorId>): the
+             * sheet auto-opens with the executor pinned. */
+            autoAssignExecutorId={searchParams.get("assign") ?? undefined}
+          />
+        ) : null}
       </div>
     </TaskDetailShell>
   );

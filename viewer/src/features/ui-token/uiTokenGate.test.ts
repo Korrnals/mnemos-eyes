@@ -390,7 +390,7 @@ describe("UiTokenGate server verify (ADR 0014)", () => {
   it("401 mid-flight + LIVE cookie: re-probe replays on the cookie leg, window never opens", async () => {
     // The adapter policy after a cookie probe: no stored token, live cookie.
     sessionStorage.removeItem(UI_TOKEN_STORAGE_KEY);
-    let cookieLive = true;
+    const cookieLive = true;
     const { gate } = verifiedGate({
       // Mirror the BoardAdapter policy: hasToken = stored || cookieLive.
       hasToken: () => hasUiToken() || cookieLive,

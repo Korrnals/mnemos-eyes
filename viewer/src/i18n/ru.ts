@@ -841,6 +841,30 @@ export const ru = {
   "agents.menu.label": "Меню исполнителя {{name}}",
   "agents.menu.copyId": "Копировать id ({{id}})",
   "agents.menu.openRegistry": "Открыть реестр",
+  // AGW-6 A: проверка связи (outbound-only честность)
+  "agents.linkcheck.trigger": "Проверить связь",
+  "agents.linkcheck.checkForReal": "Проверить по-настоящему",
+  "agents.linkcheck.verdict.never": "ещё не отвечал на опрос",
+  "agents.linkcheck.verdict.online": "на связи — ответил на опрос {{age}} назад",
+  "agents.linkcheck.verdict.stale": "отвечал давно — {{age}} назад",
+  "agents.linkcheck.verdict.offline": "не отвечает — последний ответ {{age}} назад",
+  "agents.linkcheck.verdict.revoked": "отозван — присутствие погасло",
+  "agents.linkcheck.verdict.unknown": "пороги присутствия ещё не загружены",
+  "agents.linkcheck.disclaimer":
+    "Борд не пингует агентов (outbound-only): это возраст последнего ответа поллеру, а не доступность машины.",
+  "agents.linkcheck.unitSeconds": "с",
+  "agents.linktest.title": "Проверить по-настоящему — {{name}}",
+  "agents.linktest.subtitle":
+    "Выберите задачу — откроется «Взять в работу» с пином на «{{name}}».",
+  "agents.linktest.allowlistNote":
+    "Промах по allowlist — тоже валидный тест: refusal-report докажет связь не хуже успешного запуска.",
+  "agents.linktest.loading": "Загружаем задачи борда",
+  "agents.linktest.empty":
+    "Нет задач, принимающих поручения. Создайте тестовую задачу на борде и вернитесь.",
+  "agents.linktest.listLabel": "Задачи для тестового поручения",
+  "agents.linktest.rowAria": "Открыть «Взять в работу» с пином на {{name}}",
+  "agents.sheet.pinnedHint":
+    "Пин на исполнителя: поручение дождётся его выхода на связь — отправка активна.",
   "agents.registry.viaEnrollment": "происхождение: enrollment-токен",
   "agents.registry.viaMachine": "происхождение: машина-токен",
   "agents.enrollment.title": "Добавить исполнителя",

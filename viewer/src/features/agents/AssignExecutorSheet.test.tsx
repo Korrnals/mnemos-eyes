@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
@@ -45,12 +45,17 @@ const TASK: BoardTask = {
 
 interface Mount {
   root: Root;
+  gateway: MockAdapter;
   /** Radix portals the dialog into document.body — queries go to the DOCUMENT. */
   text: () => string;
   query: <T extends Element>(selector: string) => T[];
 }
 
-async function mountSheet(executorsPage: ExecutorsPage, defaultExecutor: string): Promise<Mount> {
+async function mountSheet(
+  executorsPage: ExecutorsPage,
+  defaultExecutor: string,
+  pinnedExecutorId: string | null = null,
+): Promise<Mount> {
   const gateway = new MockAdapter({ latency: false });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await queryClient.prefetchQuery({
@@ -77,7 +82,12 @@ async function mountSheet(executorsPage: ExecutorsPage, defaultExecutor: string)
             <UiTokenProvider>
               <I18nProvider initialLang="en">
                 <MemoryRouter>
-                  <AssignExecutorSheet task={TASK} open onOpenChange={() => undefined} />
+                  <AssignExecutorSheet
+                    task={TASK}
+                    open
+                    onOpenChange={() => undefined}
+                    pinnedExecutorId={pinnedExecutorId}
+                  />
                 </MemoryRouter>
               </I18nProvider>
             </UiTokenProvider>
@@ -88,6 +98,7 @@ async function mountSheet(executorsPage: ExecutorsPage, defaultExecutor: string)
   });
   return {
     root,
+    gateway,
     text: () => document.body.textContent ?? "",
     query: <T extends Element>(selector: string) => [
       ...document.querySelectorAll<T>(selector),
@@ -212,6 +223,66 @@ describe("AssignExecutorSheet — executor picker honesty (§2.3)", () => {
     expect(title).toContain("local-poll");
     expect(title).toContain("last seen");
     expect(title).toContain("never verified by the server");
+    root.unmount();
+  });
+});
+
+describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
+  it("a PINNED approved+enabled executor stays selectable while OFFLINE", async () => {
+    // exec-old-poller: approved + enabled + offline — the link-test case.
+    const { root, text, query } = await mountSheet(
+      await registry(["exec-old-poller"]),
+      "",
+      "exec-old-poller",
+    );
+    const label = query("label").find((l) => l.textContent?.includes("zcode@old-laptop"));
+    const radio = label?.querySelector<HTMLInputElement>("input[type=radio]");
+    expect(radio?.checked).toBe(true); // the pin PRE-SELECTS it
+    expect(radio?.disabled).toBe(false); // offline does NOT disable a pin
+    expect(text()).toContain("Executor pinned");
+    root.unmount();
+  });
+
+  it("the pin travels: submit carries executor_id without touching the picker", async () => {
+    const { root, gateway, query } = await mountSheet(
+      await registry(["exec-old-poller"]),
+      "",
+      "exec-old-poller",
+    );
+    const spy = vi.spyOn(gateway, "createAssignment");
+    const input = query<HTMLInputElement>("#assign-specialist")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, "@GCW: Tech Lead");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const assign = query<HTMLButtonElement>("button").find((button) =>
+      button.textContent?.includes("Assign"),
+    )!;
+    await act(async () => {
+      assign.click();
+    });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][0]).toMatchObject({
+      task_id: "TB-10",
+      executor_id: "exec-old-poller",
+    });
+    root.unmount();
+  });
+
+  it("a pinned REVOKED executor stays unselectable (routing can never pick it)", async () => {
+    const { root, query } = await mountSheet(
+      await registry(["exec-copilot-revoked"]),
+      "",
+      "exec-copilot-revoked",
+    );
+    const label = query("label").find((l) => l.textContent?.includes("copilot@old-host"));
+    const radio = label?.querySelector<HTMLInputElement>("input[type=radio]");
+    expect(radio?.checked).toBe(true); // seeded…
+    expect(radio?.disabled).toBe(true); // …but honestly dead
     root.unmount();
   });
 });

@@ -48,7 +48,15 @@ function assignmentOrder(a: AssignmentItem, b: AssignmentItem): number {
   return b.created_at.localeCompare(a.created_at);
 }
 
-export function TaskExecutionTab({ task }: { task: BoardTask }) {
+export function TaskExecutionTab({
+  task,
+  autoAssignExecutorId,
+}: {
+  task: BoardTask;
+  /** AGW-6 A.3 deep-link pin (`?assign=<id>`): auto-open the sheet with
+   * this executor pre-selected (the link-check «проверить по-настоящему»). */
+  autoAssignExecutorId?: string;
+}) {
   const t = useT();
   const { lang } = useI18n();
   // Shared 1 Hz ticker — 0 before the first subscribe (SSR-honest: no age
@@ -57,7 +65,12 @@ export function TaskExecutionTab({ task }: { task: BoardTask }) {
   const assignments = useAssignments({ task_id: task.id });
   const executors = useExecutors();
   const mutations = useAssignmentMutations();
-  const [sheetOpen, setSheetOpen] = useState(false);
+  // Deep-link pin (?assign=<id>): the sheet starts OPEN (mount-time
+  // derivation, no effect). Terminal tasks honestly skip it — the sheet
+  // there would be dead furniture; a manual close stays closed.
+  const [sheetOpen, setSheetOpen] = useState(
+    () => autoAssignExecutorId !== undefined && taskAcceptsAssignments(task),
+  );
   const [prefill, setPrefill] = useState<AssignPrefill | null>(null);
 
   const items = [...(assignments.data?.items ?? [])].sort(assignmentOrder);
@@ -186,6 +199,7 @@ export function TaskExecutionTab({ task }: { task: BoardTask }) {
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         prefill={prefill}
+        pinnedExecutorId={autoAssignExecutorId ?? null}
       />
     </div>
   );

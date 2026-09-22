@@ -40,6 +40,18 @@ function selectableExecutor(executor: ExecutorItem): boolean {
   return executor.state === "approved" && executor.enabled && executor.presence !== "offline";
 }
 
+/**
+ * AGW-6 A.3 pin rule: a PINNED approved+enabled executor stays selectable
+ * even while OFFLINE — that is the link-test case («не отвечает» → send a
+ * real task, the queue waits, the claim proves the link). Pending/revoked/
+ * disabled stay unselectable in every case: routing can never pick them,
+ * the pin would be a lie.
+ */
+function selectablePinnedExecutor(executor: ExecutorItem, pinned: boolean): boolean {
+  if (pinned) return executor.state === "approved" && executor.enabled;
+  return selectableExecutor(executor);
+}
+
 /** Short tier label (the same strings row signatures use). */
 function routingReasonTextKey(reason: string): TranslationKey {
   switch (reason) {
@@ -65,12 +77,16 @@ export function AssignExecutorSheet({
   open,
   onOpenChange,
   prefill = null,
+  pinnedExecutorId = null,
 }: {
   task: BoardTask;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Retry prefill (failed/expired «Перезапустить») — same parameters again. */
   prefill?: AssignPrefill | null;
+  /** AGW-6 A.3 link-test pin: pre-select this executor (deep-link
+   * `?assign=<id>` from the link-check second stage). */
+  pinnedExecutorId?: string | null;
 }) {
   // The form is a keyed inner component (EditTaskDialog pattern): opening
   // the sheet mounts it fresh — state seeds from the task/prefill through
@@ -81,9 +97,10 @@ export function AssignExecutorSheet({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <AssignExecutorForm
-          key={`${prefill?.specialist ?? ""}|${prefill?.harness ?? ""}`}
+          key={`${prefill?.specialist ?? ""}|${prefill?.harness ?? ""}|${pinnedExecutorId ?? ""}`}
           task={task}
           prefill={prefill}
+          pinnedExecutorId={pinnedExecutorId}
           onDone={() => onOpenChange(false)}
         />
       </DialogContent>
@@ -94,10 +111,12 @@ export function AssignExecutorSheet({
 function AssignExecutorForm({
   task,
   prefill,
+  pinnedExecutorId,
   onDone,
 }: {
   task: BoardTask;
   prefill: AssignPrefill | null;
+  pinnedExecutorId: string | null;
   onDone: () => void;
 }) {
   const t = useT();
@@ -108,12 +127,14 @@ function AssignExecutorForm({
   const board = useBoardTasks();
   const mutations = useAssignmentMutations();
   // Fresh-open seeds; retry runs carry the failed attempt's parameters
-  // verbatim (spec §3.1 CTA).
+  // verbatim (spec §3.1 CTA). The link-test pin pre-selects its executor.
   const [specialist, setSpecialist] = useState(
     prefill?.specialist ?? task.specialists[0] ?? "",
   );
   const [harness, setHarness] = useState<string>(prefill?.harness ?? "zcode");
-  const [executorChoice, setExecutorChoice] = useState<string>("default");
+  const [executorChoice, setExecutorChoice] = useState<string>(
+    pinnedExecutorId ?? "default",
+  );
   const [submitting, setSubmitting] = useState(false);
 
   /** Specialist candidates: the task's own first, then the board union. */
@@ -250,7 +271,10 @@ function AssignExecutorForm({
               </span>
             </label>
             {executorRows.map((executor) => {
-              const selectable = selectableExecutor(executor);
+              const selectable = selectablePinnedExecutor(
+                executor,
+                executor.id === pinnedExecutorId,
+              );
               return (
                 <label
                   key={executor.id}
@@ -282,6 +306,12 @@ function AssignExecutorForm({
               );
             })}
           </div>
+          {/* Link-test pin: the honest wait spelled out at the pin itself. */}
+          {pinnedExecutorId ? (
+            <p className="mt-1 border-t border-border-subtle pt-1 text-xs text-foreground-muted">
+              {t("agents.sheet.pinnedHint")}
+            </p>
+          ) : null}
         </fieldset>
 
         {/* LIVE route preview (aria-live: the route changes with selections). */}

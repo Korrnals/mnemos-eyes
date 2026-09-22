@@ -826,6 +826,30 @@ export const en: Record<TranslationKey, string> = {
   "agents.menu.label": "Executor menu {{name}}",
   "agents.menu.copyId": "Copy id ({{id}})",
   "agents.menu.openRegistry": "Open registry",
+  // AGW-6 A: link check (outbound-only honesty)
+  "agents.linkcheck.trigger": "Check connection",
+  "agents.linkcheck.checkForReal": "Check for real",
+  "agents.linkcheck.verdict.never": "has never answered a poll",
+  "agents.linkcheck.verdict.online": "online — answered a poll {{age}} ago",
+  "agents.linkcheck.verdict.stale": "answered a while ago — {{age}} ago",
+  "agents.linkcheck.verdict.offline": "not responding — last answered {{age}} ago",
+  "agents.linkcheck.verdict.revoked": "revoked — presence is gone",
+  "agents.linkcheck.verdict.unknown": "presence thresholds are not loaded yet",
+  "agents.linkcheck.disclaimer":
+    "The board never pings agents (outbound-only): this is the age of the poller's last answer, not machine availability.",
+  "agents.linkcheck.unitSeconds": "s",
+  "agents.linktest.title": "Check for real — {{name}}",
+  "agents.linktest.subtitle":
+    "Pick a task — its «Take into work» sheet opens with {{name}} pinned.",
+  "agents.linktest.allowlistNote":
+    "An allowlist miss is a valid test too: the refusal-report proves the link just as well as a launch.",
+  "agents.linktest.loading": "Loading board tasks",
+  "agents.linktest.empty":
+    "No tasks accept assignments right now. Create a test task on the board and come back.",
+  "agents.linktest.listLabel": "Tasks for the test assignment",
+  "agents.linktest.rowAria": "Open «Take into work» with {{name}} pinned",
+  "agents.sheet.pinnedHint":
+    "Executor pinned: the assignment waits for them to come back online — submit stays active.",
   "agents.registry.viaEnrollment": "origin: enrollment token",
   "agents.registry.viaMachine": "origin: machine token",
   "agents.enrollment.title": "Add executor",

@@ -13,6 +13,7 @@ import type { ExecutorItem } from "@/gateway/boardTypes";
 import { useT } from "@/i18n";
 import { useExecutorMutations } from "./useExecutorMutations";
 import type { ExecutorMutations } from "./useExecutorMutations";
+import { ExecutorLinkCheck } from "./ExecutorLinkCheck";
 
 /**
  * Executor action menu (AGW-5 phase 2; the TaskRowMenu posture — #30): one
@@ -36,7 +37,9 @@ import type { ExecutorMutations } from "./useExecutorMutations";
  */
 
 const MENU_WIDTH_PX = 200;
-const MENU_HEIGHT_PX = 260;
+// Generous estimate: with the link-check verdict open the popup grows
+// past a bare items list (the clamp only positions, never scrolls).
+const MENU_HEIGHT_PX = 360;
 const VIEWPORT_MARGIN_PX = 8;
 
 export function ExecutorMenu({
@@ -239,6 +242,14 @@ function ExecutorMenuItems({
   const mutations: ExecutorMutations = useExecutorMutations();
   return (
     <>
+      {/* AGW-6 A: «Проверить связь» — every state EXCEPT revoked (a
+       * revoked token cannot answer anything; the verdict component
+       * renders the honest goned-presence line in the card instead). The
+       * trigger stays OPEN inside the popup — the verdict appears below
+       * it; the cache invalidation is the check, never a fake ping. */}
+      {executor.state !== "revoked" ? (
+        <ExecutorLinkCheck executor={executor} variant="menu-item" />
+      ) : null}
       {executor.state === "pending" ? (
         <MenuButton
           icon={<Check className="size-3.5" aria-hidden="true" />}
