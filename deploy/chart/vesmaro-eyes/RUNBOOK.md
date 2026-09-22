@@ -212,7 +212,7 @@ hostNetwork-порт 8080 при откате снова займётся под
 фигурирует ровно один секрет — `vesmaro-eyes-ui-token` (команда получения —
 в шаге 2a). Board-токен — server-side plumbing (поллер, агенты, mesh): для
 любых UI-действий он не используется, и во входе его сервер не примет —
-verify ответит 401 с детьмилом «the pasted token is a machine-class token…
+verify ответит 401 с детейлом «the pasted token is a machine-class token…
 requires VESMARO_UI_TOKEN».
 
 **Сессия владельца (ADR 0014).** Вход проверяется сервером

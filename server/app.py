@@ -667,6 +667,7 @@ class _UiCookieReissueRoute(APIRoute):
             response = await original(request)
             if getattr(request.state, "vesmaro_ui_reissue", False):
                 request.state.vesmaro_ui_reissue = False
+                _commit_ui_cookie_reissue(request)
                 response.set_cookie(
                     _UI_COOKIE_NAME, _token_classes()["ui"],
                     max_age=_UI_COOKIE_MAX_AGE_S, httponly=True,
@@ -2807,13 +2808,17 @@ async def create_task_report(task_id: str, body: ReportCreate,
     ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
     refusal: the report is still accepted)."""
     executor = None
-    if (_bearer_is_class(request, "ui") or _cookie_ui_ok(request)
+    header_present = bool(request.headers.get("Authorization", ""))
+    cookie_ui = not header_present and _cookie_ui_ok(request)
+    if (cookie_ui or _bearer_is_class(request, "ui")
             or not _token_classes().get("machine")):
-        # ui bearer rides the ui leg; a live `vesmaro_ui` session cookie
-        # picks the ui leg too (ADR 0014 Ф2 — a cookie-only request must
-        # not fall into the machine guard and 401); when the machine class
-        # is not configured at all the endpoint stays reachable through ui
-        # (a wrong-class bearer then gets 401, not a 503 disable)
+        # Leg pick (ADR 0014 Ф2 + review gap matrix): a live `vesmaro_ui`
+        # cookie picks the ui leg ONLY when no header rides along — the
+        # determinism rule keeps a header-present request on its own leg
+        # (a valid machine bearer + a valid cookie is a machine request,
+        # never a ui one). When the machine class is not configured at all
+        # the endpoint stays reachable through ui REGARDLESS of the bearer
+        # (a wrong-class bearer then gets 401, not a 503 disable).
         _guard_write(request, classes=("ui",))
     else:
         executor = _guard_machine_write(request)
@@ -4355,6 +4360,13 @@ def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -
         for token in allowed:
             expected = f"Bearer {token}"
             if hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+                # Review P1 (sliding TTL): a request that proved ui-token
+                # possession on the HEADER leg extends the owner session too —
+                # the dialog flow keeps the token in sessionStorage, so its
+                # mutations never touch the cookie leg. Machine/executor
+                # matches (reports composite) must NOT touch the session.
+                if "ui" in classes and token == effective.get("ui"):
+                    _schedule_ui_cookie_reissue(request)
                 return
         raise HTTPException(401, _token_mismatch_detail(auth, effective, classes))
     # Header absent → the cookie leg (owner session, ADR 0014 Ф2). Only
@@ -4450,6 +4462,9 @@ def _guard_ui_write(request: Request) -> None:
         expected = f"Bearer {UI_WRITE_TOKEN}"
         if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
             raise HTTPException(401, "ui write token required")
+        # Review P1: this guard IS the ui class — a passed header mutation
+        # extends the sliding session exactly like a cookie-leg one.
+        _schedule_ui_cookie_reissue(request)
         return
     # Header absent → the cookie leg (owner session, ADR 0014 Ф2).
     if _cookie_ui_ok(request):
@@ -4600,19 +4615,29 @@ _ui_reissue_last: dict[str, float] = {}
 
 def _schedule_ui_cookie_reissue(request: Request) -> None:
     """Sliding idle TTL, server half (ADR 0014 Ф2): a ui-guarded request
-    that passed on the cookie leg marks the request so
+    that passed (either leg — review P1) marks the request so
     ``_UiCookieReissueRoute`` reissues the cookie with a fresh Max-Age —
     activity extends the session, 6h of silence lets the browser kill the
-    cookie and the next mutation lands on the «сессия истекла» 401."""
+    cookie and the next mutation lands on the «сессия истекла» 401.
+    The throttle BUDGET is only READ here; the table is written by the
+    route wrapper AFTER a successful response (review P3: a handler that
+    raises 409/500 must not spend the 5-minute sliding budget)."""
+    ip = request.client.host if request.client else "unknown"
+    last = _ui_reissue_last.get(ip)
+    if last is not None and time.monotonic() - last < _UI_REISSUE_THROTTLE_S:
+        return
+    request.state.vesmaro_ui_reissue = True
+
+
+def _commit_ui_cookie_reissue(request: Request) -> None:
+    """Wrapper-side half: the request proved the reissue right and the
+    response is on its way — spend the budget, touch the IP LRU-wise."""
     ip = request.client.host if request.client else "unknown"
     now = time.monotonic()
-    last = _ui_reissue_last.get(ip)
-    if last is not None and now - last < _UI_REISSUE_THROTTLE_S:
-        return
-    if len(_ui_reissue_last) >= _UI_REISSUE_MAX_IPS:
+    if len(_ui_reissue_last) >= _UI_REISSUE_MAX_IPS and ip not in _ui_reissue_last:
         _ui_reissue_last.pop(next(iter(_ui_reissue_last)))  # oldest entry
+    _ui_reissue_last.pop(ip, None)  # re-insert → true LRU touch on refresh
     _ui_reissue_last[ip] = now
-    request.state.vesmaro_ui_reissue = True
 
 
 class UiTokenVerifyIn(_ApiModel):

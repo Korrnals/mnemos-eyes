@@ -612,7 +612,10 @@ export class BoardAdapter implements BoardGateway {
     );
     // Normalize defensively: the server pins the enum ("ui"|"legacy"), a
     // legacy proxy that drops the field must not widen the type.
-    return { ok: out.ok === true, tokenClass: out.token_class === "legacy" ? "legacy" : "ui" };
+    return {
+      ok: out.ok === true,
+      tokenClass: out.token_class === "legacy" ? "legacy" : "ui",
+    };
   }
 
   async probeUiSession(): Promise<boolean> {
@@ -620,7 +623,12 @@ export class BoardAdapter implements BoardGateway {
     // 200-with-JSON must not read as a session); requestJson hides statuses.
     const url = buildUrl(this.baseUrl, "/auth/ui-token");
     try {
-      const response = await (this.fetchImpl ?? fetch)(url, { method: "GET" });
+      // A hung server must not hang boot hydration (review P3): the probe
+      // races a 10s abort — a timeout lands in the catch → "no session".
+      const response = await (this.fetchImpl ?? fetch)(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(10_000),
+      });
       this.cookieLive = response.status === 204;
     } catch {
       this.cookieLive = false; // network down / aborted — fail to "no session"
@@ -634,7 +642,11 @@ export class BoardAdapter implements BoardGateway {
   }
 
   async createTask(payload: TaskCreateInput): Promise<BoardTask> {
-    return this.request<BoardTask>("/tasks", { method: "POST", body: payload, auth: true });
+    return this.request<BoardTask>("/tasks", {
+      method: "POST",
+      body: payload,
+      auth: true,
+    });
   }
 
   async patchTask(taskId: string, patch: TaskPatchInput): Promise<BoardTask> {
@@ -655,10 +667,13 @@ export class BoardAdapter implements BoardGateway {
   }
 
   async archiveTask(taskId: string): Promise<TaskMutationAck> {
-    return this.request<TaskMutationAck>(`/tasks/${encodeURIComponent(taskId)}/archive`, {
-      method: "POST",
-      auth: true,
-    });
+    return this.request<TaskMutationAck>(
+      `/tasks/${encodeURIComponent(taskId)}/archive`,
+      {
+        method: "POST",
+        auth: true,
+      },
+    );
   }
 
   async unarchiveTask(taskId: string): Promise<TaskUnarchiveResult> {

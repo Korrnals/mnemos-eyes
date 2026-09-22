@@ -276,9 +276,84 @@ class TestSlidingReissue:
         assert "set-cookie" in first.headers          # fresh Max-Age
         assert "set-cookie" not in second.headers     # throttled (< 5 min)
 
-    def test_header_leg_never_reissues(self, client, split_tokens, ui_auth):
+    def test_header_leg_reissues_throttled(self, client, split_tokens, ui_auth):
+        """Review P1: the dialog flow keeps the token in sessionStorage —
+        its mutations ride the HEADER leg and MUST extend the sliding
+        session too, or the cookie dies 6h after login regardless of
+        activity (the owner's amendment defeated in its main flow)."""
         assert _verify(client, UI_TOKEN).status_code == 200
         r = client.post("/api/tasks", json={"title": "slide-3"},
                         headers=ui_auth)
         assert r.status_code == 201
+        assert "set-cookie" in r.headers          # header leg slides too
+        r2 = client.post("/api/tasks", json={"title": "slide-4"},
+                         headers=ui_auth)
+        assert r2.status_code == 201
+        assert "set-cookie" not in r2.headers     # throttled (< 5 min)
+
+    def test_machine_header_leg_never_reissues(self, client, split_tokens,
+                                               ui_auth, machine_auth,
+                                               fresh_report_limiter):
+        """The reports composite with a machine bearer must NOT touch the
+        owner session (only ui possession slides it)."""
+        assert _verify(client, UI_TOKEN).status_code == 200
+        task = client.post("/api/tasks", json={"title": "slide-mchn"},
+                           headers=ui_auth).json()
+        r = client.post(f"/api/tasks/{task['id']}/reports",
+                        json={"body": "ok", "kind": "intermediate",
+                              "agent": "qa"},
+                        headers=machine_auth)
+        assert r.status_code == 201
         assert "set-cookie" not in r.headers
+
+
+# --------------------------------------------- review gap tests (wave 2)
+class TestReviewGaps:
+    def test_machine_header_plus_valid_cookie_401(self, client, split_tokens,
+                                                  ui_auth, machine_auth):
+        """Determinism combo: a VALID machine header must not fall back to a
+        valid cookie — fail-closed 401, never an обход."""
+        assert _verify(client, UI_TOKEN).status_code == 200
+        r = client.post("/api/tasks", json={"title": "gap-combo"},
+                        headers=machine_auth)
+        assert r.status_code == 401
+
+    def test_legacy_verify_then_cookie_leg_mutates(self, client, auth):
+        """Legacy single-token mode: verify answers legacy, and the issued
+        cookie opens the ui leg afterwards (header absent)."""
+        r = _verify(client, BOARD_TOKEN)
+        assert r.status_code == 200
+        assert r.json()["token_class"] == "legacy"
+        r2 = client.post("/api/tasks", json={"title": "gap-legacy"})
+        assert r2.status_code == 201
+
+    def test_get_probe_does_not_set_cookie(self, client, split_tokens):
+        """The boot probe must never slide the session (read-only oracle):
+        a valid cookie answers 204 withOUT a fresh Set-Cookie."""
+        assert _verify(client, UI_TOKEN).status_code == 200  # cookie issued
+        r = client.get("/api/auth/ui-token")                 # cookie rides
+        assert r.status_code == 204
+        assert "set-cookie" not in r.headers
+
+    def test_device_token_plus_cookie_on_mutation_403(self, client,
+                                                      split_tokens, ui_auth):
+        """mnd_ priority: the device scope middleware 403s BEFORE any leg —
+        a valid owner cookie cannot lend the device a write."""
+        assert _verify(client, UI_TOKEN).status_code == 200
+        p = client.post("/api/pairing", json={"device_name": "gap-mnd"},
+                        headers=ui_auth).json()
+        client.post("/api/pairing/exchange",
+                    json={"code": p["code"], "device_name": "gap-mnd"})
+        client.post(f"/api/pairing/{p['pairing_id']}/confirm",
+                    json={"allow": True}, headers=ui_auth)
+        issued = client.post("/api/pairing/exchange",
+                             json={"code": p["code"], "device_name": "gap-mnd"})
+        mnd = issued.json()["device_token"]
+        r = client.post("/api/tasks", json={"title": "gap-mnd"},
+                        headers={"Authorization": f"Bearer {mnd}"})
+        assert r.status_code == 403
+        # Cleanup: the issued device must not soak a quota slot for the
+        # pairing suite (shared session store).
+        device_id = issued.json()["device_id"]
+        assert client.delete(f"/api/devices/{device_id}",
+                             headers=ui_auth).status_code == 200
