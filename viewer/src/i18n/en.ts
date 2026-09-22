@@ -850,6 +850,51 @@ export const en: Record<TranslationKey, string> = {
   "agents.linktest.rowAria": "Open «Take into work» with {{name}} pinned",
   "agents.sheet.pinnedHint":
     "Executor pinned: the assignment waits for them to come back online — submit stays active.",
+  // AGW-6 B: executor settings card (drawer)
+  "agents.card.title": "Executor card",
+  "agents.card.description":
+    "Executor settings: identity, link, access, declared capabilities",
+  "agents.card.menuOpen": "Settings card",
+  "agents.card.sectionIdentity": "Identity",
+  "agents.card.sectionLink": "Link",
+  "agents.card.sectionAccess": "Access",
+  "agents.card.sectionCaps": "Capabilities (declared)",
+  "agents.card.sectionDanger": "Danger zone",
+  "agents.card.nameLabel": "Name",
+  "agents.card.copyId": "Copy id ({{id}})",
+  "agents.card.harnessLabel": "harness",
+  "agents.card.transportLabel": "transport",
+  "agents.card.versionLabel": "version",
+  "agents.card.registeredVia": "origin",
+  "agents.card.registeredAt": "registered",
+  "agents.card.updatedAt": "updated",
+  "agents.card.harnessNote":
+    "The harness is not editable: it is the local allowlist matching axis on the machine — changing it would silently desync the board from poller.yaml. The honest path is «Revoke» + a fresh enrollment.",
+  "agents.card.stateApproved": "approved",
+  "agents.card.enabledLabel": "Enabled for dispatch",
+  "agents.card.enabledNote": "dispatch = approved AND enabled",
+  "agents.card.enabledPendingHint":
+    "Approve first — the dispatch switch appears after approval.",
+  "agents.card.capsPlaceholder": "a specialist role, e.g. researcher",
+  "agents.card.capsInputAria": "New capability",
+  "agents.card.capsAdd": "Add",
+  "agents.card.capsClear": "Clear",
+  "agents.card.capsClearConfirm":
+    "Send an empty capabilities list? The server will wipe every declared value ([] is a valid operation).",
+  "agents.card.capsDup": "This capability is already declared.",
+  "agents.card.capsMax": "Maximum 64 — the server rejects more.",
+  "agents.card.capsRemoveAria": "Remove capability {{capability}}",
+  "agents.card.capsNote":
+    "Declarations for ROUTING only (owner-declared); they never gate launches — the real gate is the poller's local allowlist.",
+  "agents.card.save": "Save",
+  "agents.card.saved": "{{name}}: card saved",
+  "agents.card.noChanges": "no changes",
+  "agents.card.dangerNote":
+    "«Revoke» is terminal — trust is not restorable; «Delete» removes the record — active assignments keep their pins.",
+  "agents.card.revokedReadOnly":
+    "This executor is revoked — the card is read-only except Delete.",
+  "agents.card.secretHint":
+    "The secret is never shown: it appears exactly once, at registration. Lost it — revoke the executor and register again.",
   "agents.registry.viaEnrollment": "origin: enrollment token",
   "agents.registry.viaMachine": "origin: machine token",
   "agents.enrollment.title": "Add executor",

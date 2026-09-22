@@ -3461,6 +3461,22 @@ async def revoke_enrollment(enrollment_id: str,
     return {"ok": True, "enrollment": row}
 
 
+@app.get("/api/executors/{executor_id}")
+async def get_executor(executor_id: str) -> ExecutorOut:
+    """One registry row — OPEN read, the same boundary as GET /api/executors
+    (the cluster ingress is the auth boundary); unknown id → 404. The answer
+    is the SAME _executor_public projection as the list — secret_hash never
+    leaves the store, presence is computed from last_seen on read.
+
+    Declared AFTER the literal /api/executors/enrollment routes (FastAPI
+    matches in declaration order): "enrollment" must keep resolving to the
+    token list, never as an executor id."""
+    row = store.get_executor(executor_id)
+    if row is None:
+        raise HTTPException(404, f"executor {executor_id} not found")
+    return _executor_public(row)
+
+
 @app.post("/api/executors/{executor_id}/heartbeat")
 async def executor_heartbeat(executor_id: str,
                              request: Request) -> ExecutorStateChangeOut:

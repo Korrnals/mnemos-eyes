@@ -865,6 +865,51 @@ export const ru = {
   "agents.linktest.rowAria": "Открыть «Взять в работу» с пином на {{name}}",
   "agents.sheet.pinnedHint":
     "Пин на исполнителя: поручение дождётся его выхода на связь — отправка активна.",
+  // AGW-6 B: карточка настроек исполнителя (drawer)
+  "agents.card.title": "Карточка исполнителя",
+  "agents.card.description":
+    "Настройки исполнителя: идентичность, связь, доступ, заявленные возможности",
+  "agents.card.menuOpen": "Карточка настроек",
+  "agents.card.sectionIdentity": "Идентичность",
+  "agents.card.sectionLink": "Связь",
+  "agents.card.sectionAccess": "Доступ",
+  "agents.card.sectionCaps": "Возможности (заявленные)",
+  "agents.card.sectionDanger": "Опасная зона",
+  "agents.card.nameLabel": "Имя",
+  "agents.card.copyId": "Скопировать id ({{id}})",
+  "agents.card.harnessLabel": "харнес",
+  "agents.card.transportLabel": "транспорт",
+  "agents.card.versionLabel": "версия",
+  "agents.card.registeredVia": "источник",
+  "agents.card.registeredAt": "регистрация",
+  "agents.card.updatedAt": "обновлено",
+  "agents.card.harnessNote":
+    "Харнес не редактируется: это ось матча локального allowlist на машине — смена рассинхронила бы борд и poller.yaml молча. Смена харнеса = «Отозвать» + повторная регистрация.",
+  "agents.card.stateApproved": "одобрен",
+  "agents.card.enabledLabel": "Включён для диспетчеризации",
+  "agents.card.enabledNote": "диспетчеризация = одобрен И включён",
+  "agents.card.enabledPendingHint":
+    "Сначала одобрите — переключатель диспетчеризации появится после одобрения.",
+  "agents.card.capsPlaceholder": "роль специалиста, например researcher",
+  "agents.card.capsInputAria": "Новая возможность",
+  "agents.card.capsAdd": "Добавить",
+  "agents.card.capsClear": "Очистить",
+  "agents.card.capsClearConfirm":
+    "Отправить пустой список возможностей? Сервер сотрёт все заявленные значения ([] — валидная операция).",
+  "agents.card.capsDup": "Такая возможность уже заявлена.",
+  "agents.card.capsMax": "Максимум 64 — больше сервер не примет.",
+  "agents.card.capsRemoveAria": "Убрать возможность {{capability}}",
+  "agents.card.capsNote":
+    "Декларации для маршрутизации (owner-declared); на запуск не влияют — реальный гейт = локальный allowlist поллера.",
+  "agents.card.save": "Сохранить",
+  "agents.card.saved": "{{name}}: карточка сохранена",
+  "agents.card.noChanges": "изменений нет",
+  "agents.card.dangerNote":
+    "«Отозвать» — терминально, доверие не восстанавливается; «Удалить» убирает запись — активные назначения и пины остаются.",
+  "agents.card.revokedReadOnly":
+    "Исполнитель отозван — карточка только для чтения, кроме удаления.",
+  "agents.card.secretHint":
+    "Секрет не показывается никогда: он виден один раз при регистрации. Потеряли — отзовите исполнителя и зарегистрируйте заново.",
   "agents.registry.viaEnrollment": "происхождение: enrollment-токен",
   "agents.registry.viaMachine": "происхождение: машина-токен",
   "agents.enrollment.title": "Добавить исполнителя",

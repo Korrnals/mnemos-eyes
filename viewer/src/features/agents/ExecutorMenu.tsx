@@ -6,6 +6,7 @@ import {
   Link2,
   MoreHorizontal,
   Power,
+  Settings,
   ShieldOff,
   Trash2,
 } from "lucide-react";
@@ -14,6 +15,7 @@ import { useT } from "@/i18n";
 import { useExecutorMutations } from "./useExecutorMutations";
 import type { ExecutorMutations } from "./useExecutorMutations";
 import { ExecutorLinkCheck } from "./ExecutorLinkCheck";
+import { ExecutorSheet } from "./ExecutorSheet";
 
 /**
  * Executor action menu (AGW-5 phase 2; the TaskRowMenu posture — #30): one
@@ -70,6 +72,9 @@ export function ExecutorMenu({
     x: number;
     y: number;
   } | null>(null);
+  // AGW-6 B: the settings card lives at THIS level (items unmount with the
+  // popup — the drawer must survive the menu closing).
+  const [cardOpen, setCardOpen] = useState(false);
   const open = openProp ?? uncontrolledOpen;
   const menuPosition = (openProp === undefined ? uncontrolledPosition : position) ?? null;
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -213,8 +218,19 @@ export function ExecutorMenu({
             showOpenRegistry={showOpenRegistry}
             close={close}
             copyId={copyId}
+            onOpenCard={() => {
+              // The drawer takes focus (Radix); no refocus to the trigger.
+              close(false);
+              setCardOpen(true);
+            }}
           />
         </div>
+      ) : null}
+
+      {/* AGW-6 B: the settings card, mounted on demand (any state —
+       * revoked renders it read-only except Delete). */}
+      {cardOpen ? (
+        <ExecutorSheet executorId={executor.id} open onOpenChange={setCardOpen} />
       ) : null}
     </div>
   );
@@ -232,11 +248,13 @@ function ExecutorMenuItems({
   showOpenRegistry,
   close,
   copyId,
+  onOpenCard,
 }: {
   executor: ExecutorItem;
   showOpenRegistry: boolean;
   close: () => void;
   copyId: () => void;
+  onOpenCard: () => void;
 }) {
   const t = useT();
   const mutations: ExecutorMutations = useExecutorMutations();
@@ -250,6 +268,14 @@ function ExecutorMenuItems({
       {executor.state !== "revoked" ? (
         <ExecutorLinkCheck executor={executor} variant="menu-item" />
       ) : null}
+      {/* AGW-6 B: the settings card — ALL states (revoked opens it too:
+       * read-only tombstone + Delete). */}
+      <MenuButton
+        icon={<Settings className="size-3.5" aria-hidden="true" />}
+        onClick={onOpenCard}
+      >
+        {t("agents.card.menuOpen")}
+      </MenuButton>
       {executor.state === "pending" ? (
         <MenuButton
           icon={<Check className="size-3.5" aria-hidden="true" />}

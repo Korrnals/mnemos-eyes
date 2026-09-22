@@ -23,6 +23,7 @@ import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 
 async function mountPage(
   seedEmpty = false,
+  path = "/agents/harnesses",
 ): Promise<{ root: Root; container: HTMLElement; gateway: MockAdapter }> {
   const gateway = new MockAdapter({ latency: false });
   if (seedEmpty) {
@@ -46,7 +47,7 @@ async function mountPage(
           <ToastProvider>
             <UiTokenProvider>
               <I18nProvider initialLang="en">
-                <MemoryRouter initialEntries={["/agents/harnesses"]}>
+                <MemoryRouter initialEntries={[path]}>
                   <ExecutorRegistryPage />
                 </MemoryRouter>
               </I18nProvider>
@@ -257,6 +258,78 @@ describe("Empty registry and the connect guide", () => {
     });
     expect(container.querySelectorAll("ol li")).toHaveLength(5);
     expect(container.textContent).toContain("machine-class API");
+    root.unmount();
+  });
+});
+
+describe("AGW-6 link check + settings card", () => {
+  it("«Check connection» in the row menu invalidates the registry and shows the verdict + disclaimer", async () => {
+    const { root, container, gateway } = await mountPage();
+    const spy = vi.spyOn(gateway, "listExecutors");
+    const callsBefore = spy.mock.calls.length;
+    const row = [...band(container, "Connected")!.querySelectorAll("li")].find((li) =>
+      li.textContent?.includes("zcode@laptop"),
+    )!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 50 }),
+      );
+    });
+    const item = [...row.querySelectorAll<HTMLButtonElement>("[role='menuitem']")].find(
+      (button) => button.textContent?.includes("Check connection"),
+    );
+    expect(item).toBeDefined();
+    await act(async () => {
+      item!.click();
+    });
+    // The verdict renders INSIDE the open popup, the disclaimer rides under
+    // it, and the "check" actually refetched the registry (no fake ping).
+    expect(row.textContent).toContain("The board never pings agents (outbound-only)");
+    expect(row.querySelector("[data-testid='link-verdict-exec-laptop-zcode']")).not.toBeNull();
+    await vi.waitFor(() => {
+      expect(spy.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+    root.unmount();
+  });
+
+  it("a revoked row has NO check item; its menu opens the read-only settings card", async () => {
+    const { root, container } = await mountPage();
+    const revoked = band(container, "Revoked")!;
+    const row = [...revoked.querySelectorAll("li")].find((li) =>
+      li.textContent?.includes("copilot@old-host"),
+    )!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 50 }),
+      );
+    });
+    const items = [...row.querySelectorAll<HTMLButtonElement>("[role='menuitem']")];
+    expect(items.some((button) => button.textContent?.includes("Check connection"))).toBe(false);
+    const card = items.find((button) => button.textContent?.includes("Settings card"));
+    expect(card).toBeDefined();
+    await act(async () => {
+      card!.click();
+    });
+    // Radix portals the drawer into the body.
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Executor card");
+    });
+    expect(document.body.textContent).toContain("read-only except Delete");
+    expect(document.body.textContent).toContain("revoked — presence is gone");
+    root.unmount();
+  });
+
+  it("the #executor-sheet-<id> hash deep-link opens the card (the enrollment «Open card» target)", async () => {
+    const { root, container } = await mountPage(
+      false,
+      "/agents/harnesses#executor-sheet-exec-laptop-zcode",
+    );
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Executor card");
+    });
+    expect(document.body.textContent).toContain("silently desync the board from poller.yaml");
+    // The scroll-into-view hash (#executor-<id>) must NOT open the card.
+    expect(container.textContent).not.toContain("read-only except Delete");
     root.unmount();
   });
 });

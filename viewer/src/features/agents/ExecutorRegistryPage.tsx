@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { Check, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { ConnectGuide } from "./ConnectGuide";
 import { EnrollmentDialog } from "./EnrollmentDialog";
 import { EnrollmentTokensPanel } from "./EnrollmentTokensPanel";
 import { ExecutorMenu } from "./ExecutorMenu";
+import { ExecutorSheet } from "./ExecutorSheet";
 import {
   PRESENCE_DOT,
   PRESENCE_TEXT,
@@ -63,13 +64,34 @@ export function ExecutorRegistryPage() {
   const uiToken = useUiToken();
   const enrollments = useEnrollments({ tokenPresent: uiToken.tokenPresent });
   const location = useLocation();
+  const navigate = useNavigate();
+  // Registry rows before the early return: the card deep-link below reads
+  // them (plain derived data — no hook ordering hazard).
+  const items = executors.data?.items ?? [];
   // The enrollment flow lands here: a used token's link points at the row
   // its registration minted (#executor-<id>) — scroll it into view.
   useEffect(() => {
-    if (!location.hash.startsWith("#executor-")) return;
+    if (!location.hash.startsWith("#executor-") || location.hash.startsWith("#executor-sheet-"))
+      return;
     const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
     target?.scrollIntoView({ block: "center" });
   }, [location.hash]);
+
+  // AGW-6 B: the settings-card deep-link (#executor-sheet-<id>) — the
+  // enrollment token screen's «Открыть карточку» lands here. DERIVED from
+  // the hash (no effect, no open-state): the card shows as long as the
+  // hash names a row (the drawer itself waits out the registry load);
+  // closing rewrites the URL without the hash.
+  const sheetPrefix = "#executor-sheet-";
+  const cardId = location.hash.startsWith(sheetPrefix)
+    ? decodeURIComponent(location.hash.slice(sheetPrefix.length))
+    : null;
+  const closeCard = (): void => {
+    navigate(
+      { pathname: location.pathname, search: location.search, hash: "" },
+      { replace: true },
+    );
+  };
 
   // Dialog open state (the form is keyed inside — fresh per open).
   const [enrollmentOpen, setEnrollmentOpen] = useState(false);
@@ -78,7 +100,6 @@ export function ExecutorRegistryPage() {
     return <AgentsUnsupported />;
   }
 
-  const items = executors.data?.items ?? [];
   const meta = executors.data?.meta;
   const bands: RegistryBands =
     executors.isPending || executors.isError
@@ -180,6 +201,18 @@ export function ExecutorRegistryPage() {
         onOpenChange={setEnrollmentOpen}
         executors={items}
       />
+
+      {/* AGW-6 B: the settings card (deep-link target + menu rows render
+       * their own instances; one shared drawer per page is enough here). */}
+      {cardId !== null ? (
+        <ExecutorSheet
+          executorId={cardId}
+          open
+          onOpenChange={(next) => {
+            if (!next) closeCard();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
