@@ -1201,11 +1201,14 @@ export const en: Record<TranslationKey, string> = {
     "We will re-check automatically in a minute; the button works manually too.",
   "pair.checkNow": "Check now",
   "pair.checking": "Checking…",
-  "pair.successTitle": "Device connected",
+  "pair.linkedTitle": "Device connected — bound to this browser",
+  "pair.boundNote":
+    "The token is stored on this device — nothing to copy by hand. The button below is only for moving it into another app.",
   "pair.tokenLabel": "Device token",
-  "pair.tokenOnce":
-    "The token is shown once — save it now. This page cannot restore it.",
-  "pair.copyFailed": "Copy failed — the token stays in the field, select it manually.",
+  "pair.copyToken": "Copy token",
+  "pair.copyFallback": "Copied via the browser's fallback path.",
+  "pair.copyManual": "Copy failed — the token is selected in the row, copy it manually.",
+  "pair.startWork": "Start working",
   "pair.deviceId": "Device id",
   "pair.scope": "scope",
   "pair.expires": "expires",
