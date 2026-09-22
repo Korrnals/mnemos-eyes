@@ -26,6 +26,8 @@ import type {
   AssignmentListParams,
   AssignmentsPage,
   AutomationStatus,
+  DeviceRevokedResult,
+  DevicesPage,
   ExecutionSettings,
   ExecutionSettingsInput,
   ExecutorPatchInput,
@@ -41,6 +43,12 @@ import type {
   HooksPage,
   LaunchesPage,
   LaunchesParams,
+  PairingConfirmResult,
+  PairingCreatedResult,
+  PairingExchangeAwaiting,
+  PairingExchangeInput,
+  PairingIssuedResult,
+  PairingStatus,
   RuleDeletedAck,
   ScheduleCreateInput,
   SchedulePatchInput,
@@ -353,4 +361,60 @@ export type TagMergeGateway = MemoryGateway & TagMergeSource;
 
 export function isTagMergeSource(gateway: MemoryGateway): gateway is TagMergeGateway {
   return typeof (gateway as Partial<TagMergeSource>).mergedTags === "function";
+}
+
+/**
+ * CV-7 pairing/devices owner surface (ADR 0012 §10.2): the device list plus
+ * the trusted-side pairing legs (create / status / confirm / cancel — all
+ * ui-token class on the wire; the UNauthenticated exchange leg is the
+ * DEVICE's business and lives on the /pair page, never behind this guard).
+ * Structural like every guard above: the mock dev playground has no pairing
+ * and the section renders its honest unsupported state.
+ */
+export interface PairingSource {
+  /** Device sessions (`GET /api/devices`, ui-token; no token material). */
+  listDevices(signal?: AbortSignal): Promise<DevicesPage>;
+  /** Revoke one device (`DELETE /api/devices/{id}`, ui-token; terminal). */
+  revokeDevice(deviceId: string): Promise<DeviceRevokedResult>;
+  /** Start a pairing (`POST /api/pairing`, ui-token; 201 = code + verify). */
+  createPairing(): Promise<PairingCreatedResult>;
+  /** Trusted-side status (`GET /api/pairing/{id}`, ui-token; verify source). */
+  getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus>;
+  /** Owner decision (`POST /api/pairing/{id}/confirm {allow}`, ui-token). */
+  confirmPairing(
+    pairingId: string,
+    allow: boolean,
+  ): Promise<PairingConfirmResult>;
+  /** Cancel before issued (`DELETE /api/pairing/{id}`, ui-token). */
+  cancelPairing(pairingId: string): Promise<PairingConfirmResult>;
+}
+
+export type PairingGateway = MemoryGateway & PairingSource;
+
+export function isPairingSource(gateway: MemoryGateway): gateway is PairingGateway {
+  return (
+    typeof (gateway as Partial<PairingSource>).listDevices === "function" &&
+    typeof (gateway as Partial<PairingSource>).createPairing === "function" &&
+    typeof (gateway as Partial<PairingSource>).confirmPairing === "function" &&
+    typeof (gateway as Partial<PairingSource>).cancelPairing === "function"
+  );
+}
+
+/**
+ * The DEVICE leg of the pairing protocol (`POST /api/pairing/exchange`,
+ * NO auth — the single-use code IS the credential, ADR 0012 §2.3). Kept a
+ * separate guard: the /pair page must work without ANY session surface.
+ */
+export interface PairingExchangeSource {
+  exchangePairing(payload: PairingExchangeInput): Promise<
+    PairingExchangeAwaiting | PairingIssuedResult
+  >;
+}
+
+export function isPairingExchangeSource(
+  gateway: MemoryGateway,
+): gateway is MemoryGateway & PairingExchangeSource {
+  return (
+    typeof (gateway as Partial<PairingExchangeSource>).exchangePairing === "function"
+  );
 }

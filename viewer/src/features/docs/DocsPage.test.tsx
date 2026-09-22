@@ -8,6 +8,7 @@ import { DocsPage } from "./DocsPage";
 import { DocsIndexPage } from "./DocsIndexPage";
 import { DocsCategoryPage } from "./DocsCategoryPage";
 import { ZERO_RESULTS_KEY } from "./docsSearch";
+import { loadMarkdown } from "./markdownModules";
 import { I18nProvider } from "@/i18n";
 
 /**
@@ -236,7 +237,11 @@ describe("index and category pages", () => {
     });
     const text = container.textContent ?? "";
     expect(text).toContain("Ротация токенов");
-    expect(text).toContain("v1.13.0");
+    // The stamp must mirror the page's own frontmatter, not a pinned number.
+    const raw = (await loadMarkdown("token-rotation", "ru")) ?? "";
+    const verified = raw.match(/last_verified:\s*"([^"]+)"/)?.[1];
+    expect(verified, "token-rotation declares last_verified").toBeTruthy();
+    expect(text).toContain(`v${verified}`);
     root.unmount();
   });
 });

@@ -625,3 +625,53 @@ export interface BoardSearchResponse {
     readonly detail?: string | null;
   }[];
 }
+
+// --- CV-7 QR pairing + device sessions (ADR 0012; generated board schemas) ----
+
+/**
+ * One device session — board `DeviceOut` (`GET /api/devices`). NO token
+ * material ever rides it (hash-only storage server-side, ADR 0012 §5);
+ * `state` mirrors the server's active | expired | revoked lifecycle.
+ */
+export type DeviceSession = Schemas["DeviceOut"];
+
+/** Device list — board `DevicesOut` (`GET /api/devices`). */
+export type DevicesPage = Schemas["DevicesOut"];
+
+/** Revoke answer — board `DeviceRevokedOut` (the final row snapshot). */
+export type DeviceRevokedResult = Schemas["DeviceRevokedOut"];
+
+/** Create answer — board `PairingCreatedOut` (`POST /api/pairing`, 201).
+ * The code appears HERE and NOWHERE else on the owner leg (§2.1). */
+export type PairingCreatedResult = Schemas["PairingCreatedOut"];
+
+/** Owner-side status — board `PairingStatusOut` (`GET /api/pairing/{id}`);
+ * the trusted side's only source of the verify digits + scan metadata. */
+export type PairingStatus = Schemas["PairingStatusOut"];
+
+/** Device-leg awaiting answer — board `PairingExchangeAwaitingOut` (202). */
+export type PairingExchangeAwaiting = Schemas["PairingExchangeAwaitingOut"];
+
+/** Device-leg issued answer — board `PairingIssuedOut` (200, one-shot). The
+ * mnd_ token rides HERE ONLY (§2.5); the /pair page shows it once. */
+export type PairingIssuedResult = Schemas["PairingIssuedOut"];
+
+/** Confirm/cancel answer — board `PairingConfirmOut`. `outcome` is
+ * confirmed | denied | idempotent (confirm) or revoked | idempotent (cancel). */
+export type PairingConfirmResult = Schemas["PairingConfirmOut"];
+
+/** Device exchange body (`POST /api/pairing/exchange`, NO auth). */
+export interface PairingExchangeInput {
+  readonly code: string;
+  readonly device_name?: string;
+}
+
+/** Effective pairing lifecycle (ADR 0012 §10.1), computed client-side:
+ * the wire `state` narrowed + the TTL-passed → expired view rule. */
+export type PairingLifecycle =
+  | "created"
+  | "scanned"
+  | "confirmed"
+  | "issued"
+  | "expired"
+  | "revoked";

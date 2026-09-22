@@ -87,6 +87,15 @@ const AutomationPage = lazy(() =>
     default: m.AutomationPage,
   })),
 );
+const DevicesPage = lazy(() =>
+  import("@/features/pairing/DevicesPage").then((m) => ({ default: m.DevicesPage })),
+);
+// The DEVICE pairing leg lives OUTSIDE the Shell: /pair is the
+// unauthenticated public surface (ADR 0012 §2.3) — no sidebar, no session
+// chrome, minimal layout (PairPage renders its own centered shell).
+const PairPage = lazy(() =>
+  import("@/features/pairing/PairPage").then((m) => ({ default: m.PairPage })),
+);
 const DocsIndexPage = lazy(() =>
   import("@/features/docs/DocsIndexPage").then((m) => ({
     default: m.DocsIndexPage,
@@ -115,6 +124,17 @@ const DocsPage = lazy(() =>
  */
 export function buildRoutes(): RouteObject[] {
   return [
+    // /pair sits OUTSIDE the Shell (ADR 0012 §2.3): the device leg must
+    // work with no session and no owner chrome — it is registered BEFORE
+    // the Shell route, so it never inherits the sidebar layout.
+    {
+      path: "/pair",
+      element: (
+        <Page>
+          <PairPage />
+        </Page>
+      ),
+    },
     {
       element: <Shell />,
       children: [
@@ -269,6 +289,16 @@ export function buildRoutes(): RouteObject[] {
           element: (
             <Page>
               <AutomationPage />
+            </Page>
+          ),
+        },
+        // Устройства (CV-7, ADR 0012 Consequences): the paired-device list
+        // + the QR-pairing flow («Подключить → QR → сверка → список»).
+        {
+          path: "/system/devices",
+          element: (
+            <Page>
+              <DevicesPage />
             </Page>
           ),
         },
