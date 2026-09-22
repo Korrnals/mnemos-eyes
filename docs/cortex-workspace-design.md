@@ -278,3 +278,73 @@ phone approvals), goose ACP-providers, ACP Kit WS/HTTP bridges.
    new harness onboarding + registry metadata; stdio-only transport rides
    inside our relay layer anyway. SDK pinned at 1.0.x, v2 behind
    `protocolVersion` negotiation, revisit at HTTP/WS RFD landing.
+
+## 7. Committee amendments — 2026-09-23 (ratified text, archcom protocol 2026-09-23-cortex-workspace-phase1)
+
+Ratified: Variant C, phase 1 = B-aggregation + zcode-relay; ACP as contract
+shape only. The following amendments are binding parts of the phase-1 charter:
+
+1. **Phone leg (resolves the §1/§3 phone ambiguity):** the owner's phone is
+   an ordinary browser with the owner-session cookie over VPN — ui-class
+   (transcripts, Tier-B steer of own sessions, authenticated chat SSE).
+   `mnd_` stays metadata-only for non-owner devices; transcripts are
+   ui-class, never persisted on the board. Security conditions: same
+   lab-CA TLS-ingress path (no plain-http through the VPN overlay);
+   one-command device-loss ritual (rotate ui-token + DELETE) in RUNBOOK;
+   documented browser hygiene (no account-sync). Step-up (WebAuthn)
+   trigger: any exposure extension beyond owner devices.
+2. **Relay is a separate mode of the poller family** (own flag/unit file,
+   same token ladder) — never code inside the claim loop. Recovery
+   semantics: relay sessions survive executor restarts (assignment-sweep
+   must not fail them); per-session writer mutex; drain ritual before
+   runtime updates. Revisit trigger: relay load starves the claim loop
+   → extract the bridge into its own unit (reconfiguration, not refactor).
+3. **Chat transport:** poller→board POST chunks `(session_id, seq)` with
+   ingest binding (chunk only into a session registered to that executor;
+   foreign triple → 403 + audit), seq monotonicity gap=hold, size/rate
+   caps; in-memory bounded ring-buffer (no disk spill, wipe on eviction)
+   as the only GET-tail source; browser consumes authenticated per-session
+   SSE (cookie per ADR 0014, re-validation on flush, lifetime ≤ cookie
+   Max-Age, logout tears streams); dictionary `session.*` events stay in
+   `/api/events` as metadata-only (clamped, masked preview). Cross-check
+   monitor: chunk tail vs store tail.
+4. **Security gates split by "before the surface exists":**
+   - Before the first relay smoke run: provenance-only continuation
+     (A-leg = relay-origin or typed-confirm adoption only); prompt via
+     stdin/JSON or app-server — never argv (log hash+length, spool 0600
+     + purge); loopback bind + W4-only reachability + `session-relay`
+     capability default OFF; ingest leg of the SSE gate; read-only store
+     opening; in-memory ring discipline.
+   - Before owner-facing UI: foreign-triple 404 on the send path (server
+     side, not UI hiding); full SSE delivery gate (re-validation,
+     payload metadata-only); recorded decision "mnd_ gets no transcripts
+     in v1"; host-identity binding 1:1 with loud conflict refusal,
+     "unverified" render for self-asserted names; parser caps, zcode
+     reader excludes rollout/model-io, anti-write-path tests per reader
+     family; ACP gate reduced to "shapes are internal, no network ACP"
+     (SDK pin + adapter review = gate of the first real adapter).
+   - Inject (v2, separate pre-code threat model): second gate on a channel
+     the sender does not control; confirm bound to prompt hash+length;
+     `claim_token` per ADR 0012 §3.
+5. **Hermes leg deferred to T004** (pod-exec reader would be throw-away
+   code; directive does not require it). Visibility metric is per-harness;
+   hermes is a known-gap until T004.
+6. **Naming:** UI says «сессия харнесса» from day one; «Cortex» remains an
+   internal codename until the owner checks the external «Cortex Code»
+   collision — owner-level check before any external use of the name.
+7. **Acceptance gates (retro window starts after core components 1–5 are
+   accepted, runs to ≥5 continuations or 4 weeks):** visibility ≥95%
+   per-harness (list) with audit script / full transcript ≥90% diagnostic;
+   ≥5 working relay continuations, ≥2 from the phone over VPN ≤5 min,
+   audit events carry device-class + network-path + session-host; zero
+   drift incidents WITH a detector (definition committed before the
+   window; counter runs from the first relay deployment); time-to-continue
+   p50≤60 s / p95≤120 s LAN, ≤5 min VPN, SSH baseline measured pre-phase;
+   boundary checklist — zero fake-input, offline host visible ≤30 s,
+   vscode dead-end counter from day one, freshness ≤60 s p95.
+8. **Pre-phase checklist:** manual SSH-path baseline; pilot hysteria call
+   from the owner's phone; owner decision on the 6-hour cookie lifetime
+   (phone re-login cadence); fact-check app-server vs stdin prompt (one
+   hour, read-only) before component 4.
+
+Phase 1 starts only after the owner ratifies ADR 0015.
