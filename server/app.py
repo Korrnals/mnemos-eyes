@@ -614,7 +614,7 @@ COLUMN_RU = {
     "resolved": "решено", "done": "готово",
 }
 
-app = FastAPI(title="vesmaro-eyes", version="1.13.0", lifespan=lifespan)
+app = FastAPI(title="vesmaro-eyes", version="1.13.1", lifespan=lifespan)
 
 # ------------------------------------- device-token scope guard (ADR 0012 §5)
 # The single scope middleware for PREFIX-CLASSIFIED tokens, standing
@@ -4140,7 +4140,27 @@ def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -
         expected = f"Bearer {token}"
         if hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
             return
-    raise HTTPException(401, "board write token required")
+    raise HTTPException(401, _token_mismatch_detail(auth, effective, classes))
+
+
+def _token_mismatch_detail(auth: str, effective: dict[str, str],
+                           classes: tuple[str, ...]) -> str:
+    """401 detail for a non-matching bearer (owner feedback 2026-09-22:
+    the board token pasted into a ui action read as a generic "token not
+    accepted" and the owner rightly read it as the system demanding one
+    token per section). When the bearer matches a CONFIGURED token of a
+    DIFFERENT class, say so precisely — which class arrived, which one the
+    action wants. Constant-time per class; still a 401 (the client's
+    re-login flow keys on it)."""
+    for cls, token in effective.items():
+        if not token or cls in classes:
+            continue
+        if hmac.compare_digest(auth.encode("utf-8"),
+                               f"Bearer {token}".encode("utf-8")):
+            need = " or ".join(_TOKEN_CLASS_ENV[c] for c in classes)
+            return (f"the bearer is a {cls}-class token — this action "
+                    f"requires {need}")
+    return "board write token required"
 
 
 def _bearer_is_class(request: Request, cls: str) -> bool:

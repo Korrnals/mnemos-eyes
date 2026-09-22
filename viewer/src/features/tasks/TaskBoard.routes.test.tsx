@@ -16,7 +16,11 @@ import { DensityProvider } from "@/components/density-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 import { HotkeysProvider } from "@/layout/Hotkeys";
 import { AuthProvider } from "@/features/auth/AuthProvider";
-import { TASK_VIEW_STORAGE_KEY, saveTaskView } from "@/features/tasks/tasksViewPrefs";
+// Owner feedback 2026-09-22: the persisted task-view preference is GONE —
+// the route is the contract (/tasks = kanban, /tasks/list = list). These
+// tests pin that an explicit navigation can NEVER be overridden. A stale
+// "vesmaro.tasksView" key left by older builds must be ignored harmlessly.
+const TASK_VIEW_STORAGE_KEY = "vesmaro.tasksView";
 import type * as useTasksModule from "@/features/tasks/useTasks";
 
 // Test-env seam (documented, not a product change — see LoginDialog.flow):
@@ -118,17 +122,15 @@ describe("/tasks routes + view toggle (CV-4 §1)", () => {
     expect(container!.querySelector("table")).toBeNull();
   });
 
-  it("honours the stored «list» preference: /tasks replace-redirects to /tasks/list", async () => {
-    saveTaskView("list");
+  it("IGNORES a stale stored «list» preference: /tasks still renders the kanban", async () => {
+    // Older builds persisted vesmaro.tasksView=list and redirected /tasks —
+    // the owner's «Канбан показывает список» regression. Route wins now.
+    localStorage.setItem(TASK_VIEW_STORAGE_KEY, "list");
     await renderAt("/tasks?q=board");
-    await waitFor(() => container!.querySelector("table") !== null);
-    expect(container!.textContent).toContain("Task list grouped by project");
-    // The redirect keeps the search params — the toggle targets carry them
-    // (asserted structurally: the kanban link re-attaches ?q=board).
-    const kanbanLink = Array.from(container!.querySelectorAll("a")).find(
-      (link) => link.getAttribute("href") === "/tasks?q=board",
-    );
-    expect(kanbanLink).toBeDefined();
+    // The board region itself is the assertion — ?q=board may filter the
+    // fixture cards out, the projection is the contract under test.
+    await waitFor(() => container!.querySelector('[aria-label="Task kanban board"]') !== null);
+    expect(container!.querySelector("table")).toBeNull();
   });
 
   it("serves the dense list at /tasks/list directly", async () => {
@@ -137,7 +139,7 @@ describe("/tasks routes + view toggle (CV-4 §1)", () => {
     expect(container!.textContent).not.toContain("Task kanban board");
   });
 
-  it("the toggle navigates board → list and persists the choice", async () => {
+  it("the toggle navigates board → list WITHOUT persisting the choice", async () => {
     await renderAt("/tasks");
     await waitFor(() => container!.querySelector('a[href="/tasks/TB-1"]') !== null);
     // The TOGGLE's list link (the sidebar section link shares the href but
@@ -152,6 +154,8 @@ describe("/tasks routes + view toggle (CV-4 §1)", () => {
       );
     });
     await waitFor(() => container!.querySelector("table") !== null);
-    expect(localStorage.getItem(TASK_VIEW_STORAGE_KEY)).toBe("list");
+    // Pure navigation: no storage write — /tasks must always render the
+    // kanban again (the toggle is a route switch, not a preference).
+    expect(localStorage.getItem(TASK_VIEW_STORAGE_KEY)).toBeNull();
   });
 });

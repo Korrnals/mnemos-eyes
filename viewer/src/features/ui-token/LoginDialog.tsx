@@ -33,6 +33,8 @@ export interface LoginDialogProps {
   onSubmitToken: (value: string) => void;
   /** Esc / cross / «continue read-only»: drop any queued action, close. */
   onDismiss: () => void;
+  /** Server-provided 401 detail for the rejected case (optional). */
+  rejectDetail?: string;
 }
 
 export function LoginDialog({
@@ -40,6 +42,7 @@ export function LoginDialog({
   reason,
   onSubmitToken,
   onDismiss,
+  rejectDetail,
 }: LoginDialogProps) {
   const t = useT();
   const [value, setValue] = useState("");
@@ -86,9 +89,14 @@ export function LoginDialog({
         {/* Inline sign-in error: the server rejected the previous value
          * (401 on the retried action) — assertive, inside the window. */}
         {reason === "rejected" ? (
-          <p role="alert" className="text-xs text-error">
-            {t("login.rejected")}
-          </p>
+          <>
+            <p role="alert" className="text-xs text-error">
+              {t("login.rejected")}
+            </p>
+            {rejectDetail ? (
+              <p className="text-xs text-foreground-secondary">{rejectDetail}</p>
+            ) : null}
+          </>
         ) : null}
 
         <form

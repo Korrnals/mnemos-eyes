@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Navigate, useLocation, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 // @dnd-kit (ARCHCOM-3 verdict §3, ratified): the kanban is the PRIMARY
 // surface of the Задачи domain; core+sortable land ~14–18 KB gz together,
 // over the 10 KB gz dependency budget — accepted in writing by the verdict
@@ -36,7 +36,7 @@ import { useKanbanDnd } from "./useKanbanDnd";
 import { useBoardTasks, useReportCounts } from "./useTasks";
 import { useTaskMutations } from "./useTaskMutations";
 import { BoardStyleToggle } from "./BoardStyleToggle";
-import { loadBoardStyle, loadTaskView, type BoardStyle } from "./tasksViewPrefs";
+import { loadBoardStyle, type BoardStyle } from "./tasksViewPrefs";
 
 /**
  * `/tasks` — the KANBAN view of the domain, view №1 per the redesign concept
@@ -286,16 +286,13 @@ function TaskBoardView() {
 }
 
 /**
- * `/tasks` index element: honour the persisted view preference (CV-4 §1).
- * A stored "list" replace-redirects to `/tasks/list` (search params carried
- * over) so the sidebar «Задачи» lands in the owner's preferred projection;
- * every other case (including the default) renders the kanban — the domain's
- * view №1.
+ * `/tasks` index element: ALWAYS the kanban — the route is the contract
+ * (owner feedback 2026-09-22: «Канбан — на канбан, список — на список»).
+ * The former persisted-view redirect made /tasks silently land on the
+ * list whenever `vesmaro.tasksView` held "list", overriding the explicit
+ * sidebar navigation — the two entries appeared to override each other.
+ * A stale localStorage key from older builds is simply ignored.
  */
 export function TasksIndex() {
-  const { search } = useLocation();
-  if (loadTaskView() === "list") {
-    return <Navigate to={{ pathname: "/tasks/list", search }} replace />;
-  }
   return <TaskBoardPage />;
 }
