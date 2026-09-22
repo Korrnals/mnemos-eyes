@@ -90,3 +90,34 @@ class TestAppCatchAll:
         r = client.get("/")
         assert r.status_code == 200
         assert "text/html" in r.headers["Content-Type"]
+
+
+def test_docs_url_follows_root_app(monkeypatch):
+    """rootApp=app moves FastAPI swagger to /api/docs so /docs serves the
+    SPA documentation section (wave docs-w2: F5 on /docs must not show
+    swagger). Board mode keeps the historical /docs."""
+    import importlib
+
+    import server.app as sa
+
+    monkeypatch.setenv("VESMARO_ROOT_APP", "app")
+    from fastapi.testclient import TestClient
+
+    m = importlib.reload(sa)
+    try:
+        c = TestClient(m.app)
+        assert "swagger-ui" not in c.get("/docs").text
+        assert c.get("/api/docs").status_code == 200
+    finally:
+        monkeypatch.delenv("VESMARO_ROOT_APP")
+        importlib.reload(sa)
+
+
+def test_docs_url_default_is_swagger():
+    """Without rootApp=app the historical /docs (swagger) is untouched."""
+    from fastapi.testclient import TestClient
+
+    import server.app as sa
+
+    c = TestClient(sa.app)
+    assert "swagger-ui" in c.get("/docs").text
