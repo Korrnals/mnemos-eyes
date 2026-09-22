@@ -280,9 +280,9 @@ confirm по hash+длине; `claim_token` (ADR 0012 §3).
 ## References
 
 - Mnemos decision (id будет добавлен после фиксации):
-  `<!-- mnemos: archcom-cortex-workspace-phase1 -->`
+  `c6de9eab-566f-4ffc-9146-f8d7ded6b204`
 - Mnemos contract (id будет добавлен после фиксации):
-  `<!-- mnemos: archcom-contract-cortex-workspace-phase1 -->`
+  `aa619239-079a-4b97-8260-5b72b4196113`
 - Протокол АРХКОМ 2026-09-23 (team-local):
   `~/.gcw/architectural-committee/2026-09-23-cortex-workspace-phase1.md`
 - Архитектурный контракт 2026-09-23 (team-local):
