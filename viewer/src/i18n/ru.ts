@@ -216,6 +216,7 @@ export const ru = {
 
   // --- tags -------------------------------------------------------------------
   "tags.title": "Теги",
+  "tags.familyRowLabel": "Теги этого семейства",
   "tags.filterLabel": "Фильтр тегов",
   "tags.filterPlaceholder": "напр. topic:fts",
   "tags.loading": "Загружаем теги",
@@ -232,6 +233,32 @@ export const ru = {
     "Фильтрация на клиенте — у mnemos нет выборки по тегу (ADR 0003 §9).",
   "tags.nothingCarries": "Под этим тегом ничего нет",
   "tags.nothingCarriesMessage": "Сейчас нет воспоминаний с тегом {{tag}}.",
+  // --- tags cloud (UI-17, spec 2026-09-21 §9; owner-approved copy) -----------
+  "tags.statsLine": "{{count}} тегов · данные на {{time}}",
+  "tags.partialData": "Данные от {{answered}} из {{total}} хранилищ",
+  "tags.partialStores": "Не ответили хранилища: {{servers}}",
+  "tags.family.all": "Все семейства",
+  "tags.family.bare": "без префикса",
+  "tags.family.tags": "{{count}} тегов",
+  "tags.band.core": "Ядро · 1000+",
+  "tags.band.frequent": "Частые · 100–999",
+  "tags.band.middle": "Средние · 10–99",
+  "tags.band.rare": "Редкие · 1–9",
+  "tags.band.showAll": "Показать все {{count}}",
+  "tags.band.showMore": "Ещё {{count}}",
+  "tags.band.collapse": "Свернуть",
+  "tags.searchMatches": "Подходит: {{count}}",
+  "tags.searchCapped": "Показаны первые {{count}} — уточните запрос",
+  "tags.group.heading": "Группа {{group}}",
+  "tags.group.open": "Открыть группу {{group}}",
+  "tags.drill.siblings": "Рядом в семействе {{family}}",
+  "tags.drill.tasks": "Задачи с этим тегом",
+  "tags.drill.tasksEmpty": "Задач с этим тегом нет",
+  "tags.drill.memories": "Записи",
+  "tags.drill.subsetNote":
+    "Показано подмножество: дрилл идёт через поисковый ранжир и может быть неполным (BE-13)",
+  "tags.drill.storeErrors": "Недоступны хранилища: {{servers}}",
+  "tags.drill.openInMemories": "Открыть в Записях",
 
   // --- status -----------------------------------------------------------------
   "status.title": "Статус",

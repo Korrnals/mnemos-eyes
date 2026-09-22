@@ -29,7 +29,7 @@ export function MemoriesPage() {
   const list = useMemories(toListParams(state));
 
   const patch = (
-    changes: Partial<{ status: string; project: string; limit: number; page: number }>,
+    changes: Partial<{ status: string; project: string; tag: string; limit: number; page: number }>,
   ) => {
     setSearchParams(
       (prev) => {
@@ -41,6 +41,8 @@ export function MemoriesPage() {
         else next.delete("status");
         if (merged.project) next.set("project", merged.project);
         else next.delete("project");
+        if (merged.tag) next.set("tag", merged.tag);
+        else next.delete("tag");
         if (merged.limit !== DEFAULT_PAGE_SIZE) next.set("limit", String(merged.limit));
         else next.delete("limit");
         if (merged.page > 1) next.set("page", String(merged.page));
@@ -115,6 +117,27 @@ export function MemoriesPage() {
           </select>
         </div>
 
+        {state.tag ? (
+          <div className="flex flex-col gap-1">
+            {/* UI-17 §5.6: an «Открыть в Записях» arrival shows the tag it
+             * came from, with a one-click way out (native tag filter). */}
+            <span className="text-xs text-foreground-secondary">
+              {t("tags.filterLabel")}
+            </span>
+            <button
+              type="button"
+              onClick={() => patch({ tag: undefined })}
+              aria-label={`${t("tags.filterLabel")}: ${state.tag}`}
+              className="inline-flex min-h-9 items-center gap-1 rounded-md border border-border bg-well px-2 text-sm text-foreground-secondary transition-colors duration-instant hover:bg-elevated focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+            >
+              <span className="font-mono">{state.tag}</span>
+              <span aria-hidden="true" className="text-foreground-muted">
+                ×
+              </span>
+            </button>
+          </div>
+        ) : null}
+
         <div className="flex flex-col gap-1">
           <label htmlFor="memories-limit" className="text-xs text-foreground-secondary">
             {t("memories.limitLabel")}
@@ -158,7 +181,9 @@ export function MemoriesPage() {
             action={
               <Button
                 variant="outline"
-                onClick={() => patch({ status: undefined, project: undefined })}
+                onClick={() =>
+                  patch({ status: undefined, project: undefined, tag: undefined })
+                }
               >
                 {t("memories.clearFilters")}
               </Button>

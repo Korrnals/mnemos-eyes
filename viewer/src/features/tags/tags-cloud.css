@@ -1,0 +1,25 @@
+/* Tags cloud section entrance (UI-17 spec §4.4): ONE orchestrated moment —
+ * fade + 4px rise per section, one --duration-stagger step apart, capped at
+ * four sections in TagCloudView. Disabled under prefers-reduced-motion
+ * (acceptance §11.10). */
+
+@keyframes tags-section-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tags-section-enter {
+  animation: tags-section-in var(--duration-fast) var(--ease-out) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tags-section-enter {
+    animation: none;
+  }
+}

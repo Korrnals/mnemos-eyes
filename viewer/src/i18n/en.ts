@@ -209,6 +209,7 @@ export const en: Record<TranslationKey, string> = {
 
   // --- tags -------------------------------------------------------------------
   "tags.title": "Tags",
+  "tags.familyRowLabel": "Tags in this family",
   "tags.filterLabel": "Filter tags",
   "tags.filterPlaceholder": "e.g. topic:fts",
   "tags.loading": "Loading tags",
@@ -225,6 +226,32 @@ export const en: Record<TranslationKey, string> = {
     "Filtered client-side — mnemos has no by-tag list filter (ADR 0003 §9).",
   "tags.nothingCarries": "Nothing carries this tag",
   "tags.nothingCarriesMessage": "No memory is tagged {{tag}} right now.",
+  // --- tags cloud (UI-17, spec 2026-09-21 §9; owner-approved copy) -----------
+  "tags.statsLine": "{{count}} tags · as of {{time}}",
+  "tags.partialData": "Data from {{answered}} of {{total}} stores",
+  "tags.partialStores": "Stores unreachable: {{servers}}",
+  "tags.family.all": "All families",
+  "tags.family.bare": "no prefix",
+  "tags.family.tags": "{{count}} tags",
+  "tags.band.core": "Core · 1000+",
+  "tags.band.frequent": "Frequent · 100–999",
+  "tags.band.middle": "Middle · 10–99",
+  "tags.band.rare": "Rare · 1–9",
+  "tags.band.showAll": "Show all {{count}}",
+  "tags.band.showMore": "Show {{count}} more",
+  "tags.band.collapse": "Collapse",
+  "tags.searchMatches": "{{count}} matches",
+  "tags.searchCapped": "Showing the first {{count}} — refine the query",
+  "tags.group.heading": "Group {{group}}",
+  "tags.group.open": "Open group {{group}}",
+  "tags.drill.siblings": "Nearby in {{family}}",
+  "tags.drill.tasks": "Tasks carrying this tag",
+  "tags.drill.tasksEmpty": "No tasks carry this tag",
+  "tags.drill.memories": "Memories",
+  "tags.drill.subsetNote":
+    "Showing a subset: the drill rides the search ranker and may be incomplete (BE-13)",
+  "tags.drill.storeErrors": "Stores unreachable: {{servers}}",
+  "tags.drill.openInMemories": "Open in Memories",
 
   // --- status -----------------------------------------------------------------
   "status.title": "Status",

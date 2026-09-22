@@ -20,6 +20,10 @@ export const keys = {
   tags: {
     all: ["tags"] as const,
     list: () => ["tags", "list"] as const,
+    // UI-17 tags cloud: raw merged view (+errors/servers) and the per-tag
+    // server drill — separate keys, both under the tags namespace.
+    merged: () => ["tags", "merged"] as const,
+    drill: (tag: string) => ["tags", "drill", tag] as const,
   },
   status: {
     health: () => ["status", "health"] as const,

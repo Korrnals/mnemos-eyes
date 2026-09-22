@@ -20,6 +20,8 @@ export const DEFAULT_PAGE_SIZE = 20;
 export interface MemoryListUrlState {
   status?: string;
   project?: string;
+  /** Tag filter (UI-17 §5.6 — «Открыть в Записях» deep-link `/memory?tag=`). */
+  tag?: string;
   limit: number;
   page: number;
 }
@@ -32,6 +34,7 @@ export function parseMemoryListParams(params: URLSearchParams): MemoryListUrlSta
     status:
       status && (MEMORY_STATUSES as readonly string[]).includes(status) ? status : undefined,
     project: params.get("project") ?? undefined,
+    tag: params.get("tag") ?? undefined,
     limit: PAGE_SIZES.includes(rawLimit as (typeof PAGE_SIZES)[number])
       ? rawLimit
       : DEFAULT_PAGE_SIZE,
@@ -44,6 +47,7 @@ export function toListParams(state: MemoryListUrlState): ListMemoriesParams {
   return {
     status: state.status,
     project: state.project,
+    tags: state.tag,
     limit: state.limit,
     offset: (state.page - 1) * state.limit,
   };
@@ -51,5 +55,5 @@ export function toListParams(state: MemoryListUrlState): ListMemoriesParams {
 
 /** True when any filter narrows the list (drives the empty-state copy). */
 export function hasActiveFilters(state: MemoryListUrlState): boolean {
-  return Boolean(state.status || state.project);
+  return Boolean(state.status || state.project || state.tag);
 }

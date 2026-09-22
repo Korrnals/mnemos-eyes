@@ -8,6 +8,7 @@ import type {
   BoardTask,
   InboxRefreshResult,
   MemoryPulse,
+  MergedTags,
   PulseParams,
   TaskCreateInput,
   TaskHistory,
@@ -271,4 +272,21 @@ export function isAutomationMutationSource(
     typeof (gateway as Partial<AutomationMutationSource>).createHook === "function" &&
     typeof (gateway as Partial<AutomationMutationSource>).deleteHook === "function"
   );
+}
+
+/**
+ * UI-17 tags cloud (spec 2026-09-21 §6): raw aggregated tag view with
+ * per-store honesty (`errors[]` + `servers_scanned` on the board
+ * `TagListOut`). Structural like every guard — the mnemos HttpAdapter
+ * legitimately has no store-failure concept (single store) and the page
+ * falls back to the plain `listTags` projection without the partial marker.
+ */
+export interface TagMergeSource {
+  mergedTags(signal?: AbortSignal): Promise<MergedTags>;
+}
+
+export type TagMergeGateway = MemoryGateway & TagMergeSource;
+
+export function isTagMergeSource(gateway: MemoryGateway): gateway is TagMergeGateway {
+  return typeof (gateway as Partial<TagMergeSource>).mergedTags === "function";
 }
