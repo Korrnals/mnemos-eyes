@@ -44,6 +44,9 @@ export const en: Record<TranslationKey, string> = {
   "nav.versionAria": "App version {{version}}",
   "shell.skipToContent": "Skip to content",
   "shell.viewFell": "This view fell into the well",
+  // Update banner (stale-tab self-healing) — see ru.ts.
+  "shell.updateAvailable": "A new version is available",
+  "shell.updateReload": "Reload",
   "shell.tryAgain": "Try again",
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { UpdateBanner } from "./UpdateBanner";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { crumbsFor, routeTitleKey } from "./navItems";
 import { useT } from "@/i18n";
@@ -85,6 +86,9 @@ export function Shell() {
        * Links; a Link outside Router context throws). Shell is the persistent
        * root layout, so toasts survive every route change. */}
       <ToastViewport />
+      {/* Stale-bundle self-healing (owner feedback 2026-09-22): a calm
+       * «new version» banner with a one-click reload — never auto-reloads. */}
+      <UpdateBanner />
     </div>
   );
 }

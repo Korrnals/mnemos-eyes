@@ -79,6 +79,23 @@ class TestSplitMode:
                         headers=machine_auth)
         assert r.status_code == 401
 
+    def test_wrong_class_bearer_names_both_classes(self, client,
+                                                    split_tokens,
+                                                    machine_auth):
+        """Owner feedback 2026-09-22: a machine token pasted into a ui
+        action must say WHICH class arrived and which one the action
+        wants — not a generic "token not accepted"."""
+        r = client.post("/api/tasks", json={"title": "cls-mismatch"},
+                        headers=machine_auth)
+        assert r.status_code == 401
+        body = r.json()["detail"]
+        assert "machine-class token" in body
+        assert "VESMARO_UI_TOKEN" in body
+        # an UNKNOWN bearer keeps the neutral message (no class leak)
+        r2 = client.post("/api/tasks", json={"title": "cls-unknown"},
+                         headers={"Authorization": "Bearer nope"})
+        assert r2.json()["detail"] == "board write token required"
+
     def test_ui_mutation_with_wrong_bearer_401(self, client, split_tokens):
         r = client.post("/api/tasks", json={"title": "cls-wrong"},
                         headers={"Authorization": "Bearer nope"})

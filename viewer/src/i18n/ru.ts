@@ -50,6 +50,10 @@ export const ru = {
   "nav.versionAria": "Версия приложения {{version}}",
   "shell.skipToContent": "Перейти к содержимому",
   "shell.viewFell": "Этот вид упал в колодец",
+  // Update banner (owner feedback: остывшие вкладки должны «чиниться сами»
+  // — баннер появляется при выходе нового деплоя, перезагрузка по клику).
+  "shell.updateAvailable": "Вышло обновление приложения",
+  "shell.updateReload": "Обновить",
   "shell.tryAgain": "Попробовать снова",
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------

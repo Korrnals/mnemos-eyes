@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { ChevronDown, ChevronRight, MessageSquare, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -420,11 +420,42 @@ function TaskTableRow({
 }) {
   const t = useT();
   const navigate = useNavigate();
+  // Row-owned context menu (owner feedback 2026-09-22: list rows get the
+  // SAME right-click entry the kanban cards have — one menu everywhere).
+  // `menuAt` anchors the popup at the cursor; cleared on close so the ⋯
+  // trigger re-anchors to the button.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  // The outside press that DISMISSES the menu must not double as a row
+  // click (pointerdown closes → the trailing click would navigate). A
+  // 250 ms grace window after a close swallows that trailing click only.
+  const closedAtRef = useRef(0);
+  const handleMenuOpenChange = useCallback((next: boolean) => {
+    setMenuOpen(next);
+    if (!next) {
+      setMenuAt(null);
+      closedAtRef.current = Date.now();
+    }
+  }, []);
   if (hidden) return null;
   return (
     <tr
       className="h-row cursor-pointer border-b border-border-subtle transition-colors duration-instant hover:bg-elevated focus-within:bg-elevated"
-      onClick={() => navigate(`/tasks/${encodeURIComponent(task.id)}`)}
+      onClick={() => {
+        if (Date.now() - closedAtRef.current < 250) return;
+        navigate(`/tasks/${encodeURIComponent(task.id)}`);
+      }}
+      onContextMenu={
+        showMenu
+          ? (event) => {
+              // Right-click = the same ⋯ menu at the cursor; the browser
+              // menu yields. A plain left click still opens the task.
+              event.preventDefault();
+              setMenuAt({ x: event.clientX, y: event.clientY });
+              setMenuOpen(true);
+            }
+          : undefined
+      }
     >
       <td className="px-2">
         <Badge variant={priorityBadgeVariant(task.priority)}>
@@ -464,7 +495,14 @@ function TaskTableRow({
         {formatTaskDate(task.updated_at, lang)}
       </td>
       <td className="px-1 py-0.5 text-right">
-        {showMenu ? <TaskRowMenu task={task} /> : null}
+        {showMenu ? (
+          <TaskRowMenu
+            task={task}
+            open={menuOpen}
+            onOpenChange={handleMenuOpenChange}
+            position={menuAt}
+          />
+        ) : null}
       </td>
     </tr>
   );

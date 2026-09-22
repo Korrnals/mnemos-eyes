@@ -84,6 +84,7 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
       <LoginDialog
         open={state.open}
         reason={state.reason}
+        rejectDetail={state.rejectDetail}
         onSubmitToken={submitToken}
         onDismiss={dismiss}
       />
