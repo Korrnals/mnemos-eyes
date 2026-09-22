@@ -1,0 +1,45 @@
+name: identity-guard
+
+# Owner directive (2026-09-23): every commit in this repository is authored
+# by the canonical owner identity. The local pre-commit hook
+# (scripts/githooks/pre-commit, core.hooksPath) enforces it at commit time;
+# this workflow is the server-side net for pushes that bypass a local hook
+# (e.g. --no-verify) and for PRs from any other source.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  authors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit author identities
+        run: |
+          ALLOWED="153223100+Korrnals@users.noreply.github.com"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/${{ github.base_ref }}..${{ github.sha }}"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              RANGE="${{ github.sha }} -1"   # branch creation: newest commit only
+              RANGE="${{ github.sha }}"
+            else
+              RANGE="$BEFORE..${{ github.sha }}"
+            fi
+          fi
+          echo "Scanning $RANGE"
+          BAD=$(git log --format='%H %ae %ce' $RANGE 2>/dev/null \
+            | grep -v "$ALLOWED" || true)
+          if [ -n "$BAD" ]; then
+            echo "✖ Non-canonical commit identities found:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "✓ all commit authors are canonical ($ALLOWED)"
