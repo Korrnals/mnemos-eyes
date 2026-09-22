@@ -18,8 +18,10 @@ blast radius до «один pending-исполнитель за человеч�
 
 ## Решение (кратко)
 
-`mne_`-токен: 128-bit urlsafe, одноразовый (CAS `created→used` в той же
-транзакции, что INSERT исполнителя), TTL 15 мин, scope = только регистрация.
+`mne_`-токен: 192-bit urlsafe (`secrets.token_urlsafe(24)`, поправлено по
+ревью 2026-09-22 — дизайн изначально писал 128-bit), одноразовый (CAS
+`created→used` в той же транзакции, что INSERT исполнителя), TTL 15 мин,
+scope = только регистрация.
 Хранение hash-only (unsalted sha256). Зарегистрировавшийся — обычный
 pending-исполнитель: capabilities пустые (owner-declared), routing не видит
 до approved+enabled. Человеческий гейт = существующий approve, второго
