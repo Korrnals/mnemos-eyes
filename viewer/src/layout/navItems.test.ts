@@ -4,20 +4,25 @@ import {
   activeDomain,
   crumbsFor,
   isPathActive,
+  routeTitle,
   routeTitleKey,
 } from "./navItems";
+import { isDocsSectionActive } from "@/features/docs/docsNav";
+import { getManifest } from "@/features/docs/manifest";
 
 /**
  * Ф1 IA gates: the domain map (§2.1), breadcrumb matrix (§2.2 — last crumb
  * is never a link) and TopBar titles, pure over pathnames.
  */
 describe("domain map", () => {
-  it("is the concept IA: Overview root + Memory + Tasks/Agents/Stores slots + System", () => {
+  it("is the concept IA: Overview root + Memory + Tasks/Agents + Docs + Stores slot + System", () => {
+    // ADR 0015: the docs domain slots in after «Агенты», before «Хранилища».
     expect(NAV_DOMAINS.map((d) => d.to)).toEqual([
       "/",
       "/memory",
       "/tasks",
       "/agents",
+      "/docs",
       "/stores",
       "/system",
     ]);
@@ -32,9 +37,10 @@ describe("domain map", () => {
     // Every domain link target must own breadcrumbs — a page that exists.
     // System has no /system index in Ф1, so its domain link targets the
     // first live section while matching on the /system prefix. The root "/"
-    // is the Overview itself (it legitimately carries no trail).
+    // is the Overview itself and /docs is its own live index route (both
+    // legitimately carry no trail). ADR 0015.
     for (const domain of NAV_DOMAINS) {
-      if (domain.soonKey || domain.to === "/") continue;
+      if (domain.soonKey || domain.to === "/" || domain.to === "/docs") continue;
       const target = domain.linkTo ?? domain.to;
       expect(
         crumbsFor(target).length,
@@ -58,6 +64,10 @@ describe("domain map", () => {
     // AGW-3: the agents domain is live — its pages resolve the domain.
     expect(activeDomain("/agents")?.to).toBe("/agents");
     expect(activeDomain("/agents/execution")?.to).toBe("/agents");
+    // ADR 0015: the docs domain covers index, categories and articles.
+    expect(activeDomain("/docs")?.to).toBe("/docs");
+    expect(activeDomain("/docs/c/maintenance")?.to).toBe("/docs");
+    expect(activeDomain("/docs/upgrade")?.to).toBe("/docs");
   });
 
   it("gives the task domain its Ф2–Ф3 sections (kanban / list / inbox / archive)", () => {
@@ -155,5 +165,69 @@ describe("routeTitleKey (TopBar label = deepest crumb)", () => {
     expect(routeTitleKey("/memory/m-1")).toBe("nav.record");
     expect(routeTitleKey("/system/sessions")).toBe("nav.sessions");
     expect(routeTitleKey("/nope")).toBeNull();
+  });
+});
+
+describe("docs domain (ADR 0015)", () => {
+  it("carries one section per docs category, in category order", () => {
+    const docs = NAV_DOMAINS.find((d) => d.to === "/docs");
+    expect(docs?.soonKey).toBeUndefined();
+    expect(docs?.key).toBe("nav.docs");
+    expect(docs?.sections?.map((s) => s.to)).toEqual([
+      "/docs/c/getting-started",
+      "/docs/c/board",
+      "/docs/c/agents",
+      "/docs/c/automation",
+      "/docs/c/devices",
+      "/docs/c/security",
+      "/docs/c/maintenance",
+      "/docs/c/faq",
+    ]);
+  });
+
+  it("the index has no trail (section root) but keeps its title key", () => {
+    expect(crumbsFor("/docs")).toEqual([]);
+    expect(routeTitleKey("/docs")).toBe("nav.docs");
+  });
+
+  it("article trail: Документация → категория → заголовок из манифеста", async () => {
+    await getManifest(); // hydrate the lazy docs manifest
+    const crumbs = crumbsFor("/docs/upgrade");
+    expect(crumbs[0]).toEqual({ to: "/docs", key: "nav.docs" });
+    expect(crumbs[1]).toEqual({
+      to: "/docs/c/maintenance",
+      key: "docs.cat.maintenance",
+    });
+    // The page title is CONTENT (frontmatter), not a dictionary key.
+    expect(crumbs[2]?.label).toBe("Обновление борда");
+    expect(crumbs[2]?.key).toBeUndefined();
+    expect(routeTitle("/docs/upgrade", (key) => `t:${key}`)).toBe("Обновление борда");
+  });
+
+  it("category trail: Документация → категория", () => {
+    expect(crumbsFor("/docs/c/maintenance")).toEqual([
+      { to: "/docs", key: "nav.docs" },
+      { key: "docs.cat.maintenance" },
+    ]);
+  });
+
+  it("unknown slug keeps a trail with the raw slug as the label", () => {
+    const crumbs = crumbsFor("/docs/ghost");
+    expect(crumbs[crumbs.length - 1]?.label).toBe("ghost");
+    // Label-only crumb: no dictionary key — routeTitle falls through to it.
+    expect(routeTitleKey("/docs/ghost")).toBeNull();
+    expect(routeTitle("/docs/ghost", (key) => `t:${key}`)).toBe("ghost");
+  });
+
+  it("a docs section highlights on its own articles (slug → category)", async () => {
+    await getManifest();
+    expect(isDocsSectionActive("/docs/c/maintenance", "/docs/c/maintenance")).toBe(
+      true,
+    );
+    expect(isDocsSectionActive("/docs/upgrade", "/docs/c/maintenance")).toBe(true);
+    expect(isDocsSectionActive("/docs/upgrade", "/docs/c/security")).toBe(false);
+    expect(isDocsSectionActive("/docs/tokens", "/docs/c/security")).toBe(true);
+    // Unhydrated-adjacent: unknown slugs light nothing.
+    expect(isDocsSectionActive("/docs/ghost", "/docs/c/maintenance")).toBe(false);
   });
 });

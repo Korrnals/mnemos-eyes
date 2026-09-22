@@ -25,4 +25,29 @@
   ::placeholder {
     @apply text-foreground-muted;
   }
+
+  /* Docs anchors (docs spec §13): smooth in-page scrolling, self-gated by
+   * prefers-reduced-motion so the global motion discipline holds. */
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+}
+
+/* Docs search dropdown entrance (docs spec §13): one piece, duration-fast +
+ * ease-out tokens; reduced-motion flattens it through --duration-fast. */
+@keyframes docs-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.docs-pop {
+  animation: docs-pop var(--duration-fast) var(--ease-out);
 }

@@ -19,7 +19,8 @@ import {
   Bot,
   Workflow,
 } from "lucide-react";
-import type { TranslationKey } from "@/i18n";
+import type { TranslateFn, TranslationKey } from "@/i18n";
+import { DOCS_DOMAIN, docsCrumbsFor } from "@/features/docs/docsNav";
 
 /**
  * Domain navigation (redesign concept §2.1–§2.2, ADR 0011 Ф1). The sidebar is
@@ -98,9 +99,17 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
     key: "nav.agents",
     icon: Bot,
     sections: [
-      { to: "/agents/execution", key: "nav.agentsExecution", icon: Workflow, end: true },
+      {
+        to: "/agents/execution",
+        key: "nav.agentsExecution",
+        icon: Workflow,
+        end: true,
+      },
     ],
   },
+  // Документация domain (ADR 0015): live — one section per docs category.
+  // The domain tree itself lives in features/docs/docsNav.ts (pure data).
+  DOCS_DOMAIN,
   // Phase-4 slot (stores — the registry wave).
   { to: "/stores", key: "nav.stores", icon: Database, soonKey: "nav.soonStores" },
   {
@@ -142,7 +151,13 @@ export function activeDomain(pathname: string): NavDomain | null {
 export interface Crumb {
   /** Present ⇒ a link; the last crumb has none. */
   to?: string;
-  key: TranslationKey;
+  /** Dictionary key — absent when the title is content (docs articles). */
+  key?: TranslationKey;
+  /**
+   * Content-derived label (docs article titles come from frontmatter, not
+   * the dictionaries). Rendered verbatim; wins over `key`.
+   */
+  label?: string;
 }
 
 const MEMORY_CRUMB: Crumb = { to: "/memory", key: "nav.memory" };
@@ -156,6 +171,10 @@ const AGENTS_CRUMB: Crumb = { to: "/agents", key: "nav.agents" };
  */
 export function crumbsFor(pathname: string): Crumb[] {
   if (pathname === "/") return [];
+  // Docs trails come from the docs manifest (pure data — no cycle).
+  if (pathname === "/docs" || pathname.startsWith("/docs/")) {
+    return docsCrumbsFor(pathname);
+  }
   switch (pathname) {
     case "/memory":
       return [MEMORY_CRUMB, { key: "nav.records" }];
@@ -211,6 +230,19 @@ export function crumbsFor(pathname: string): Crumb[] {
  */
 export function routeTitleKey(pathname: string): TranslationKey | null {
   if (pathname === "/") return "nav.overview";
+  if (pathname === "/docs") return "nav.docs"; // index — no trail by design
   const crumbs = crumbsFor(pathname);
-  return crumbs.length > 0 ? crumbs[crumbs.length - 1].key : null;
+  return crumbs[crumbs.length - 1]?.key ?? null;
+}
+
+/**
+ * TopBar title as a STRING: like routeTitleKey but able to carry
+ * content-derived labels (docs article titles are frontmatter data, not
+ * dictionary keys — contract §4). Falls back to null like routeTitleKey.
+ */
+export function routeTitle(pathname: string, t: TranslateFn): string | null {
+  const key = routeTitleKey(pathname);
+  if (key !== null) return t(key);
+  const crumbs = crumbsFor(pathname);
+  return crumbs[crumbs.length - 1]?.label ?? null;
 }
