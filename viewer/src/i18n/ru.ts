@@ -58,6 +58,10 @@ export const ru = {
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------
   "breadcrumbs.label": "Хлебные крошки",
+  // Back control of the sticky crumb row (UI-18 spec §3.4): the visible label
+  // is the bare place name; the accessible name carries the destination.
+  "nav.backTo": "Назад: {{place}}",
+  "nav.backFallback": "Назад",
 
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Переключить на светлую тему",

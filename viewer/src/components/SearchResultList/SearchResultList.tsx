@@ -13,6 +13,8 @@ export interface SearchResultListProps {
   isLoading?: boolean;
   queryTerms?: string[];
   className?: string;
+  /** Source search location (pathname + search) for the cards' `return=`. */
+  returnSource?: { pathname: string; search: string };
 }
 
 /** Only the first five results get a stagger delay (motion budget §7). */
@@ -23,6 +25,7 @@ export function SearchResultList({
   isLoading = false,
   queryTerms = [],
   className,
+  returnSource,
 }: SearchResultListProps) {
   if (isLoading) {
     return <MemoryCardSkeleton count={3} className={className} />;
@@ -35,7 +38,7 @@ export function SearchResultList({
           className="search-result-enter"
           style={{ animationDelay: index < STAGGER_SLOTS ? `calc(var(--duration-stagger) * ${index})` : undefined }}
         >
-          <SearchResultCard result={result} queryTerms={queryTerms} />
+          <SearchResultCard result={result} queryTerms={queryTerms} returnSource={returnSource} />
         </li>
       ))}
     </ul>

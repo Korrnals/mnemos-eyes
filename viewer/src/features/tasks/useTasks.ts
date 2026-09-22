@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { ArchiveParams, BoardSummary } from "@/gateway/boardTypes";
+import type { ArchivePage, ArchiveParams, BoardSummary } from "@/gateway/boardTypes";
 import type { InboxParams } from "@/gateway/BoardAdapter";
 import { isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
@@ -135,6 +135,45 @@ export function useTaskArchive(params: ArchiveParams) {
     staleTime: STALE_TIMES.taskArchive,
     gcTime: GC_TIMES.taskArchive,
     placeholderData: (previous) => previous, // pagination without flicker
+  });
+}
+
+/**
+ * One ARCHIVED task by exact id (UI-18 pair 4 fallback). Archived rows never
+ * travel with /api/board, so /tasks/:id cannot see them through `useTask` —
+ * the archive page is their only projection. This hook fires ONLY once the
+ * board query settled empty (`enabled`), pulls one bounded archive page and
+ * finds the exact id client-side: the wire `q` is a title/summary LIKE with
+ * no id semantics, so an id probe would be dishonest. The 200 cap mirrors
+ * the server clamp; a hit beyond it degrades to the page's not-found state
+ * (the «Открыть архив» escape stays).
+ */
+const ARCHIVED_TASK_PROBE_LIMIT = 200;
+
+export function useArchivedTask(taskId: string | undefined, enabled: boolean) {
+  const gateway = useGateway();
+  const capable = isTaskSource(gateway);
+  const params = useMemo<ArchiveParams>(
+    () => ({ limit: ARCHIVED_TASK_PROBE_LIMIT, offset: 0 }),
+    [],
+  );
+  // Stable select identity (same discipline as useTask): find the EXACT id.
+  const select = useCallback(
+    (page: ArchivePage) => page.items.find((task) => task.id === taskId),
+    [taskId],
+  );
+  return useQuery({
+    queryKey: keys.tasks.archive(params),
+    queryFn: ({ signal }) => {
+      if (!isTaskSource(gateway)) {
+        throw new Error("useArchivedTask: gateway has no task capability.");
+      }
+      return gateway.archive(params, signal);
+    },
+    enabled: capable && enabled,
+    staleTime: STALE_TIMES.taskArchive,
+    gcTime: GC_TIMES.taskArchive,
+    select,
   });
 }
 

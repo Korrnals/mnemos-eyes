@@ -103,7 +103,7 @@ export function Shell() {
          * while the document scrolls (concept §2.2). */}
         {hasCrumbs ? (
           <div className="sticky top-14 z-20 border-b border-border-subtle bg-background/95 px-3 py-2 backdrop-blur-sm sm:px-6">
-            <Breadcrumbs pathname={location.pathname} />
+            <Breadcrumbs pathname={location.pathname} search={location.search} />
           </div>
         ) : null}
         <main id="main" tabIndex={-1} className="flex-1 p-6 focus:outline-none">

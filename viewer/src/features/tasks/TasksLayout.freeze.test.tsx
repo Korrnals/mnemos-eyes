@@ -193,7 +193,7 @@ describe("freeze gate: /tasks navigation cycle with live SSE", () => {
         await act(async () => {
           await router!.navigate("/tasks");
         });
-        await waitFor(() => container!.querySelector('a[href="/tasks/TB-1"]') !== null);
+        await waitFor(() => container!.querySelector('a[href^="/tasks/TB-1?"]') !== null);
 
         // Exactly ONE live stream while inside the domain (per-mount stream,
         // no stacking); every frame goes through the real SSE → cache path.
@@ -222,7 +222,7 @@ describe("freeze gate: /tasks navigation cycle with live SSE", () => {
         await router!.navigate("/memory");
       });
       await waitFor(() => container!.querySelector("#memories-title") !== null);
-      expect(container!.querySelector('a[href="/tasks/TB-1"]')).toBeNull();
+      expect(container!.querySelector('a[href^="/tasks/TB-1?"]')).toBeNull();
 
       // And back into the task domain — content swaps both ways, and the
       // badge still mirrors the SSE-fed count (6 frames over the seeded 3).

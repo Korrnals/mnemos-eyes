@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useGateway } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { GC_TIMES, STALE_TIMES } from "@/lib/queryClient";
+import { withReturn } from "@/lib/returnParams";
 import { useT } from "@/i18n";
 import type { TagSummary } from "@/gateway/types";
 import type { TagDrillMemory } from "@/gateway/boardTypes";
@@ -71,6 +72,10 @@ export function TagDrillView({
 }: TagDrillViewProps) {
   const t = useT();
   const gateway = useGateway();
+  // UI-18 pairs 5+11 (cross-domain source): the WHOLE drill URL (?tag= plus
+  // family/expansion state) rides as `return=` on every task and memory link
+  // — the back control on the detail page leads back into this exact drill.
+  const location = useLocation();
   const drill = useQuery({
     queryKey: keys.tags.drill(tag),
     queryFn: ({ signal }) => gateway.drillTag(tag, { limit: 12 }, signal),
@@ -193,7 +198,11 @@ export function TagDrillView({
                 {tasks.map((task) => (
                   <li key={task.id}>
                     <Link
-                      to={`/tasks/${encodeURIComponent(task.id)}`}
+                      to={withReturn(
+                        `/tasks/${encodeURIComponent(task.id)}`,
+                        location.pathname,
+                        location.search,
+                      )}
                       className="flex min-h-6 flex-wrap items-center gap-2 rounded-sm text-sm text-foreground-secondary transition-colors duration-instant hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
                     >
                       <span className="font-mono text-xs text-iris-bright">
@@ -229,7 +238,13 @@ export function TagDrillView({
                   const card = drillMemoryToCard(memory);
                   return (
                     <li key={memory.id} className="grid gap-1">
-                      <MemoryCard memory={card.memory} />
+                      <MemoryCard
+                        memory={card.memory}
+                        returnSource={{
+                          pathname: location.pathname,
+                          search: location.search,
+                        }}
+                      />
                       {card.server ? (
                         <Badge
                           variant="outline"

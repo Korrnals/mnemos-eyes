@@ -3,6 +3,7 @@ import { TagBadge } from "@/components/TagBadge/TagBadge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { useT } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import type { SearchResult } from "@/gateway/types";
 import { highlight } from "./highlight";
 
@@ -10,12 +11,18 @@ import { highlight } from "./highlight";
  * Compact memory result row (component-inventory §3): title, snippet with
  * query-term highlight, score, tags, and a search-type badge. The badge colour
  * reflects the hit type — `fts` / `semantic` / `hybrid`.
+ *
+ * UI-18 pair 9: `returnSource` makes the title link carry the search URL
+ * (`?q=&type=` — the query restore is mandatory per spec §1) as its
+ * `return=` context.
  */
 export interface SearchResultCardProps {
   result: SearchResult;
   /** Query terms to highlight in title/snippet. */
   queryTerms?: string[];
   className?: string;
+  /** Source search location (pathname + search) for the `return=` param. */
+  returnSource?: { pathname: string; search: string };
 }
 
 const TYPE_VARIANT: Record<
@@ -31,8 +38,12 @@ export function SearchResultCard({
   result,
   queryTerms = [],
   className,
+  returnSource,
 }: SearchResultCardProps) {
   const t = useT();
+  const detailHref = returnSource
+    ? withReturn(`/memory/${result.id}`, returnSource.pathname, returnSource.search)
+    : `/memory/${result.id}`;
   return (
     <Card className={className}>
       <CardContent className="space-y-2 p-5">
@@ -40,7 +51,7 @@ export function SearchResultCard({
           {/* h2: card headings sit one level under the page h1 (WCAG 1.3.1). */}
           <h2 className="font-scroll text-base font-semibold leading-tight">
             <Link
-              to={`/memory/${result.id}`}
+              to={detailHref}
               className="inline-flex min-h-6 items-center hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
             >
               {highlight(result.title || result.id, queryTerms)}
