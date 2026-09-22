@@ -783,7 +783,7 @@ export const en: Record<TranslationKey, string> = {
   "agents.connect.step2":
     "Copy poller.example.yaml to ~/.config/mnemos-eyes/poller.yaml (chmod 0600) and fill in board_url, executor_name and the allowlist.",
   "agents.connect.step3":
-    "The machine token lives only in the environment: VESMARO_BOARD_TOKEN in /etc/vesmaro/poller.env with 0600 permissions — never in the config or in prompts.",
+    "The machine token lives only in the environment: VESMARO_BOARD_TOKEN in /etc/vesmaro/poller.env (systemd /opt unit) or ~/.config/mnemos-eyes/poller.env (laptop user unit), 0600 permissions — never in the config or in prompts; see deploy/poller/README.md.",
   "agents.connect.step4":
     "Run the poller as a service (the systemd unit from the README) or once with --once for a dry-run check.",
   "agents.connect.step5":
@@ -810,6 +810,58 @@ export const en: Record<TranslationKey, string> = {
   "agents.onboarding.label": "How this works",
   "agents.onboarding.body":
     "Take a task in the Tasks section and press «Take into work» on its page — the poller picks the assignment up in ~10 seconds and you watch it here; the feed below fills in live.",
+
+  // --- agents domain: enrollment + context menus (AGW-5 phase 2) -------------------
+  "agents.menu.triggerAria": "Actions for executor {{name}}",
+  "agents.menu.label": "Executor menu {{name}}",
+  "agents.menu.copyId": "Copy id ({{id}})",
+  "agents.menu.openRegistry": "Open registry",
+  "agents.registry.viaEnrollment": "origin: enrollment token",
+  "agents.registry.viaMachine": "origin: machine token",
+  "agents.enrollment.title": "Add executor",
+  "agents.enrollment.description":
+    "Minting a one-time connection token for a remote executor",
+  "agents.enrollment.formHint":
+    "A one-time token (15 min TTL) for registering a remote machine; whoever registers with it appears here awaiting approval.",
+  "agents.enrollment.label": "Label (for you)",
+  "agents.enrollment.labelPlaceholder": "e.g. vps-1",
+  "agents.enrollment.harness": "Harness (hint for the commands)",
+  "agents.enrollment.nameHint": "Executor name (optional)",
+  "agents.enrollment.create": "Create token",
+  "agents.enrollment.creating": "Creating…",
+  "agents.enrollment.createFailed": "Failed to create the token",
+  "agents.enrollment.created": "Enrollment token created",
+  "agents.enrollment.tokenLabel": "Enrollment token",
+  "agents.enrollment.tokenOnce": "The token is shown ONCE — copy it now.",
+  "agents.enrollment.show": "Show",
+  "agents.enrollment.hide": "Hide",
+  "agents.enrollment.copy": "Copy",
+  "agents.enrollment.copied": "Copied",
+  "agents.enrollment.copyAll": "Copy all",
+  "agents.enrollment.copyStepAria": "Copy step {{step}}",
+  "agents.enrollment.ttl": "expires in {{time}}",
+  "agents.enrollment.state.created": "waiting for connection",
+  "agents.enrollment.state.used": "used",
+  "agents.enrollment.state.expired": "expired",
+  "agents.enrollment.state.revoked": "revoked",
+  "agents.enrollment.bootstrapTitle": "Run on the VPS",
+  "agents.enrollment.afterRegister":
+    "After the VPS registers, the executor appears above in «Awaiting approval» — verify the origin and IP, then Approve → Enable.",
+  "agents.enrollment.usedBy": "used: {{name}}",
+  "agents.enrollment.usedIp": "connection IP: {{ip}}",
+  "agents.enrollment.done": "Done",
+  "agents.enrollment.listTitle": "Enrollment tokens",
+  "agents.enrollment.listHint": "live + history",
+  "agents.enrollment.listLoading": "Loading tokens",
+  "agents.enrollment.listFailed": "Failed to load tokens",
+  "agents.enrollment.empty": "No tokens yet",
+  "agents.enrollment.loginHint":
+    "Sign in with the owner token — minting and connection status require the ui token.",
+  "agents.enrollment.revoke": "Revoke",
+  "agents.enrollment.revokeConfirm":
+    "Revoke the token {{label}}? It can no longer be used to connect.",
+  "agents.enrollment.revoked": "Token revoked",
+  "agents.enrollment.revokeFailed": "Failed to revoke the token",
 
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------

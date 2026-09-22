@@ -1,4 +1,6 @@
-import { Check, Power, ShieldOff, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
+import { Check, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
@@ -8,9 +10,13 @@ import { isAgentsSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
+import { useUiToken } from "@/features/ui-token/UiTokenContext";
 import { useValidationNow } from "@/features/tasks/useValidationClock";
 import { AgentsUnsupported } from "./AgentsUnsupported";
 import { ConnectGuide } from "./ConnectGuide";
+import { EnrollmentDialog } from "./EnrollmentDialog";
+import { EnrollmentTokensPanel } from "./EnrollmentTokensPanel";
+import { ExecutorMenu } from "./ExecutorMenu";
 import {
   PRESENCE_DOT,
   PRESENCE_TEXT,
@@ -22,6 +28,7 @@ import {
 import { orderRegistry } from "./registryOrder";
 import type { RegistryBands } from "./registryOrder";
 import { useExecutors } from "./useAgents";
+import { useEnrollments } from "./useEnrollment";
 import { useExecutorMutations } from "./useExecutorMutations";
 
 /**
@@ -53,6 +60,19 @@ export function ExecutorRegistryPage() {
   const capable = isAgentsSource(gateway);
   const executors = useExecutors();
   const mutations = useExecutorMutations();
+  const uiToken = useUiToken();
+  const enrollments = useEnrollments({ tokenPresent: uiToken.tokenPresent });
+  const location = useLocation();
+  // The enrollment flow lands here: a used token's link points at the row
+  // its registration minted (#executor-<id>) — scroll it into view.
+  useEffect(() => {
+    if (!location.hash.startsWith("#executor-")) return;
+    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    target?.scrollIntoView({ block: "center" });
+  }, [location.hash]);
+
+  // Dialog open state (the form is keyed inside — fresh per open).
+  const [enrollmentOpen, setEnrollmentOpen] = useState(false);
 
   if (!capable) {
     return <AgentsUnsupported />;
@@ -69,7 +89,15 @@ export function ExecutorRegistryPage() {
     <div className="mx-auto flex max-w-5xl flex-col gap-3">
       {/* The breadcrumb current item + TopBar already carry «Подключение» —
        * the h1 stays for the a11y outline only (no visible duplication). */}
-      <h1 className="sr-only">{t("agents.registry.title")}</h1>
+      <header className="flex items-center justify-end gap-2">
+        <h1 className="sr-only">{t("agents.registry.title")}</h1>
+        {/* AGW-5 phase 2: the enrollment entry point — mint a one-time
+         * mne_ token, hand it to the remote machine, approve the result. */}
+        <Button size="sm" onClick={() => setEnrollmentOpen(true)}>
+          <UserPlus className="size-4" aria-hidden="true" />
+          {t("agents.enrollment.title")}
+        </Button>
+      </header>
 
       {executors.isPending ? (
         <div role="status" aria-label={t("agents.registry.loading")}>
@@ -133,9 +161,25 @@ export function ExecutorRegistryPage() {
         </div>
       )}
 
+      {/* Token statuses: live countdowns + terminal history (ui-gated read —
+       * the panel carries its own login hint without a token). */}
+      <EnrollmentTokensPanel
+        enrollments={enrollments.data?.items ?? []}
+        executors={items}
+        tokenPresent={uiToken.tokenPresent}
+        loading={enrollments.isPending}
+        error={enrollments.isError}
+      />
+
       {/* The connect path: five poller steps + the honest machine-class note.
        * Always available — it is the page's second answer. */}
       <ConnectGuide />
+
+      <EnrollmentDialog
+        open={enrollmentOpen}
+        onOpenChange={setEnrollmentOpen}
+        executors={items}
+      />
     </div>
   );
 }
@@ -197,9 +241,21 @@ function ExecutorRow({
 
   const ghostButton =
     "h-7 px-2 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright";
+  // AGW-5 phase 2: the row-level context menu (TaskRowMenu posture) —
+  // right-click anywhere on the row opens it at the pointer; the ⋯ trigger
+  // beside the inline actions is the tab-reachable path.
+  const [menu, setMenu] = useState<{
+    open: boolean;
+    position: { x: number; y: number } | null;
+  }>({ open: false, position: null });
 
   return (
     <li
+      id={`executor-${executor.id}`}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenu({ open: true, position: { x: event.clientX, y: event.clientY } });
+      }}
       className={
         "rounded-md border bg-well px-2.5 py-1.5 text-sm shadow-well transition-colors duration-instant " +
         (revoked
@@ -245,49 +301,28 @@ function ExecutorRow({
         ) : null}
 
         <span className="ml-auto flex items-center gap-1.5">
+          {/* Approve stays INLINE — the pending queue is this page's main
+           * answer (spec §1); the title carries the follow-up hint
+           * (AGW-4 review P3: the hint lives at the decision point). */}
           {pending ? (
             <Button
               size="sm"
               className={ghostButton}
+              title={t("agents.registry.approveHint")}
               onClick={() => mutations.approveExecutor(executor)}
             >
               <Check className="size-3.5" aria-hidden="true" />
               {t("agents.registry.approve")}
             </Button>
           ) : null}
-          {!pending && !revoked ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={ghostButton}
-              onClick={() => mutations.setExecutorEnabled(executor, !executor.enabled)}
-            >
-              <Power className="size-3.5" aria-hidden="true" />
-              {executor.enabled
-                ? t("agents.registry.disable")
-                : t("agents.registry.enable")}
-            </Button>
-          ) : null}
-          {!pending && !revoked ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={ghostButton + " text-error"}
-              onClick={() => mutations.revokeExecutor(executor)}
-            >
-              <ShieldOff className="size-3.5" aria-hidden="true" />
-              {t("agents.registry.revoke")}
-            </Button>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            className={ghostButton}
-            onClick={() => mutations.removeExecutor(executor)}
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            {t("agents.registry.remove")}
-          </Button>
+          {/* Everything else lives in the context menu — one surface for
+           * enable/disable, revoke, delete, copy id (same gated mutations). */}
+          <ExecutorMenu
+            executor={executor}
+            open={menu.open}
+            position={menu.position}
+            onOpenChange={(open, position) => setMenu({ open, position })}
+          />
         </span>
       </div>
 
@@ -304,6 +339,15 @@ function ExecutorRow({
         {executor.version ? ` · v${executor.version}` : ""}
         {executor.host ? ` · ${t("agents.registry.hostLabel")}: ${executor.host}` : ""} ·{" "}
         {t("agents.strip.lastSeen")}: {pulseAge || t("agents.executor.neverSeen")}
+        {/* Origin (design §Threat model): the owner cross-checks WHERE a
+         * pending row came from before approving it. */}
+        {pending
+          ? ` · ${t(
+              executor.registered_via.startsWith("enrollment:")
+                ? "agents.registry.viaEnrollment"
+                : "agents.registry.viaMachine",
+            )}`
+          : ""}
         {revoked ? ` · ${t("agents.registry.revokedHint")}` : ""}
       </p>
 

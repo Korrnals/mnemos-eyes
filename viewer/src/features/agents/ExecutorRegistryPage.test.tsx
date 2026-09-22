@@ -90,6 +90,27 @@ function stubConfirm(returnValue: boolean): ReturnType<typeof vi.fn> {
   return confirm;
 }
 
+/** AGW-5: actions live in the row's context menu — open it (the ⋯ trigger)
+ * and click the item by its visible text. */
+async function menuAction(
+  container: HTMLElement,
+  executorName: string,
+  itemText: string,
+): Promise<void> {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    `button[aria-label="Actions for executor ${executorName}"]`,
+  )!;
+  await act(async () => {
+    trigger.click();
+  });
+  const item = [...container.querySelectorAll<HTMLButtonElement>("[role='menuitem']")].find(
+    (button) => button.textContent?.includes(itemText),
+  )!;
+  await act(async () => {
+    item.click();
+  });
+}
+
 beforeEach(() => {
   localStorage.clear();
 });
@@ -162,16 +183,7 @@ describe("Registry management (gated write path)", () => {
 
   it("enable/disable toggles the routing flag through the same path", async () => {
     const { root, container, gateway } = await mountPage();
-    const connected = band(container, "Connected")!;
-    const zcodeRow = [...connected.querySelectorAll("li")].find((li) =>
-      li.textContent?.includes("zcode@laptop"),
-    )!;
-    const disable = [...zcodeRow.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Disable"),
-    )!;
-    await act(async () => {
-      disable.click();
-    });
+    await menuAction(container, "zcode@laptop", "Disable");
     await vi.waitFor(async () => {
       const page = await gateway.listExecutors();
       expect(page.items.find((r) => r.id === "exec-laptop-zcode")?.enabled).toBe(false);
@@ -182,16 +194,7 @@ describe("Registry management (gated write path)", () => {
   it("revoke confirms the terminal honesty, then the row goes dead", async () => {
     const { root, container } = await mountPage();
     const confirmSpy = stubConfirm(true);
-    const connected = band(container, "Connected")!;
-    const hermesRow = [...connected.querySelectorAll("li")].find((li) =>
-      li.textContent?.includes("hermes@laptop"),
-    )!;
-    const revoke = [...hermesRow.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Revoke"),
-    )!;
-    await act(async () => {
-      revoke.click();
-    });
+    await menuAction(container, "hermes@laptop", "Revoke");
     expect(confirmSpy).toHaveBeenCalledWith(
       expect.stringContaining("Trust is not restorable"),
     );
@@ -205,13 +208,7 @@ describe("Registry management (gated write path)", () => {
   it("delete confirm carries the hard-removal honesty; the row disappears", async () => {
     const { root, container, gateway } = await mountPage();
     const confirmSpy = stubConfirm(true);
-    const revoked = band(container, "Revoked")!;
-    const remove = [...revoked.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
-    )!;
-    await act(async () => {
-      remove.click();
-    });
+    await menuAction(container, "copilot@old-host", "Delete");
     expect(confirmSpy).toHaveBeenCalledWith(
       expect.stringContaining("copilot@old-host"),
     );
@@ -230,16 +227,7 @@ describe("Registry management (gated write path)", () => {
   it("a declined confirm touches nothing", async () => {
     const { root, container, gateway } = await mountPage();
     stubConfirm(false);
-    const connected = band(container, "Connected")!;
-    const zcodeRow = [...connected.querySelectorAll("li")].find((li) =>
-      li.textContent?.includes("zcode@laptop"),
-    )!;
-    const remove = [...zcodeRow.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
-    )!;
-    await act(async () => {
-      remove.click();
-    });
+    await menuAction(container, "zcode@laptop", "Delete");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(
       (await gateway.listExecutors()).items.some((r) => r.id === "exec-laptop-zcode"),
@@ -261,14 +249,43 @@ describe("Empty registry and the connect guide", () => {
   it("the connect guide is always available; it expands into 5 steps", async () => {
     const { root, container } = await mountPage();
     expect(container.textContent).not.toContain("poller.example.yaml");
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-expanded="false"]',
+    const toggle = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.includes("How to connect an external agent"),
     )!;
     await act(async () => {
       toggle.click();
     });
     expect(container.querySelectorAll("ol li")).toHaveLength(5);
     expect(container.textContent).toContain("machine-class API");
+    root.unmount();
+  });
+});
+
+describe("AGW-5 registry row context menu", () => {
+  it("a revoked row offers NO state-changing items — copy id and delete only", async () => {
+    const { root, container } = await mountPage();
+    const revoked = band(container, "Revoked")!;
+    // The contextmenu handler lives on the ROW (li) — dispatch there.
+    const row = [...revoked.querySelectorAll("li")].find((li) =>
+      li.textContent?.includes("copilot@old-host"),
+    )!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 50 }),
+      );
+    });
+    const menu = row.querySelector("[role='menu']");
+    expect(menu).not.toBeNull();
+    const items = [...menu!.querySelectorAll("[role='menuitem']")].map((item) =>
+      item.textContent,
+    );
+    expect(items.some((text) => text?.includes("Approve"))).toBe(false);
+    expect(items.some((text) => text?.includes("Enable"))).toBe(false);
+    expect(items.some((text) => text?.includes("Revoke"))).toBe(false);
+    expect(items.some((text) => text?.includes("Copy id"))).toBe(true);
+    expect(items.some((text) => text?.includes("Delete"))).toBe(true);
+    // The registry rows never carry the strip's «Open registry» escape.
+    expect(items.some((text) => text?.includes("Open registry"))).toBe(false);
     root.unmount();
   });
 });
