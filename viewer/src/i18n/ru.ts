@@ -736,6 +736,56 @@ export const ru = {
   "agents.settings.saveFailed": "Не удалось сохранить настройки исполнения",
   "agents.settings.meshIneligible": "mesh-транспорт — маршрутизация недоступна до R4",
 
+  // --- agents domain: registry page /agents/harnesses (AGW-4) ----------------------
+  "nav.agentsHarnesses": "Подключение",
+  "agents.registry.title": "Подключение агентов",
+  "agents.registry.loading": "Загружаем реестр исполнителей",
+  "agents.registry.failed": "Не удалось загрузить реестр исполнителей",
+  "agents.registry.empty":
+    "Исполнителей пока нет — подключите первого по инструкции ниже.",
+  "agents.registry.band.pending": "Ожидают подтверждения",
+  "agents.registry.band.active": "Подключённые",
+  "agents.registry.band.revoked": "Отозванные",
+  "agents.registry.approve": "Одобрить",
+  "agents.registry.approveHint":
+    "после одобрения включите исполнителя — маршрутизация берёт только включённых",
+  "agents.registry.enable": "Включить",
+  "agents.registry.disable": "Отключить",
+  "agents.registry.revoke": "Отозвать",
+  "agents.registry.remove": "Удалить",
+  "agents.registry.capabilitiesLabel": "Возможности",
+  "agents.registry.unverifiedChip": "не проверено",
+  "agents.registry.hostLabel": "хост",
+  "agents.registry.revokedHint":
+    "доверие не восстанавливается — зарегистрируйте исполнителя заново",
+  "agents.connect.label": "Как подключить внешнего агента",
+  "agents.connect.step1":
+    "На внешней машине установите поллер: зависимости и скрипты — deploy/poller/README.md (python ≥ 3.10, httpx + pyyaml).",
+  "agents.connect.step2":
+    "Скопируйте poller.example.yaml в ~/.config/mnemos-eyes/poller.yaml (chmod 0600) и заполните board_url, executor_name и allowlist.",
+  "agents.connect.step3":
+    "Машинный токен — только окружение: VESMARO_BOARD_TOKEN в /etc/vesmaro/poller.env с правами 0600; не в конфиге и не в промптах.",
+  "agents.connect.step4":
+    "Запустите поллер службой (systemd unit из README) или разово с --once для dry-run проверки.",
+  "agents.connect.step5":
+    "Исполнитель появится здесь в «Ожидают подтверждения» — одобрите его, затем включите для маршрутизации.",
+  "agents.connect.note":
+    "Регистрация исполнителя — machine-класс API (POST /api/executors по board-токену): кнопки регистрации в UI нет, этот экран ведёт очередь и одобрение.",
+  "agents.executors.actionFailed": "Не удалось изменить исполнителя",
+  "agents.executors.approved": "{{name}}: одобрен",
+  "agents.executors.approvedDetail":
+    "включите исполнителя — маршрутизация берёт только включённых",
+  "agents.executors.enabled": "{{name}}: включён",
+  "agents.executors.disabled": "{{name}}: отключён",
+  "agents.executors.revokeConfirm":
+    "Отозвать доступ {{name}}? Доверие не восстанавливается: состояние терминальное, исполнитель должен зарегистрироваться заново (новая запись и секрет).",
+  "agents.executors.revoked": "{{name}}: доступ отозван",
+  "agents.executors.revokedDetail":
+    "состояние терминальное — только повторная регистрация",
+  "agents.executors.deleteConfirm":
+    "Удалить запись {{name}} из реестра? Удаление жёсткое: секрет исполнителя умирает вместе с записью, имя освободится для повторной регистрации; активные поручения сохранят ссылки на исполнителя.",
+  "agents.executors.deleted": "{{name}}: запись удалена",
+
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Автоматизация",

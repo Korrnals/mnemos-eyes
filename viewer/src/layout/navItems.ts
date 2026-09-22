@@ -10,6 +10,7 @@ import {
   KanbanSquare,
   LayoutGrid,
   ListTodo,
+  PlugZap,
   Search,
   ServerCog,
   Settings,
@@ -90,8 +91,8 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
     ],
   },
   // Agents domain (AGW-3, spec 2026-09-19 §1): live — the domain root is
-  // the execution alias; specialists/harnesses sections arrive with their
-  // waves (the route structure already accepts them).
+  // the execution alias; AGW-4 adds the registry («Подключение») as the
+  // second section; specialists slots in with its wave.
   {
     to: "/agents",
     linkTo: "/agents/execution",
@@ -99,6 +100,7 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
     icon: Bot,
     sections: [
       { to: "/agents/execution", key: "nav.agentsExecution", icon: Workflow, end: true },
+      { to: "/agents/harnesses", key: "nav.agentsHarnesses", icon: PlugZap, end: true },
     ],
   },
   // Phase-4 slot (stores — the registry wave).
@@ -173,6 +175,8 @@ export function crumbsFor(pathname: string): Crumb[] {
       return [SYSTEM_CRUMB, { key: "nav.systemAutomation" }];
     case "/agents/execution":
       return [AGENTS_CRUMB, { key: "nav.agentsExecution" }];
+    case "/agents/harnesses":
+      return [AGENTS_CRUMB, { key: "nav.agentsHarnesses" }];
     case "/system/sessions":
       return [SYSTEM_CRUMB, { key: "nav.sessions" }];
     case "/system/traces":

@@ -81,7 +81,11 @@ describe("domain map", () => {
     // The domain root has no index route — the domain link goes to the
     // execution view (spec §1: /agents aliases /agents/execution).
     expect(agents?.linkTo).toBe("/agents/execution");
-    expect(agents?.sections?.map((s) => s.to)).toEqual(["/agents/execution"]);
+    // AGW-4 wave 2 adds the registry («Подключение») next to execution.
+    expect(agents?.sections?.map((s) => s.to)).toEqual([
+      "/agents/execution",
+      "/agents/harnesses",
+    ]);
   });
 });
 

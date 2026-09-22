@@ -36,6 +36,9 @@ import type {
   ExecutionSettings,
   ExecutionSettingsInput,
   ExecutorItem,
+  ExecutorPatchInput,
+  ExecutorRegistryState,
+  ExecutorStateChangeResult,
   ExecutorsPage,
   HookCreateInput,
   HookPatchInput,
@@ -858,6 +861,72 @@ export class MockAdapter implements MemoryGateway {
     };
   }
 
+  /**
+   * Server-state-machine mirror (AGW-4; store.update_executor): pending is
+   * NOT a patchable target, revoked is TERMINAL (409 on any attempt to
+   * leave it — re-register instead), unknown id → 404. Presence recomputes
+   * from last_seen against the meta TTLs so a freshly approved row does
+   * not keep a stale verdict. Idempotent no-ops echo the row unchanged.
+   */
+  async patchExecutor(
+    executorId: string,
+    patch: ExecutorPatchInput,
+    signal?: AbortSignal,
+  ): Promise<ExecutorStateChangeResult> {
+    await this.delay(signal);
+    const index = this.executors.findIndex((executor) => executor.id === executorId);
+    if (index === -1) {
+      throw new ApiError(404, `executor ${executorId} not found`, {
+        url: "mock:/api/executors",
+      });
+    }
+    const row = this.executors[index];
+    if (patch.state !== undefined) {
+      // Runtime mirror of the wire narrowing (the TYPE already forbids
+      // pending — a JS caller gets the same 422 the server would answer).
+      if ((patch.state as ExecutorRegistryState) === "pending") {
+        throw new ApiError(
+          422,
+          "invalid executor state target: pending (patchable targets: approved, revoked)",
+          { url: "mock:/api/executors" },
+        );
+      }
+      if (row.state === "revoked") {
+        throw new ApiError(
+          409,
+          "executor is revoked — terminal state; re-register a new executor instead",
+          { url: "mock:/api/executors" },
+        );
+      }
+    }
+    // ExecutorItem fields are readonly — the patch REPLACES the row (the
+    // UI never holds registry identity objects it could alias).
+    const merged = {
+      ...row,
+      ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+      ...(patch.capabilities !== undefined
+        ? { capabilities: [...patch.capabilities] }
+        : {}),
+      ...(patch.state !== undefined ? { state: patch.state } : {}),
+      updated_at: new Date().toISOString(),
+    };
+    const updated: ExecutorItem = { ...merged, presence: mockPresenceOf(merged) };
+    this.executors[index] = updated;
+    return { ok: true, executor: { ...updated } };
+  }
+
+  /** Hard delete (store.delete_executor): the token dies with the row. */
+  async deleteExecutor(executorId: string, signal?: AbortSignal): Promise<void> {
+    await this.delay(signal);
+    const index = this.executors.findIndex((executor) => executor.id === executorId);
+    if (index === -1) {
+      throw new ApiError(404, `executor ${executorId} not found`, {
+        url: "mock:/api/executors",
+      });
+    }
+    this.executors.splice(index, 1);
+  }
+
   // --- SCHED-1 automation (ADR 0013 S1: CRUD + journal + manual run-now) -------
 
   async automationStatus(signal?: AbortSignal): Promise<AutomationStatus> {
@@ -1567,4 +1636,20 @@ function abortError(): DOMException {
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError();
+}
+
+/**
+ * Recompute the presence verdict from last_seen against the SERVER-owned
+ * meta TTLs (spec §5.1 — the mock mirrors the server computation instead
+ * of leaving a stale fixture verdict behind a mutation).
+ */
+function mockPresenceOf(executor: ExecutorItem): ExecutorItem["presence"] {
+  const at = Date.parse(executor.last_seen);
+  if (!Number.isFinite(at)) return "offline";
+  const ageS = (Date.now() - at) / 1000;
+  const { online_max_age_s: online, stale_max_age_s: stale } =
+    MOCK_EXECUTORS_META.presence;
+  if (ageS <= online) return "online";
+  if (ageS <= stale) return "stale";
+  return "offline";
 }

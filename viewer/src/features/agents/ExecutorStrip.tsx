@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { useT } from "@/i18n";
 import type { AssignmentItem, ExecutorItem, ExecutorListMeta } from "@/gateway/boardTypes";
-import { formatPulseAge, lastSeenAgeS, presenceFromLastSeen } from "./presence";
+import {
+  PRESENCE_DOT,
+  PRESENCE_TEXT,
+  formatPulseAge,
+  lastSeenAgeS,
+  presenceFromLastSeen,
+  presenceLabelKey,
+} from "./presence";
 import { useValidationNow } from "@/features/tasks/useValidationClock";
 import { ACTIVE_ASSIGNMENT_STATES } from "./assignmentStatus";
 
@@ -17,30 +24,14 @@ import { ACTIVE_ASSIGNMENT_STATES } from "./assignmentStatus";
  *
  * UNKNOWN ≠ offline (AGW-3 review P3-1): without the meta contract the
  * presence is null — the chip renders NEUTRAL (hollow dot, «присутствие
- * неизвестно»), never a guessed state.
+ * неизвестно»), never a guessed state. The dot/text maps live in presence.ts
+ * (AGW-4: the registry rows render the same language).
  *
  * Entrance timing (§3.2 «entrance полосы ≤3 чипов, 200ms», AGW-3 review
  * P3-9 reading): 200 ms PER CHIP (fade duration), staggered 0/70/140 ms —
  * three chips complete inside ~340 ms wall-clock (delay + duration);
  * reduced motion users get no transition at all (motion-safe).
  */
-
-/** Semantic aliases only (§3.2 — no new colours): iris / warning / muted. */
-const PRESENCE_DOT: Record<string, string> = {
-  online: "bg-iris-bright",
-  stale: "bg-warning",
-  // Offline is a HOLLOW dot — shape carries the meaning with the colour.
-  offline: "border border-border bg-transparent",
-  // Unknown: the same hollow shape, muted ring — visibly NOT a verdict.
-  unknown: "border border-border-subtle bg-transparent",
-};
-
-const PRESENCE_TEXT: Record<string, string> = {
-  online: "text-foreground-secondary",
-  stale: "text-foreground-secondary",
-  offline: "text-foreground-muted",
-  unknown: "text-foreground-muted",
-};
 
 export function ExecutorStrip({
   executors,
@@ -192,13 +183,7 @@ export function ExecutorStrip({
                   }
                 >
                   <span className="sr-only">
-                    {presenceKey === "online"
-                      ? t("agents.presence.online")
-                      : presenceKey === "stale"
-                        ? t("agents.presence.stale")
-                        : presenceKey === "offline"
-                          ? t("agents.presence.offline")
-                          : t("agents.presence.unknown")}
+                    {t(presenceLabelKey(presenceKey))}
                     {pulseAge ? ` · ${pulseAge}` : ""}
                   </span>
                   <span aria-hidden="true">{pulseAge}</span>

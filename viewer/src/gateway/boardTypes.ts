@@ -290,6 +290,25 @@ export interface ExecutorsPage {
   readonly meta: ExecutorListMeta;
 }
 
+/**
+ * Owner PATCH of one executor (`PATCH /api/executors/{id}`, ui-token; AGW-4
+ * wave 2). Narrowed from the board `ExecutorPatch` schema: `state` accepts
+ * only the two patchable targets (pending is NOT patchable — the ladder is
+ * machine bootstrap → owner decision), omitted fields stay untouched.
+ */
+export interface ExecutorPatchInput {
+  readonly name?: string;
+  readonly state?: Exclude<ExecutorRegistryState, "pending">;
+  readonly capabilities?: readonly string[];
+  readonly enabled?: boolean;
+}
+
+/** PATCH answer — board `ExecutorStateChangeOut` (the fresh row echoes back). */
+export interface ExecutorStateChangeResult {
+  readonly ok: boolean;
+  readonly executor: ExecutorItem;
+}
+
 /** Execution settings read — board `ExecutionSettingsOut`. */
 export type ExecutionSettings = Schemas["ExecutionSettingsOut"];
 

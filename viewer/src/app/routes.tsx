@@ -72,6 +72,11 @@ const AgentsLayout = lazy(() =>
 const AgentsExecutionPage = lazy(() =>
   import("@/features/agents/ExecutionPage").then((m) => ({ default: m.ExecutionPage })),
 );
+const AgentsHarnessesPage = lazy(() =>
+  import("@/features/agents/ExecutorRegistryPage").then((m) => ({
+    default: m.ExecutorRegistryPage,
+  })),
+);
 const ExecutionSettingsPage = lazy(() =>
   import("@/features/agents/ExecutionSettingsPage").then((m) => ({
     default: m.ExecutionSettingsPage,
@@ -191,6 +196,9 @@ export function buildRoutes(): RouteObject[] {
           children: [
             { index: true, element: <Navigate to="/agents/execution" replace /> },
             { path: "execution", element: <AgentsExecutionPage /> },
+            // AGW-4: the executor registry — connection guide + approve /
+            // enable / revoke / delete management (spec §1, wave 2).
+            { path: "harnesses", element: <AgentsHarnessesPage /> },
           ],
         },
 
