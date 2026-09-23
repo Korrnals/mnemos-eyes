@@ -9,6 +9,7 @@ import { Link } from "react-router";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { createHeadingSlugger } from "./headingSlug";
+import { stripLeadingBanners } from "./manifest";
 import { resolveDocImageUrl } from "./docsAssets";
 import { resolveDocLink } from "./docsLinks";
 import { sanitizeSchema } from "./sanitizeSchema";
@@ -29,19 +30,6 @@ import { MermaidDiagram } from "./Mermaid";
  * references (our `slug.md`, upstream board slugs like `mnemos/user/sync`)
  * resolve through the manifest into project-scoped URLs (W1c — дефект из W2).
  */
-
-/**
- * Leading provenance banners (GENERATED/curated comments) are presentation
- * noise — the sidecar badge carries provenance already (АРХКОМ-8 verdict 1):
- * whole-line `<!-- ... -->` comments at the very top of the body are cut
- * BEFORE the pipeline. Line-based by design: a comment embedded in content
- * is NOT stripped here (the sanitizer drops it instead).
- */
-function stripLeadingBanners(source: string): string {  const lines = source.split("\n");
-  let index = 0;
-  while (index < lines.length && /^\s*<!--.*-->\s*$/.test(lines[index])) index += 1;
-  return index === 0 ? source : lines.slice(index).join("\n").replace(/^\s+/, "");
-}
 
 /**
  * script/style/iframe subtrees are removed WHOLE, not schema-disallowed:
