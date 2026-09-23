@@ -10,11 +10,12 @@ Pinned contract (each test names its matrix line):
   5/10 min per pairing);
 - source-IP binding: a second client IP → 403 + security notification;
 - device-token revoke → 401 on the next request;
-- sliding 30 d / hard 90 d device TTLs;
+- sliding TTL by scope (control 7 d / read 30 d, ADR 0012 Amendment) /
+  hard 90 d for both;
 - 6th device → 409 with NO auto-eviction (oldest stays active; freeing a
   slot manually lets the pending exchange succeed);
-- device token on a mutation → 403, never 401 (scope middleware stands
-  before _guard_write);
+- device token outside its scope → 403, never 401 (scope middleware stands
+  before _guard_write); the full v1 scope matrix: test_device_scope_v1.py
 - the DB stores ONLY hashes (code_hash / token_hash introspection);
 - mnd_ is masked in logs from day one (SEC-2 lesson);
 - pairing surface fail-closed 503 without a configured ui token;
@@ -536,7 +537,9 @@ class TestDeviceTokens:
     def test_sliding_window_refreshes_on_use(self, client, ui_auth):
         dev = _paired_device(client, ui_auth)
         first = _device_row(dev["device_id"])["expires_at"]
-        # squeeze the window, then use the token: activity must push it out
+        # scope v1: new pairings default to control → the sliding window is
+        # 7 days; activity must push it out to ~now+7d (not the read 30 d)
+        assert dev["scope"] == "control"
         with _db() as db:
             db.execute("UPDATE device_sessions SET expires_at=? WHERE id=?",
                        (_future_iso(86400), dev["device_id"]))
@@ -544,8 +547,9 @@ class TestDeviceTokens:
                           headers=_device_headers(
                               dev["device_token"])).status_code == 200
         refreshed = _device_row(dev["device_id"])["expires_at"]
-        assert datetime.fromisoformat(refreshed) > datetime.fromisoformat(
-            _future_iso(29 * 86400))
+        refreshed_dt = datetime.fromisoformat(refreshed)
+        assert refreshed_dt > datetime.fromisoformat(_future_iso(6 * 86400))
+        assert refreshed_dt < datetime.fromisoformat(_future_iso(8 * 86400))
         assert first  # (sanity: the original window existed)
 
     def test_sweep_expires_lapsed_devices(self, client, ui_auth, app_module):
@@ -598,18 +602,34 @@ class TestDeviceQuota:
 
 
 # ------------------------------------------------ scope middleware ordering
+# Scope v1 (ADR 0012 Amendment): new pairings default to `control`, so the
+# mutation/read pins below use a READ-scope device (the store mints one at
+# store level, bypassing the HTTP create limiter). The full v1 matrix lives
+# in test_device_scope_v1.py.
+def _seed_read_scope_device(store, name: str = "read-scope-dev") -> dict:
+    """Issue a device session with the EXPLICIT scope='read' (v0 shape)."""
+    row, code = store.create_pairing_request(scope="read", device_name=name)
+    store.scan_pairing(row["id"], device_name=name, source_ip="testclient")
+    store.confirm_pairing(row["id"], allow=True)
+    device, token = store.issue_device_session(row["id"])
+    return {**device, "device_token": token}
+
+
 class TestScopeMiddleware:
-    def test_device_token_mutation_403_not_401(self, client, ui_auth):
+    def test_device_token_mutation_403_not_401(self, client, ui_auth,
+                                               app_module):
         """Scope answers before _guard_write: a VALID device token on a
-        mutation is 403 (rights), where the write guard would say 401."""
-        dev = _paired_device(client, ui_auth)
+        route outside its scope is 403 (rights), where the write guard
+        would say 401 (or let it through)."""
+        dev = _seed_read_scope_device(app_module.store)
         r = client.post("/api/tasks", json={"title": "from device"},
                         headers=_device_headers(dev["device_token"]))
         assert r.status_code == 403
 
     def test_device_token_read_outside_table_403(self, client, ui_auth):
-        dev = _paired_device(client, ui_auth)
-        for path in ("/api/board", "/api/assignments", "/api/pairing/x1"):
+        dev = _paired_device(client, ui_auth)  # control — reads still bound
+        for path in ("/api/pairing/x1", "/api/devices",
+                     "/api/memories/servers", "/api/automation/schedules"):
             r = client.get(path, headers=_device_headers(dev["device_token"]))
             assert r.status_code == 403, path
 
@@ -619,11 +639,16 @@ class TestScopeMiddleware:
         assert client.get("/api/health", headers=headers).status_code == 200
         assert client.get("/api/tasks/inbox",
                           headers=headers).status_code == 200
+        # v1 reads-добавка (archcom 2026-09-23): the read-gap closes
+        assert client.get("/api/board", headers=headers).status_code == 200
+        assert client.get("/api/tags", headers=headers).status_code == 200
+        # ...while memory-server CONFIG stays hard-denied (v0 read-gap)
         assert client.get("/api/memories/servers",
-                          headers=headers).status_code == 200
+                          headers=headers).status_code == 403
 
-    def test_middleware_answers_carry_security_headers(self, client, ui_auth):
-        dev = _paired_device(client, ui_auth)
+    def test_middleware_answers_carry_security_headers(self, client, ui_auth,
+                                                       app_module):
+        dev = _seed_read_scope_device(app_module.store)
         r = client.post("/api/tasks", json={"title": "x"},
                         headers=_device_headers(dev["device_token"]))
         assert r.status_code == 403

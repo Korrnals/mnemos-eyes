@@ -14,6 +14,8 @@ import { I18nProvider } from "@/i18n";
 import { clearUiToken, UI_TOKEN_STORAGE_KEY } from "@/gateway/uiToken";
 import {
   clearDeviceIdentity,
+  DEVICE_ID_STORAGE_KEY,
+  DEVICE_NAME_STORAGE_KEY,
   DEVICE_TOKEN_STORAGE_KEY,
   saveDeviceIdentity,
 } from "@/gateway/deviceToken";
@@ -115,19 +117,44 @@ describe("Sidebar footer mode line (session-aware)", () => {
 /**
  * UI-22 owner feedback («подключился телефоном — но не авторизованным»):
  * a paired device is an IDENTITY, not an absent one — the footer must say
- * «device connected», not «read-only».
+ * «device connected», not «read-only». Scope v1 (ADR 0012 Amendment): the
+ * line splits by the device's scope — `control` (the default; absent scope
+ * field = the pre-v1 migrated phone) reads «full access», an explicit
+ * `read` pairing stays the plain «device connected».
  */
-describe("Sidebar footer mode line (device state, UI-22)", () => {
-  it("board adapter, device identity, no ui token: device connected", () => {
+describe("Sidebar footer mode line (device state, UI-22 + scope v1)", () => {
+  it("board adapter, control device, no ui token: device connected · full access", () => {
     saveDeviceIdentity({
       token: "mnd_paired-device",
       deviceId: "dev_1",
       deviceName: "phone",
+      scope: "control",
     });
     expect(localStorage.getItem(DEVICE_TOKEN_STORAGE_KEY)).toBe("mnd_paired-device");
     const html = renderSidebar(new BoardAdapter("/api"), true);
-    expect(html).toContain("device connected");
+    expect(html).toContain("device connected · full access");
     expect(html).not.toContain("read-only");
+    expect(html).not.toContain("session active");
+  });
+
+  it("a pre-scope-v1 identity (no scope field) reads as control — migration semantics", () => {
+    localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, "mnd_legacy-phone");
+    localStorage.setItem(DEVICE_ID_STORAGE_KEY, "dev_old");
+    localStorage.setItem(DEVICE_NAME_STORAGE_KEY, "Pixel");
+    const html = renderSidebar(new BoardAdapter("/api"), true);
+    expect(html).toContain("device connected · full access");
+  });
+
+  it("board adapter, read-scope device, no ui token: device connected (read-only)", () => {
+    saveDeviceIdentity({
+      token: "mnd_paired-device",
+      deviceId: "dev_1",
+      deviceName: "phone",
+      scope: "read",
+    });
+    const html = renderSidebar(new BoardAdapter("/api"), true);
+    expect(html).toContain("device connected");
+    expect(html).not.toContain("full access");
     expect(html).not.toContain("session active");
   });
 
@@ -136,6 +163,7 @@ describe("Sidebar footer mode line (device state, UI-22)", () => {
       token: "mnd_paired-device",
       deviceId: "dev_1",
       deviceName: "phone",
+      scope: "control",
     });
     sessionStorage.setItem(UI_TOKEN_STORAGE_KEY, "ui-live");
     const html = renderSidebar(new BoardAdapter("/api"), true);
@@ -148,6 +176,7 @@ describe("Sidebar footer mode line (device state, UI-22)", () => {
       token: "mnd_paired-device",
       deviceId: "dev_1",
       deviceName: "phone",
+      scope: "control",
     });
     const html = renderSidebar(new HttpAdapter("/api"), true);
     expect(html).toContain("read-only");

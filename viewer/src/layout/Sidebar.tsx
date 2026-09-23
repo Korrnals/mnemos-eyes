@@ -11,7 +11,10 @@ import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { useTaskInbox } from "@/features/tasks/useTasks";
-import { useSessionMode } from "@/features/ui-token/useSessionControl";
+import {
+  sessionModeI18nKey,
+  useSessionMode,
+} from "@/features/ui-token/useSessionControl";
 import { useBoardHealth } from "@/hooks/usePulse";
 import { DocsSidebarGroups } from "@/features/docs/DocsSidebarGroups";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
@@ -284,13 +287,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               expanded ? "block" : "hidden",
             )}
           >
-            {t(
-              sessionMode === "active"
-                ? "nav.modeActive"
-                : sessionMode === "device"
-                  ? "nav.modeDevice"
-                  : "nav.modeReadOnly",
-            )}
+            {t(sessionModeI18nKey(sessionMode))}
             <VersionLabel />
           </p>
         </div>

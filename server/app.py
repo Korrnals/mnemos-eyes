@@ -696,40 +696,95 @@ app.router.route_class = _UiCookieReissueRoute
 # VESMARO_BOARD_TOKEN) keep their existing validation legs byte-for-byte;
 # prefix classification only ADDS the device class.
 #
-# Semantics (ADR §5 table + §10.4):
-#   - route not in the class table → 403: the token's CLASS has no rights
-#     there. A VALID device token on a mutation is 403, never 401 — the
-#     token authenticates fine, the scope does not cover the route.
-#   - route allowed → validate (hash-only lookup, sliding 30 d / hard
-#     90 d TTL, revoke kill-switch); failure → 401.
+# Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): the table became
+# LOAD-BEARING per scope — (method, fnmatch-pattern) pairs. `read` is the
+# v0 GET table plus the reads-добавка (board/tags/archive/notifications/
+# assignments); `control` adds board mutations. New pairings default to
+# control (store layer); the v1 data migration flipped every active
+# read-scope session in place (Store._migrate_device_scope_v1).
+#
+# HARD-DENY (never in any scope table — closed for devices ALWAYS; the
+# allow-list below is exhaustive, so anything outside it is already 403 —
+# this list documents the intent so nobody "fixes" the table later):
+#   pairing*, devices*, auth*        — pairing/device/token management is
+#                                      owner-only (a device must never be
+#                                      able to pair, list or revoke peers,
+#                                      or touch the ui-token legs)
+#   assignments* mutations, executors*, harnesses* — the agent loop
+#                                      (queue/claim/heartbeat/complete,
+#                                      registry, enrollment): launch lever
+#   automation* (incl. GET) + /run   — stolen phone ≠ persistent runner
+#                                      (Security verdict over SE's)
+#   memories servers*/groups*, mesh* — connection config and tokens
+#                                      (GET /api/memories/servers is
+#                                      deliberately OUT: it lists URLs and
+#                                      token_refs — the v0 read-gap)
+#   PUT /api/settings/execution      — launch-adjacent (Security)
+#   DELETE /api/tasks/{id}           — irreversible: trusted side only
+#   POST /api/board-reflect          — v1-not-needed (archcom Р5)
+#   POST /api/specialists/refresh-all, GET /api/tags/{tag}/drill,
+#   GET /api/agents/*, POST /api/task-drafts, GET /api/mnemos/search
+#                                    — outside both scopes in v1
+#
+# Semantics (QA matrix v1):
+#   - VALIDATE FIRST: an invalid/revoked/expired mnd_ token answers 401 on
+#     ANY route — an unauthenticated request gets no scope verdict (v0
+#     answered 403 for mutations; that ordering inverted the honest codes).
+#   - route not in the scope's table → 403: the token authenticates fine,
+#     the scope does not cover the route — 403, never 401.
+#   - route allowed → the handler runs; _guard_write accepts the
+#     middleware's verdict via request.state.device (the choke point —
+#     no per-handler re-derivation).
 # Comparison discipline: classification is prefix-only (no secret
 # material); the digest compare inside the store is constant-time.
 # Registered BEFORE add_security_headers so the header middleware stays
 # outermost and every 401/403 answered here still carries CSP/nosniff.
-_DEVICE_ALLOWED_ROUTES = (
-    "/api/tasks*",     # board/task/history/reports/inbox reads (ADR §10.4)
-    "/api/memories*",  # memory listings/cards/pulse reads
-    "/api/events",     # SSE stream
-    "/api/health",
+_DEVICE_READ_ROUTES: tuple[tuple[str, str], ...] = (
+    ("GET", "/api/tasks*"),      # board/task/history/reports/inbox reads
+    ("GET", "/api/health"),
+    ("GET", "/api/events"),      # SSE stream
+    # memory READS only — the v0 blanket "/api/memories*" narrowed: the
+    # servers*/groups* management shapes are hard-denied (see above).
+    ("GET", "/api/memories"),
+    ("GET", "/api/memories/pulse"),
+    ("GET", "/api/memories/item/*"),
+    # reads-добавка v1 (archcom 2026-09-23 — closing the read-gap)
+    ("GET", "/api/board"),
+    ("GET", "/api/tags"),
+    ("GET", "/api/archive"),
+    ("GET", "/api/notifications"),
+    ("GET", "/api/assignments"),
 )
+
+_DEVICE_CONTROL_ROUTES: tuple[tuple[str, str], ...] = _DEVICE_READ_ROUTES + (
+    # board mutations (archcom compromise: tasks/reports/inbox/notifications;
+    # DELETE and everything on the hard-deny list stay closed)
+    ("POST", "/api/tasks"),
+    ("PATCH", "/api/tasks/*"),
+    ("POST", "/api/tasks/*/move"),
+    ("POST", "/api/tasks/*/archive"),
+    ("POST", "/api/tasks/*/unarchive"),
+    ("POST", "/api/tasks/*/reports"),
+    ("POST", "/api/tasks/inbox/refresh"),
+    ("POST", "/api/tasks/inbox/*/adopt"),
+    ("POST", "/api/notifications/read"),
+)
+
+_DEVICE_SCOPE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
+    "read": _DEVICE_READ_ROUTES,
+    "control": _DEVICE_CONTROL_ROUTES,
+}
 
 
 @app.middleware("http")
 async def device_scope_guard(request: Request, call_next):
-    """Classify bearers by token prefix (ADR 0012 §5). Everything not
-    starting with ``Bearer mnd_`` rides the existing guards unchanged."""
+    """Classify bearers by token prefix (ADR 0012 §5 + Amendment). Everything
+    not starting with ``Bearer mnd_`` rides the existing guards unchanged."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith(f"Bearer {DEVICE_TOKEN_PREFIX}"):
         return await call_next(request)
-    path = request.url.path
-    allowed = request.method == "GET" and any(
-        fnmatch.fnmatch(path, p) for p in _DEVICE_ALLOWED_ROUTES)
-    if not allowed:
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "device tokens are read-only (scope v0: "
-                               "read); pairing and device management "
-                               "require the ui token"})
+    # Order (QA matrix v1): validate → scope. An invalid token is 401 on
+    # ANY route; only a VALID session earns a scope verdict.
     device = store.validate_device_token(
         auth[len("Bearer "):].strip(),
         ua=request.headers.get("User-Agent", ""),
@@ -739,7 +794,19 @@ async def device_scope_guard(request: Request, call_next):
         return JSONResponse(
             status_code=401,
             content={"detail": "device token is invalid, expired or revoked"})
-    # identity for downstream handlers/audit; nothing reads it in v0 reads
+    scope = device["scope"] if device["scope"] in _DEVICE_SCOPE_ROUTES else "read"
+    allowed = any(
+        request.method == method and fnmatch.fnmatch(request.url.path, pattern)
+        for method, pattern in _DEVICE_SCOPE_ROUTES[scope])
+    if not allowed:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": f"device scope '{scope}' does not cover this "
+                               "route (closed for devices: pairing/devices/"
+                               "auth management, agent loop, automation, "
+                               "memory-server config, task DELETE)"})
+    # identity for downstream handlers/audit (task-history actor,
+    # reports composition); nothing else reads it
     request.state.device = device
     return await call_next(request)
 
@@ -1718,7 +1785,8 @@ async def create_task(body: TaskCreate, request: Request) -> TaskOut:
     _validate_agents(body.agents)  # ADR 0005: harnesses only
     # store raises ValueError on unknown env/col — surface as 422, not 500
     try:
-        task = store.create_task(body.model_dump())
+        task = store.create_task(body.model_dump(),
+                                 actor=_device_actor(request))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task})
@@ -1748,7 +1816,8 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
     force = dump.pop("force", False)  # request mode — not part of the payload
     # store raises ValueError on unknown env/priority — surface as 422, not 500
     try:
-        task = store.update_task(task_id, dump, force=force)
+        task = store.update_task(task_id, dump, force=force,
+                                 actor=_device_actor(request))
     except TaskLockedError:
         raise HTTPException(
             423,
@@ -1770,7 +1839,8 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
 async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
     _guard_write(request, classes=("ui",))
     try:
-        task = store.move_task(task_id, body.col, body.position)
+        task = store.move_task(task_id, body.col, body.position,
+                               actor=_device_actor(request))
     except InvalidTransitionError as exc:
         # WF-1 v1 transition mirror: blocked → done/resolved is refused
         # with a hint (422, owner-facing message from the store).
@@ -2799,7 +2869,7 @@ async def archive(
 @app.post("/api/tasks/{task_id}/archive")
 async def archive_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request, classes=("ui",))
-    if not store.archive_task(task_id):
+    if not store.archive_task(task_id, actor=_device_actor(request)):
         raise HTTPException(404, "task not found or already archived")
     _notify_and_broadcast("work", f"{task_id}: в архиве", "задача архивирована", task_id, {"kind": "task.archived", "task_id": task_id})
     return {"ok": True}
@@ -2810,7 +2880,7 @@ async def unarchive_task(task_id: str, request: Request) -> UnarchiveOut:
     """Restore an archived task to its pre-archive column (BE-11b); rows
     archived before ``archived_from`` existed fall back to ``open``."""
     _guard_write(request, classes=("ui",))
-    task = store.unarchive_task(task_id)
+    task = store.unarchive_task(task_id, actor=_device_actor(request))
     if task is None:
         raise HTTPException(404, "task not found or not archived")
     _notify_and_broadcast("work", f"{task_id}: из архива", "задача возвращена на доску", task_id, {"kind": "task.unarchived", "task_id": task_id})
@@ -2833,19 +2903,27 @@ async def create_task_report(task_id: str, body: ReportCreate,
     exhausted. A second kind="final" supersedes previous live finals
     (history kept, flagged).
 
-    Auth composition (ADR 0009 A1 + Amd 2 §2): the owner UI writes with
-    the ui-class token; the machine loop writes with the board (machine)
-    token OR an approved executor token (the mesh leg reports with its
-    own credential). When the report is executor-token-backed, a declared
-    ``agent`` string that references neither the executor's registered
-    name nor its harness lands in the audit trail flagged
-    ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
-    refusal: the report is still accepted)."""
+    Auth composition (ADR 0009 A1 + Amd 2 §2 + scope v1): the owner UI
+    writes with the ui-class token; the machine loop writes with the board
+    (machine) token OR an approved executor token (the mesh leg reports
+    with its own credential); a paired device writes on its mnd_ leg when
+    the scope middleware validated it AND matched this route against the
+    device scope table (control scope). When the report is executor-
+    token-backed, a declared ``agent`` string that references neither the
+    executor's registered name nor its harness lands in the audit trail
+    flagged ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not
+    a refusal: the report is still accepted)."""
     executor = None
+    device = getattr(request.state, "device", None)
     header_present = bool(request.headers.get("Authorization", ""))
     cookie_ui = not header_present and _cookie_ui_ok(request)
-    if (cookie_ui or _bearer_is_class(request, "ui")
-            or not _token_classes().get("machine")):
+    if device is not None:
+        # Device leg (scope v1): the middleware's verdict IS the auth —
+        # checked FIRST so a device bearer never falls into the machine
+        # leg (the machine guard would answer 401 for an mnd_ bearer).
+        pass
+    elif (cookie_ui or _bearer_is_class(request, "ui")
+          or not _token_classes().get("machine")):
         # Leg pick (ADR 0014 Ф2 + review gap matrix): a live `vesmaro_ui`
         # cookie picks the ui leg ONLY when no header rides along — the
         # determinism rule keeps a header-present request on its own leg
@@ -4309,7 +4387,7 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
             "specialists": [specialist] if specialist else [],
             "memory_ids": [memory_id],
             "mnemos_tags": ["task-queue-import"],
-        })
+        }, actor=_device_actor(request))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if not store.mark_inbox_adopted(memory_id, task["id"]):
@@ -4601,6 +4679,14 @@ def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -
     the tokens; compose.yaml ships dev values for local runs). A
     configured but non-matching bearer is 401. Every comparison is
     constant-time (hmac.compare_digest per class).
+
+    Device leg (scope v1, ADR 0012 Amendment): the scope middleware has
+    ALREADY validated this mnd_ bearer AND matched the (method, path)
+    against the device scope table for this exact route — a non-None
+    ``request.state.device`` is proof; re-comparing the device digest
+    here would only re-derive the choke point's verdict. Deliberately
+    placed AFTER the fail-closed 503: a board with no write tokens
+    configured stays disabled for devices too (fail-closed everywhere).
     """
     effective = _token_classes()
     allowed = [effective[c] for c in classes if effective.get(c)]
@@ -4611,6 +4697,8 @@ def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -
             f"mutation auth is not configured: set {envs} to "
             "enable board writes (fail-closed; see compose.yaml for local dev)",
         )
+    if getattr(request.state, "device", None) is not None:
+        return
     auth = request.headers.get("Authorization", "")
     if auth:
         # Determinism rule (ADR 0014 Ф2): a header present → the header leg
@@ -4671,6 +4759,18 @@ def _bearer_is_class(request: Request, cls: str) -> bool:
     auth = request.headers.get("Authorization", "")
     expected = f"Bearer {token}"
     return hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _device_actor(request: Request) -> str:
+    """Task-history actor for a device-driven mutation (scope v1, ADR 0012
+    Amendment): ``device:<id> <name>`` — the audit trail answers WHO rode
+    the mnd_ token without exposing material (same discipline as the
+    pairing.issued token_id hash tail). Empty for every non-device
+    request: the ui/machine legs keep their history shape unchanged."""
+    device = getattr(request.state, "device", None)
+    if not device:
+        return ""
+    return f"device:{device['id']} {device.get('name') or ''}".strip()[:120]
 
 
 def _cookie_ui_ok(request: Request) -> bool:

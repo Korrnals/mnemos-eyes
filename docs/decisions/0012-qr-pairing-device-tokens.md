@@ -1,9 +1,14 @@
 # ADR 0012: QR-пейринг и device-токены
 
-- Status: **Accepted (owner ratified 2026-09-19; details delegated to Tech Lead)** (2026-09-19)
+- Status: **Accepted (owner ratified 2026-09-19; details delegated to Tech
+  Lead)** (2026-09-19); **Amended 2026-09-23 — device scope v1
+  («второй экран владельца»), см. Amendment ниже; ratified by owner**
 - Deciders: АРХКОМ-3 — Product Architect, Senior UI/UX Designer, Senior
   System Engineer, Senior Security Engineer, Senior Frontend Developer,
   Senior QA Engineer; ведёт `@GCW: Tech Lead`; ратификация — владелец
+  (Amendment: мини-архком 2026-09-23 — Tech Lead, Senior Security
+  Engineer, Senior System Engineer; решение владельца дословно в
+  Amendment §A.6)
 - Related: ADR 0009 (токен-сплит ui/machine — предусловие Ф1), ADR 0011
   (Ф0 `/app` — предусловие UI пейринга; CSP/no-store Ф0), ADR 0004
   (LAN-trust), ADR 0006 (freeze-рамка), `ui-contract.md` §11
@@ -113,7 +118,7 @@ code в той же сессии; QR с alt-описанием.
 | --- | --- | --- | --- |
 | ui | браузер владельца | полный UI-контур | сессия |
 | machine | поллер/харнесы | assignments, reports | длинный, по ADR 0009 |
-| **device** | спаренные устройства | v0 — read-only; мутации → 403 (токен валиден, прав нет); store-ops/валидация — никогда; scope `tasks` — отдельным решением архкома по триггеру (первый реальный сценарий мутаций с устройства) | sliding 30 д при активности, hard 90 д |
+| **device** | спаренные устройства | v0 — read-only; **v1 (Amendment 2026-09-23): scope `control` — мутации задач/reports/inbox/notifications, §A ниже**; store-ops/валидация — никогда; DELETE задач, automation, agent-loop, конфигурация памяти — закрыто всегда | v0: sliding 30 д при активности; **v1: control — sliding 7 д**, read — 30 д; hard 90 д для обоих |
 
 - Лимит **≤5 активных** device-сессий; 6-е → `409` с явным выбором
   владельца — **без авто-ревока** (расхождение с драфтом arch3 «ревок
@@ -286,3 +291,115 @@ URL + `t=code`), второй контекст — доверенная стор
 
 scope `tasks` для device (решение архкома по триггеру); service
 worker/offline; ACME; relay; PAKE; bulk-операции с устройства.
+
+---
+
+## Amendment (2026-09-23): device scope v1 — «второй экран владельца»
+
+Мини-архком (Tech Lead — председатель, Senior Security Engineer, Senior
+System Engineer), протокол
+`~/.gcw/architectural-committee/2026-09-23-device-scope-control.md`,
+mnemos-решение id 68b4b89c. Стимул: телефон владельца, подключённый по QR,
+остаётся read-only (§5 v0) — а управление бортом с него и есть сценарий.
+
+### A.1 Таблица scope v0 → v1
+
+| Роут | read (v0+добавка) | control (v1) | Комментарий |
+| --- | --- | --- | --- |
+| `GET /api/tasks*` (board/tasks/history/reports/inbox) | 200 | 200 | v0 |
+| `GET /api/memories` (merged-лист), `GET /api/memories/pulse`, `GET /api/memories/item/*` | 200 | 200 | v0, сужено — см. hard-deny |
+| `GET /api/events`, `GET /api/health` | 200 | 200 | v0 |
+| `GET /api/board`, `GET /api/tags`, `GET /api/archive`, `GET /api/notifications`, `GET /api/assignments` | **200 (v1 reads-добавка)** | 200 | закрытие read-gap v0 |
+| `POST /api/tasks` | 403 | **201** | v1 мутации |
+| `PATCH /api/tasks/{id}` | 403 | **200** | v1 |
+| `POST /api/tasks/{id}/move` / `…/archive` / `…/unarchive` | 403 | **200** | v1 |
+| `POST /api/tasks/{id}/reports` | 403 | **201** | device = 4-й лег reports-композиции (ui / machine / executor / device) |
+| `POST /api/tasks/inbox/refresh`, `POST /api/tasks/inbox/{memory_id}/adopt` | 403 | **200/201** | v1 |
+| `POST /api/notifications/read` | 403 | **200** | v1 |
+
+**Закрыто ВСЕГДА (hard-deny, ни в одном scope; вне таблицы → 403):**
+`pairing*`, `devices*` (включая `GET /api/devices` и
+`DELETE /api/devices/{id}`), `auth*` — управление пейрингом/устройствами/
+токенами только с доверенной стороны; `assignments*`-мутации,
+`executors*`, `harnesses*`, `POST /api/task-drafts` — agent-loop (launch
+lever); `automation*` — мутации, `/run` И чтения (краденый телефон ≠
+персистентный запускатель — вердикт Security поверх позиции SE);
+`memories servers*/groups*`, `mesh*` — конфигурация подключений и токены
+(закрывает v0 read-gap `GET /api/memories/servers`); `PUT
+/api/settings/execution` — launch-adjacent (Security); `DELETE
+/api/tasks/{id}` — необратимо, только доверенная сторона (Security поверх
+SE); `POST /api/board-reflect` — v1-not-needed; `POST
+/api/specialists/refresh-all`, `GET /api/tags/{tag}/drill`,
+`GET /api/agents/*`, `GET /api/mnemos/search` — вне обоих scope.
+
+### A.2 Механика
+
+- **prefix = класс, scope = load-bearing**: класс по префиксу (`mnd_`),
+  права — из `device_sessions.scope`; таблица matching = `(method,
+  fnmatch-pattern)` per scope, choke-point в одном middleware
+  (`device_scope_guard`), стоящем ПЕРЕД handler-гуардами;
+  `_guard_write` принимает вердикт choke-point'а через
+  `request.state.device` (fail-closed 503 проверяется РАНЬШЕ device-лега).
+- **Порядок валидации (v1, QA-матрица)**: validate → scope-чек;
+  невалидный/ревокнутый `mnd_` на ЛЮБОМ роуте = 401 (v0 отвечал 403 на
+  мутациях раньше валидации — коды были перевёрнуты).
+- **Атрибуция**: мутации задач пишут в task history actor
+  `device:<id> <name>` (по образцу hash-tail `token_id` — без материала);
+  ui/machine-леги сохраняют прежнюю форму истории.
+- **Миграция**: идемпотентный `UPDATE device_sessions SET scope='control'
+  WHERE state='active' AND scope='read'` при инициализации store (после
+  CREATE TABLE; перевыпуск токенов НЕ нужен — hash-only строки валидны;
+  revoked/expired сохраняют исторический scope); БЕЗ SEED_VERSION bump
+  (аддитивная эволюция: bump стирает задачи).
+- **Новые пейринги**: `create_pairing_request` default scope=`control` на
+  уровне STORE; DB default колонки остаётся `'read'` — fail-safe для
+  INSERT'ов мимо store.
+- **TTL**: control — sliding 7 д (604 800 с) / hard 90 д; read — 30/90
+  как в v0; sliding-UPDATE не трогает колонку scope.
+- **Откат**: revert-деплой (кодовая механика без миграций схемы;
+  переведённые в control строки остаются control — read-режим для них
+  восстанавливается явным UPDATE, это осознанная асимметрия).
+
+### A.3 Viewer (разделение привилегий)
+
+- Gate: `hasToken` = `hasUiToken() || hasDeviceToken()` — мутация уходит
+  на сервер и там решается scope-таблицей; `tokenPresent` сохраняет смысл
+  ui-класса (инжекция `hasUiToken`) — панели store-ops/enrollment/devices
+  остаются спрятаны на телефоне.
+- Drag-gate доски: `canMutate && (tokenPresent || devicePresent)`.
+- Mode-line: control-устройство — «устройство подключено · полный доступ»
+  (`nav.modeDeviceControl`), read — «устройство подключено»; scope в
+  `DeviceIdentity` (exchange-ответ), у уже-мигрированного телефона поле
+  отсутствует → трактуется как control (семантика миграции).
+- Тост UI-22 «действия с устройства закрыты» — только для read-scope
+  устройств (пре-флайт, без запроса); control-устройство мутирует, а
+  закрытые роуты отвечают 403 с серверным текстом в честном тосте самого
+  действия. UX-фильтр по зеркалу scope-таблицы на клиенте — сознательно
+  не делался (защита на сервере; клиентский список — второй источник
+  рассинхрона).
+
+### A.4 Риски (приняты)
+
+- Компрометация `mnd_` = мутации борда от имени владельца. Компенсаторы:
+  hash-only хранение, ревок-kill-switch (`DELETE /api/devices/{id}` + SSE)
+  с доверенной стороны, sliding 7 д для control, ≤5 активных сессий,
+  атрибуция `device:<id>` в task history, hard-deny перечисленных семей
+  (launch-lever и необратимое — вне досягаемости телефона).
+- Честная форма отказов: закрытый роут = серверный 403 с текстом семейства,
+  не безмолвное скрытие.
+
+### A.5 Out of scope (Amendment)
+
+Per-mutation confirm/step-up на ui-стороне (backlog; триггер — публичный
+контур или чужие руки на телефоне); rate-limit device-мутаций (backlog);
+actor в SSE-событиях (additive-изменение словаря отдельно); гостевые
+ссылки — UI-24 backlog; board-reflect для device — v2.
+
+### A.6 Решение владельца (дословно, 2026-09-23)
+
+> «управление — центральная фишка vesmaro-eyes; лишать управления
+> подключённое через QR устройство глупо и бессмысленно»
+
+Свод расхождений председателя: Security победил в automation/settings/
+DELETE/board-reflect; имя scope — `control`; полнота паритета —
+manage-подмножество Security, не full-parity-minus-core SE.

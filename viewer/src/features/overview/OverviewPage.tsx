@@ -10,7 +10,10 @@ import { useGateway } from "@/gateway/GatewayContext";
 import { usePulse, useBoardHealth } from "@/hooks/usePulse";
 import { PulseFeed } from "@/features/memory-pulse/PulseFeed";
 import { useAutomationStatus } from "@/features/automation/useAutomation";
-import { useSessionMode } from "@/features/ui-token/useSessionControl";
+import {
+  sessionModeI18nKey,
+  useSessionMode,
+} from "@/features/ui-token/useSessionControl";
 import { useT } from "@/i18n";
 
 /**
@@ -169,7 +172,7 @@ export function OverviewPage() {
        * the sidebar footer: states the live contract instead of the static
        * L1 read-only claim that kept lying after a login. */}
       <p className="text-center text-xs text-foreground-muted">
-        {t(sessionMode === "active" ? "nav.modeActive" : sessionMode === "device" ? "nav.modeDevice" : "nav.modeReadOnly")}
+        {t(sessionModeI18nKey(sessionMode))}
       </p>
     </section>
   );

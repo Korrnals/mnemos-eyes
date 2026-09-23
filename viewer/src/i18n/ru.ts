@@ -45,9 +45,12 @@ export const ru = {
   // that kept lying after login.
   "nav.modeReadOnly": "только чтение",
   "nav.modeActive": "сессия активна",
-  // UI-22: paired device without an owner session — идентификация есть,
-  // записи нет (device scope v0 read-only, ADR 0012 §5).
+  // UI-22: paired device without an owner session — идентификация есть.
+  // Scope v1 (ADR 0012 Amendment): control-устройство управляет бортом
+  // (закрытые семьи — pairing/devices/auth/automation/agent-loop — остаются
+  // спрятаны и серверно закрыты), read-устройство — только чтение.
   "nav.modeDevice": "устройство подключено",
+  "nav.modeDeviceControl": "устройство подключено · полный доступ",
   // Sidebar version label (owner feedback: «какая версия перед глазами»).
   // {{version}} is the live server version from /api/health.
   "nav.versionAria": "Версия приложения {{version}}",
@@ -359,13 +362,12 @@ export const ru = {
   "login.toastRejected": "Токен отклонён",
   "login.toastRejectedDetail":
     "Сервер вернул 401 — окно входа открыто, вставьте актуальное значение.",
-  // UI-22 device beat: the paired device's mutations are refused server-side
-  // (403, device scope v0 read-only) — the honest toast instead of the login
-  // window (which is the 401 affordance and would promise a continuation
-  // that can never run from this device).
+  // UI-22 device beat, scope v1: fires only for a `read`-scope device —
+  // every mutation is a server 403 verdict there. A control device
+  // mutates; closed routes refuse with the server's own honest detail.
   "login.deviceForbidden": "Действия с устройства закрыты",
   "login.deviceForbiddenDetail":
-    "v0 — только чтение: мутации выполняются в сессии владельца (ADR 0012 §5).",
+    "Скоуп этого устройства — только чтение: мутации выполняются в сессии владельца (ADR 0012).",
   "login.logoutFailed":
     "Не удалось завершить сессию на сервере — вы всё ещё вошли. Проверьте связь и повторите.",
 
