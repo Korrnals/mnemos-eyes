@@ -40,7 +40,6 @@ import shlex
 
 import pytest
 
-from conftest import BOARD_TOKEN
 from server import provisioner as prov
 from server.provisioner import JobFacts, Provisioner, Redacted, describe_error
 
@@ -475,7 +474,7 @@ class TestAntiSpray:
     def test_dedup_409_on_live_job(self, client, ui_auth, app_module,
                                    monkeypatch):
         _noop_worker(app_module, monkeypatch)
-        job_id = _live_job_direct(app_module, "dedup-1")
+        _live_job_direct(app_module, "dedup-1")
         r = _provision(client, ui_auth, host="dedup-1")
         assert r.status_code == 409
         assert "already live" in r.json()["detail"]
