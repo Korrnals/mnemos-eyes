@@ -436,6 +436,43 @@ describe("BoardAdapter agents wire — automation surface (SCHED-1)", () => {
     expect(remove.calls[0].method).toBe("DELETE");
     expect(remove.calls[0].url).toBe("/api/automation/hooks/1");
   });
+
+  // UI-21 settings hub (spec 2026-09-23 §2): the kill-switch/cap pair.
+  it("getAutomationSettings: open GET /api/automation/settings", async () => {
+    const get = adapterWith(200, {
+      ok: true,
+      enabled: false,
+      cap_global_per_day: 10,
+    });
+    const settings = await get.adapter.getAutomationSettings();
+    expect(get.calls[0].method).toBe("GET");
+    expect(get.calls[0].url).toBe("/api/automation/settings");
+    expect(get.calls[0].authorization).toBeUndefined();
+    expect(settings.enabled).toBe(false);
+    expect(settings.cap_global_per_day).toBe(10);
+  });
+
+  it("putAutomationSettings: PUT with the ui bearer and BOTH fields", async () => {
+    const put = adapterWith(200, {
+      ok: true,
+      enabled: true,
+      cap_global_per_day: 25,
+    });
+    const saved = await put.adapter.putAutomationSettings({
+      enabled: true,
+      cap_global_per_day: 25,
+    });
+    expect(put.calls[0].method).toBe("PUT");
+    expect(put.calls[0].url).toBe("/api/automation/settings");
+    expect(put.calls[0].authorization).toBe("Bearer ui-test-token");
+    // The wire body carries both keys even when only one changed — the
+    // server PUT is partial (None fields ignored), the full payload is safe.
+    expect(put.calls[0].body).toEqual({
+      enabled: true,
+      cap_global_per_day: 25,
+    });
+    expect(saved.cap_global_per_day).toBe(25);
+  });
 });
 
 describe("BoardAdapter agents wire — harness dictionary (wave 3C)", () => {

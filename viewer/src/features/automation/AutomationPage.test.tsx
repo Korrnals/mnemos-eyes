@@ -90,7 +90,10 @@ describe("status banner — the S1 honesty", () => {
     expect(text).toContain("Engine not enabled");
     expect(text).toContain("Manual runs only");
     expect(text).toContain("global kill-switch: off");
-    expect(text).toContain("daily cap: 50");
+    // UI-21: the status pair projects from the SAME live settings the hub
+    // form reads (server parity — app.py reads store.automation_settings),
+    // so the cap is the store default 10, not the old fixture drift 50.
+    expect(text).toContain("daily cap: 10");
     expect(text).toContain("auto-launches today: 0");
     expect(text).toContain("rules: 2 schedules, 2 hook rules");
     // No toggle control exists for the kill-switch (v1 cut) — read-only

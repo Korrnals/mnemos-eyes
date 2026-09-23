@@ -505,6 +505,16 @@ export type LaunchesPage = Schemas["LaunchesOut"];
 /** Engine/caps/condition-meta projection — board `AutomationStatusOut` schema. */
 export type AutomationStatus = Schemas["AutomationStatusOut"];
 
+/** Kill-switch + daily cap projection — board `AutomationSettingsOut` schema. */
+export type AutomationSettings = Schemas["AutomationSettingsOut"];
+
+/**
+ * Settings PUT payload — board `AutomationSettingsBody` schema (the wire
+ * accepts partial bodies; the settings form sends BOTH fields — the server
+ * ignores `None`s and audits only effective changes, store.py ADR 0013 §6).
+ */
+export type AutomationSettingsInput = Schemas["AutomationSettingsBody"];
+
 /** Launch journal filters (`GET /api/automation/launches`). */
 export interface LaunchesParams {
   readonly rule_id?: number;

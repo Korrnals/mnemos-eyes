@@ -117,6 +117,7 @@ export const keys = {
   automation: {
     all: ["automation"] as const,
     status: () => ["automation", "status"] as const,
+    settings: () => ["automation", "settings"] as const,
     schedules: () => ["automation", "schedules"] as const,
     hooks: () => ["automation", "hooks"] as const,
     launches: (params: { limit?: number; cursor?: string } = {}) =>
@@ -158,6 +159,7 @@ export type AgentsAssignmentsKey = ReturnType<typeof keys.agents.assignments.lis
 export type ExecutorsListKey = ReturnType<typeof keys.agents.executors.list>;
 export type ExecutionSettingsKey = ReturnType<typeof keys.agents.settings.execution>;
 export type AutomationStatusKey = ReturnType<typeof keys.automation.status>;
+export type AutomationSettingsKey = ReturnType<typeof keys.automation.settings>;
 export type AutomationSchedulesKey = ReturnType<typeof keys.automation.schedules>;
 export type AutomationHooksKey = ReturnType<typeof keys.automation.hooks>;
 export type AutomationLaunchesKey = ReturnType<typeof keys.automation.launches>;

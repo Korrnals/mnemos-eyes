@@ -993,6 +993,28 @@ export const ru = {
   "automation.banner.usedToday": "авто-запусков сегодня",
   "automation.banner.rules": "правил",
   "automation.banner.rulesCount": "расписаний {{schedules}}, правил-хуков {{hooks}}",
+  "automation.banner.settingsLink": "изменить в настройках",
+  // UI-21 settings hub: the kill-switch/cap form (server contract §2).
+  "automation.settings.title": "Автоматизация",
+  "automation.settings.enabledLabel": "Автоматизация включена",
+  "automation.settings.engineOffNote":
+    "Движок пока не работает (S1): настройка сохранит решение и заработает вместе с движком.",
+  "automation.settings.capLabel": "Лимит авто-запусков в день",
+  "automation.settings.capHint": "От 1 до 1000; сегодня использовано {{used}} из {{cap}}.",
+  "automation.settings.capError": "Введите целое число от 1 до 1000.",
+  "automation.settings.save": "Сохранить",
+  "automation.settings.saving": "Сохраняем…",
+  "automation.settings.saved": "Настройки автоматизации сохранены",
+  "automation.settings.savedDetail": "выключатель и дневной лимит обновлены",
+  "automation.settings.saveFailed": "Не удалось сохранить настройки автоматизации",
+  // UI-21 settings hub: «Интерфейс» — cross-links only (preferences stay
+  // at their point of use; spec §0).
+  "settings.hub.interfaceTitle": "Интерфейс",
+  "settings.hub.interfaceHint": "Эти настройки живут на месте использования:",
+  "settings.hub.prefLang": "язык — RU|EN в шапке",
+  "settings.hub.prefDensity": "плотность — кнопка в шапке",
+  "settings.hub.prefBoardStyle": "вид доски — тумблер на странице задач",
+  "settings.hub.prefSidebar": "сайдбар — кнопка на самом сайдбаре",
   "automation.listLoading": "Загружаем",
   "automation.listFailed": "Не удалось загрузить список",
   "automation.schedule.create": "Новое расписание",

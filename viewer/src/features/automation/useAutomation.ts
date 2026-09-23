@@ -1,6 +1,8 @@
 import { useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  AutomationSettings,
+  AutomationSettingsInput,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -49,6 +51,28 @@ export function useAutomationStatus() {
     enabled: capable,
     staleTime: STALE_TIMES.automationStatus,
     gcTime: GC_TIMES.automationStatus,
+  });
+}
+
+/**
+ * Kill-switch + daily cap (`GET /api/automation/settings`, UI-21 settings
+ * hub): OPEN read, owner-rare writes — the staleTime mirrors the agents
+ * settings pair.
+ */
+export function useAutomationSettings() {
+  const gateway = useGateway();
+  const capable = isAutomationSource(gateway);
+  return useQuery({
+    queryKey: keys.automation.settings(),
+    queryFn: ({ signal }) => {
+      if (!isAutomationSource(gateway)) {
+        throw new Error("useAutomationSettings: gateway has no automation capability.");
+      }
+      return gateway.getAutomationSettings(signal);
+    },
+    enabled: capable,
+    staleTime: STALE_TIMES.automationSettings,
+    gcTime: GC_TIMES.automationSettings,
   });
 }
 
@@ -314,6 +338,46 @@ export function createAutomationMutations(deps: AutomationMutationDeps) {
     });
   };
 
+  /**
+   * Save the kill-switch/cap pair (UI-21 settings hub): the form sends
+   * BOTH fields; a 4xx/422 answers with the server text verbatim AND
+   * calls `onFailed` so the form returns to the loaded values (P3-6b);
+   * a 401 rethrows — the gate takes over (login → retry).
+   */
+  const saveSettings = (
+    payload: AutomationSettingsInput,
+    callbacks?: {
+      onDone?: (settings: AutomationSettings) => void;
+      onFailed?: (error: unknown) => void;
+      onSettled?: () => void;
+    },
+  ): void => {
+    runAuthorized(async () => {
+      try {
+        const saved = await mutations().putAutomationSettings(payload);
+        void queryClient.invalidateQueries({ queryKey: keys.automation.settings() });
+        // The banner projects the same pair (kill-switch/cap counters).
+        void queryClient.invalidateQueries({ queryKey: keys.automation.status() });
+        toast.push({
+          kind: "ok",
+          title: t("automation.settings.saved"),
+          detail: t("automation.settings.savedDetail"),
+        });
+        callbacks?.onDone?.(saved);
+      } catch (error) {
+        if (isApiError(error) && error.status === 401) throw error;
+        toast.push({
+          kind: "error",
+          title: t("automation.settings.saveFailed"),
+          detail: error instanceof Error ? error.message : undefined,
+        });
+        callbacks?.onFailed?.(error);
+      } finally {
+        callbacks?.onSettled?.();
+      }
+    });
+  };
+
   return {
     createSchedule,
     patchSchedule,
@@ -322,6 +386,7 @@ export function createAutomationMutations(deps: AutomationMutationDeps) {
     createHookRule,
     patchHookRule,
     deleteHookRule,
+    saveSettings,
   };
 }
 

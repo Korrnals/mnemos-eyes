@@ -6,6 +6,7 @@ import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
   MOCK_ARCHIVED_TASK,
   MOCK_ASSIGNMENTS,
+  MOCK_AUTOMATION_SETTINGS,
   MOCK_AUTOMATION_STATUS,
   MOCK_BOARD,
   MOCK_EXECUTORS,
@@ -31,6 +32,8 @@ import type {
   AssignmentLifecycleState,
   AssignmentListParams,
   AssignmentsPage,
+  AutomationSettings,
+  AutomationSettingsInput,
   AutomationStatus,
   BoardHealthDetail,
   BoardSummary,
@@ -184,6 +187,11 @@ export class MockAdapter implements MemoryGateway {
   private schedules: ScheduleRule[];
   private hooks: HookRule[];
   private launches: LaunchRow[];
+  /** UI-21 settings hub: the live kill-switch/cap pair (store.py defaults). */
+  private automationSettings: {
+    enabled: boolean;
+    cap_global_per_day: number;
+  };
   /** AGW-5 phase 2: enrollment tokens minted at RUNTIME (playground starts
    * clean — the fixtures carry none, minting is an owner action). */
   private enrollments: EnrollmentItem[];
@@ -209,6 +217,10 @@ export class MockAdapter implements MemoryGateway {
     this.schedules = MOCK_SCHEDULES.map((rule) => ({ ...rule }));
     this.hooks = MOCK_HOOKS.map((rule) => ({ ...rule }));
     this.launches = MOCK_LAUNCHES.map((row) => ({ ...row }));
+    this.automationSettings = {
+      enabled: MOCK_AUTOMATION_SETTINGS.enabled,
+      cap_global_per_day: MOCK_AUTOMATION_SETTINGS.cap_global_per_day,
+    };
     this.enrollments = [];
     // Fresh ids never collide with the corpus rows.
     this.nextAssignmentNo =
@@ -1297,7 +1309,10 @@ export class MockAdapter implements MemoryGateway {
     // Derived from live rule state like the server; engine stays the honest
     // S1 constant (no loop exists to report live). The harness values_hint
     // joins through the LIVE dictionary state (wave 3C — server parity),
-    // never a static fixture list.
+    // never a static fixture list; the kill-switch/cap pair projects from
+    // the SAME live settings the settings form reads/writes (UI-21 —
+    // server parity: app.py automation_status reads
+    // store.automation_settings).
     const schedulesEnabled = this.schedules.filter((rule) => rule.enabled).length;
     const hooksEnabled = this.hooks.filter((rule) => rule.enabled).length;
     return {
@@ -1314,11 +1329,53 @@ export class MockAdapter implements MemoryGateway {
           harness: this.harnessNames(),
         },
       },
+      global_kill_switch: this.automationSettings.enabled,
+      daily_cap: this.automationSettings.cap_global_per_day,
       rules: {
         schedules: { total: this.schedules.length, enabled: schedulesEnabled },
         hooks: { total: this.hooks.length, enabled: hooksEnabled },
       },
     };
+  }
+
+  /** Kill-switch + daily cap (`GET /api/automation/settings` mirror). */
+  async getAutomationSettings(signal?: AbortSignal): Promise<AutomationSettings> {
+    await this.delay(signal);
+    return { ok: true, ...this.automationSettings };
+  }
+
+  /**
+   * Set the kill-switch / daily cap (`PUT /api/automation/settings`
+   * mirror): `None` fields are ignored, an out-of-range cap answers the
+   * SAME 422 text as `store.AutomationValidationError`, effective changes
+   * land in the live pair (the audit log itself is server-side only).
+   */
+  async putAutomationSettings(
+    payload: AutomationSettingsInput,
+    signal?: AbortSignal,
+  ): Promise<AutomationSettings> {
+    await this.delay(signal);
+    if (
+      payload.cap_global_per_day !== null &&
+      payload.cap_global_per_day !== undefined &&
+      (!Number.isInteger(payload.cap_global_per_day) ||
+        payload.cap_global_per_day < 1 ||
+        payload.cap_global_per_day > 1000)
+    ) {
+      throw new ApiError(422, "cap_global_per_day must be an int in 1..1000", {
+        url: "mock:/api/automation/settings",
+      });
+    }
+    if (payload.enabled !== null && payload.enabled !== undefined) {
+      this.automationSettings.enabled = payload.enabled;
+    }
+    if (
+      payload.cap_global_per_day !== null &&
+      payload.cap_global_per_day !== undefined
+    ) {
+      this.automationSettings.cap_global_per_day = payload.cap_global_per_day;
+    }
+    return { ok: true, ...this.automationSettings };
   }
 
   async listSchedules(signal?: AbortSignal): Promise<SchedulesPage> {

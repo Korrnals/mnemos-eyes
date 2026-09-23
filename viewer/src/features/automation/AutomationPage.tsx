@@ -145,7 +145,9 @@ export function AutomationPage() {
               </p>
             </>
           ) : null}
-          {/* Read-only kill-switch + cap (v1: NO toggle) + honest counters. */}
+          {/* Read-only kill-switch + cap (v1: NO toggle) + honest counters.
+           * The toggle itself lives in the settings hub (UI-21, spec §1.2
+           * ADR 0013 §8 UI-frame amendment) — the banner links there. */}
           <p className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-foreground-muted">
             <span>
               {t("automation.banner.killSwitch")}:{" "}
@@ -164,6 +166,14 @@ export function AutomationPage() {
                 hooks: status.data?.rules.hooks.total ?? 0,
               })}
             </span>
+          </p>
+          <p className="text-xs">
+            <Link
+              to="/system/settings#automation"
+              className="text-iris-bright underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+            >
+              {t("automation.banner.settingsLink")}
+            </Link>
           </p>
         </div>
       )}

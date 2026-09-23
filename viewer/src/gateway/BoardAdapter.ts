@@ -15,6 +15,8 @@ import type {
   AssignmentCreatedResult,
   AssignmentListParams,
   AssignmentsPage,
+  AutomationSettings,
+  AutomationSettingsInput,
   AutomationStatus,
   BoardHealth,
   BoardHealthDetail,
@@ -146,6 +148,8 @@ import type {
  * - putExecutionSettings PUT  /api/settings/execution             → 200 | 422
  * SCHED-1 automation (ADR 0013 — hooks consume in a later wave):
  * - automationStatus     GET  /api/automation/status
+ * - getAutomationSettings GET /api/automation/settings            (OPEN read)
+ * - putAutomationSettings PUT  /api/automation/settings           → 200 | 422
  * - listSchedules        GET  /api/automation/schedules
  * - createSchedule       POST /api/automation/schedules           → 201 | 422
  * - patchSchedule        PATCH /api/automation/schedules/{id}     → 200 | 404/422
@@ -390,6 +394,8 @@ export interface BoardGateway extends MemoryGateway {
 
   /** Engine/caps/condition-meta projection (`GET /api/automation/status`). */
   automationStatus(signal?: AbortSignal): Promise<AutomationStatus>;
+  /** Kill-switch + daily cap (`GET /api/automation/settings`, OPEN read). */
+  getAutomationSettings(signal?: AbortSignal): Promise<AutomationSettings>;
   /** Schedule rules incl. soft-deleted (`GET /api/automation/schedules`). */
   listSchedules(signal?: AbortSignal): Promise<SchedulesPage>;
   /** Create a schedule (`POST`, ui-token; created disabled — enable via PATCH). */
@@ -408,6 +414,13 @@ export interface BoardGateway extends MemoryGateway {
   patchHook(ruleId: number, patch: HookPatchInput): Promise<HookRule>;
   /** Soft-disable retention DELETE (same semantics as schedules). */
   deleteHook(ruleId: number): Promise<RuleDeletedAck>;
+  /**
+   * Set the kill-switch / daily cap (`PUT /api/automation/settings`,
+   * ui-token; audited automation.settings.changed old→new). A 422 mirrors
+   * `store.AutomationValidationError` — «cap_global_per_day must be an int
+   * in 1..1000». In S1 flipping `enabled` is INERT data (no engine yet).
+   */
+  putAutomationSettings(payload: AutomationSettingsInput): Promise<AutomationSettings>;
   /** Launch journal page (`GET /api/automation/launches`, cursor contract). */
   listLaunches(params?: LaunchesParams, signal?: AbortSignal): Promise<LaunchesPage>;
 
@@ -979,6 +992,10 @@ export class BoardAdapter implements BoardGateway {
     return this.request<AutomationStatus>("/automation/status", { signal });
   }
 
+  async getAutomationSettings(signal?: AbortSignal): Promise<AutomationSettings> {
+    return this.request<AutomationSettings>("/automation/settings", { signal });
+  }
+
   async listSchedules(signal?: AbortSignal): Promise<SchedulesPage> {
     return this.request<SchedulesPage>("/automation/schedules", { signal });
   }
@@ -1039,6 +1056,21 @@ export class BoardAdapter implements BoardGateway {
   async deleteHook(ruleId: number): Promise<RuleDeletedAck> {
     return this.request<RuleDeletedAck>(`/automation/hooks/${ruleId}`, {
       method: "DELETE",
+      auth: true,
+    });
+  }
+
+  async putAutomationSettings(
+    payload: AutomationSettingsInput,
+  ): Promise<AutomationSettings> {
+    return this.request<AutomationSettings>("/automation/settings", {
+      method: "PUT",
+      // The UI always sends BOTH fields (server PUT is partial — `None`
+      // fields are ignored, audit records only effective changes).
+      body: {
+        enabled: payload.enabled,
+        cap_global_per_day: payload.cap_global_per_day,
+      },
       auth: true,
     });
   }
