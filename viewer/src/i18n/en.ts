@@ -40,6 +40,8 @@ export const en: Record<TranslationKey, string> = {
   // Session-aware mode line (fix/login-feedback) — see ru.ts.
   "nav.modeReadOnly": "read-only",
   "nav.modeActive": "session active",
+  // UI-22: paired device without an owner session — see ru.ts.
+  "nav.modeDevice": "device connected",
   // Sidebar version label (owner feedback) — see ru.ts.
   "nav.versionAria": "App version {{version}}",
   "shell.skipToContent": "Skip to content",
@@ -346,6 +348,10 @@ export const en: Record<TranslationKey, string> = {
   "login.toastRejected": "Token rejected",
   "login.toastRejectedDetail":
     "The server answered 401 — the login window is open for a current value.",
+  // UI-22 device beat — see ru.ts.
+  "login.deviceForbidden": "Actions from this device are closed",
+  "login.deviceForbiddenDetail":
+    "v0 — read-only: mutations run in an owner session (ADR 0012 §5).",
   "login.logoutFailed":
     "Could not end the server session — you are still signed in. Check the connection and try again.",
 

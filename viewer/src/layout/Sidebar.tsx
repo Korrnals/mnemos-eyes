@@ -1,10 +1,17 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Link, useLocation } from "react-router";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { IrisLogo } from "@/components/IrisLogo/IrisLogo";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { useTaskInbox } from "@/features/tasks/useTasks";
-import { useSessionControl } from "@/features/ui-token/useSessionControl";
+import { useSessionMode } from "@/features/ui-token/useSessionControl";
 import { useBoardHealth } from "@/hooks/usePulse";
 import { DocsSidebarGroups } from "@/features/docs/DocsSidebarGroups";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
@@ -12,14 +19,53 @@ import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
 
 /**
+ * The md breakpoint of the sidebar (Tailwind md = 768px). Kept in ONE place:
+ * the expansion mode is state-driven (not CSS-forced), so the JS query and
+ * any future Tailwind class must agree.
+ */
+const DESKTOP_QUERY = "(min-width: 768px)";
+
+function subscribeDesktop(onChange: () => void): () => void {
+  const mql = window.matchMedia(DESKTOP_QUERY);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+}
+
+/**
+ * Viewport seam for the sidebar expansion mode (UI-22 owner feedback). This
+ * is a client-only SPA: matchMedia is available on the FIRST client render,
+ * so the phone never sees a wrong-viewport frame; the SSR/test snapshot
+ * renders the desktop chrome (the historical renderToString behaviour).
+ */
+function useIsDesktop(): boolean {
+  return useSyncExternalStore(
+    subscribeDesktop,
+    () => window.matchMedia(DESKTOP_QUERY).matches,
+    () => true,
+  );
+}
+
+/**
  * Primary navigation (redesign concept §2.2): domain sidebar — «Обзор» root +
  * 5 domains. Sections render under their domain only while it is active
  * (two-layer sidebar: domain → section, never three). Phase-2+ domains are
  * honest disabled slots: a disabled button carrying a "soon" badge and a
- * tooltip, never a dead link. `collapsed` switches to icon-only mode; on
- * narrow viewports (< md = 768px) icon-only is forced via CSS so no JS media
- * query is needed. Labels are translated via useT(); the "mnemos-eyes" brand
- * is language-independent.
+ * tooltip, never a dead link.
+ *
+ * Expansion modes (UI-22 owner feedback — the phone could not expand the
+ * panel at all: the toggle was md-only and <md forced icon-only CSS):
+ * - >= md (desktop): inline sticky panel, `collapsed` flips the rail and
+ *   persists under vesmaro.sidebarCollapsed (Shell) — unchanged.
+ * - < md (mobile): the toggle is VISIBLE on the rail header; expanding opens
+ *   an OVERLAY — the panel floats fixed over the content with a translucent
+ *   backdrop (click / Esc closes), focus moves into the panel and returns to
+ *   the toggle on close, the body scroll locks while it is open. The mobile
+ *   overlay state is SESSION-ONLY: every entry/reload starts collapsed
+ *   regardless of the stored flag, and a mobile toggle click never touches
+ *   the persisted desktop intent.
+ *
+ * Labels are translated via useT(); the "mnemos-eyes" brand is
+ * language-independent.
  *
  * Horizontal-overflow hygiene (UI-19 owner feedback): labels never force the
  * panel wider than its fixed slot. Every label span is `min-w-0 truncate`
@@ -39,129 +85,217 @@ export interface SidebarProps {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const t = useT();
   const { pathname } = useLocation();
-  const sessionControl = useSessionControl();
+  const sessionMode = useSessionMode();
   const openDomain = activeDomain(pathname);
-  // Label visibility (UI-19 root cause): the row components used to hardcode
-  // `md:inline`, so manual collapse kept the labels VISIBLE inside the w-14
-  // rail — the exact overflow the owner screenshotted. Visibility is now
-  // derived from `collapsed` in one place and passed down.
-  const hideLabels = collapsed
-    ? "hidden"
-    : "hidden min-w-0 truncate md:inline";
+  const isDesktop = useIsDesktop();
+  // Mobile expansion is session-only state (see the docblock): it starts
+  // closed on every mount and never reaches Shell's persisted flag.
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+
+  const expanded = isDesktop ? !collapsed : mobileOpen;
+  // The overlay exists only on mobile: a resize across the breakpoint while
+  // the overlay is open degrades back to the inline panel.
+  const overlay = expanded && !isDesktop;
+
+  /** Close the overlay; `refocus` returns focus to the toggle (Esc/backdrop —
+   * the open affordance). A toggle-click close keeps focus where it already
+   * is; a nav-link close hands focus to the routed content (FocusMain). */
+  const closeOverlay = useCallback((refocus: boolean) => {
+    setMobileOpen(false);
+    if (refocus) toggleRef.current?.focus();
+  }, []);
+
+  // One toggle, two policies: desktop flips the PERSISTED intent (Shell),
+  // mobile flips the session-only overlay.
+  const handleToggle = useCallback(() => {
+    if (isDesktop) onToggle();
+    else setMobileOpen((value) => !value);
+  }, [isDesktop, onToggle]);
+
+  // Crossing to desktop while the overlay is open needs no reset: `expanded`
+  // ignores mobileOpen above, and returning to mobile reopens the panel the
+  // user explicitly expanded — one less effect, one consistent story.
+
+  // Overlay a11y mechanics: focus moves into the panel on open, Esc closes
+  // (focus back to the toggle), the document scroll locks while the overlay
+  // covers it. Effects never run on the server — SSR harnesses are safe.
+  useEffect(() => {
+    if (!overlay) return;
+    panelRef.current?.focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeOverlay(true);
+    };
+    document.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [overlay, closeOverlay]);
+
+  // Label visibility (UI-19 root cause): derived from the expansion mode in
+  // one place and passed down — the icon rail hides them, the expanded panel
+  // (inline OR overlay) shows them.
+  const hideLabels = expanded ? "min-w-0 truncate" : "hidden";
 
   return (
-    <aside
-      className={cn(
-        "sticky top-0 z-30 flex h-dvh shrink-0 flex-col border-r border-border-subtle bg-well",
-        // Icon-only under md; manual collapse wins from md up.
-        collapsed ? "w-14" : "w-14 md:w-64",
-        "transition-[width] duration-fast ease-out",
-      )}
-    >
-      {/* Collapse control rides the header (UI-19 owner feedback — the old
-       * footer corner went unnoticed): expanded = right-aligned «close»
-       * icon; collapsed = the solo header control, centered, «open» icon.
-       * Collapsed inner width is w-14 minus px-2 — exactly one icon button. */}
-      <div
+    <>
+      {/* Translucent backdrop (mobile overlay only): click closes with the
+       * focus return; it is aria-hidden decoration — Esc is the keyboard
+       * path. Same overlay token as the Radix dialogs. */}
+      {overlay ? (
+        <div
+          aria-hidden="true"
+          className="fixed inset-0 z-40 bg-overlay/80"
+          onClick={() => closeOverlay(true)}
+        />
+      ) : null}
+      <aside
+        id="app-sidebar"
+        ref={panelRef}
+        tabIndex={-1}
+        role={overlay ? "dialog" : undefined}
+        aria-modal={overlay ? true : undefined}
+        aria-label={overlay ? t("nav.primary") : undefined}
         className={cn(
-          "flex items-center gap-2 py-4",
-          collapsed ? "justify-center px-2" : "px-3 md:px-4",
+          "flex h-dvh shrink-0 flex-col border-r border-border-subtle bg-well",
+          "transition-[width] duration-fast ease-out",
+          expanded ? "w-64" : "w-14",
+          // Overlay box on mobile; the inline panel is sticky on desktop.
+          overlay
+            ? "fixed inset-y-0 left-0 z-50 shadow-float"
+            : "sticky top-0 z-30",
         )}
       >
-        {!collapsed && <IrisLogo size={28} className="mx-auto md:mx-0" />}
-        <span
+        {/* The ONE collapse control rides the header (UI-19 owner feedback —
+         * the old footer corner went unnoticed; UI-22: visible at EVERY
+         * width, so the phone can expand the panel too). Expanded =
+         * right-aligned «close» icon; collapsed = the solo header control,
+         * centered, «open» icon. Collapsed inner width is w-14 minus px-2 —
+         * exactly one icon button. */}
+        <div
           className={cn(
-            "hidden min-w-0 truncate text-sm font-semibold tracking-wide",
-            hideLabels,
+            "flex items-center gap-2 py-4",
+            expanded ? "px-3 md:px-4" : "justify-center px-2",
           )}
         >
-          mnemos-eyes
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onToggle}
-          title={t(collapsed ? "nav.expand" : "nav.collapse")}
-          aria-label={t(collapsed ? "nav.expand" : "nav.collapse")}
-          aria-expanded={!collapsed}
-          className={cn("hidden md:inline-flex", !collapsed && "ml-auto")}
-        >
-          {collapsed ? (
-            <PanelLeftOpen className="size-4" aria-hidden="true" />
-          ) : (
-            <PanelLeftClose className="size-4" aria-hidden="true" />
-          )}
-        </Button>
-      </div>
+          {expanded && <IrisLogo size={28} />}
+          <span
+            className={cn(
+              "min-w-0 truncate text-sm font-semibold tracking-wide",
+              hideLabels,
+            )}
+          >
+            mnemos-eyes
+          </span>
+          <Button
+            ref={toggleRef}
+            variant="ghost"
+            size="icon"
+            onClick={handleToggle}
+            title={t(expanded ? "nav.collapse" : "nav.expand")}
+            aria-label={t(expanded ? "nav.collapse" : "nav.expand")}
+            aria-expanded={expanded}
+            aria-controls="app-sidebar"
+            className={expanded ? "ml-auto" : undefined}
+          >
+            {expanded ? (
+              <PanelLeftClose className="size-4" aria-hidden="true" />
+            ) : (
+              <PanelLeftOpen className="size-4" aria-hidden="true" />
+            )}
+          </Button>
+        </div>
 
-      {/* overflow-x-hidden closes the horizontal-scroll class entirely: with
-       * `overflow-y-auto` alone the implicit visible-x computes to auto and
-       * any stray wide child would surface a scrollbar. */}
-      <nav
-        aria-label={t("nav.primary")}
-        className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-2"
-      >
-        <ul className="space-y-1">
-          {NAV_DOMAINS.map((domain) => (
-            <li key={domain.to}>
-              <DomainLink
-                domain={domain}
-                expanded={openDomain?.to === domain.to}
-                hideLabels={hideLabels}
-              />
-              {openDomain?.to === domain.to && domain.sections ? (
-                <ul
-                  className={cn(
-                    "mt-1 space-y-1",
-                    // Icon rail (manual collapse or < md): shallow indent, no
-                    // border — the second icon column must fit w-14.
-                    collapsed
-                      ? "ml-4"
-                      : "ml-4 md:ml-7 md:border-l md:border-border-subtle md:pl-2",
-                  )}
-                >
-                  {domain.sections.map((section) => (
-                    <li key={section.to}>
-                      <SectionLink
-                        section={section}
-                        pathname={pathname}
-                        hideLabels={hideLabels}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {openDomain?.to === domain.to && domain.to === "/docs" ? (
-                // The docs domain's THIRD layer (ADR 0016 / design spec §3):
-                // project groups with nested categories, expanded from the
-                // pathname alone. Owns its rail geometry + icon-rail fallback.
-                <DocsSidebarGroups collapsed={collapsed} hideLabels={hideLabels} />
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      </nav>
-
-      <div className="min-w-0 px-2 pb-3 md:px-3">
-        {/* Session-aware mode line (fix/login-feedback): the old static
-         * «L1 · только чтение» kept claiming read-only AFTER a login. The
-         * line now states the live contract — read-only without a ui token,
-         * active session with one — flipping reactively with the gate.
-         * Owner feedback: the live server version rides the same footer
-         * line («какая версия перед глазами») — hidden when the gateway
-         * does not expose it (mock/legacy). One cached boardHealth read,
-         * no new polling. */}
-        <p
-          className={cn(
-            "min-w-0 truncate px-2 py-2 text-xs text-foreground-muted",
-            collapsed ? "hidden" : "hidden md:block",
-          )}
+        {/* overflow-x-hidden closes the horizontal-scroll class entirely: with
+         * `overflow-y-auto` alone the implicit visible-x computes to auto and
+         * any stray wide child would surface a scrollbar. On the mobile
+         * overlay ANY click inside the nav is a navigation (or a no-op) — the
+         * overlay closes so the content is never left covered. */}
+        <nav
+          aria-label={t("nav.primary")}
+          onClick={() => {
+            if (overlay) setMobileOpen(false);
+          }}
+          className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-2"
         >
-          {t(sessionControl ? "nav.modeActive" : "nav.modeReadOnly")}
-          <VersionLabel />
-        </p>
-      </div>
-    </aside>
+          <ul className="space-y-1">
+            {NAV_DOMAINS.map((domain) => (
+              <li key={domain.to}>
+                <DomainLink
+                  domain={domain}
+                  expanded={openDomain?.to === domain.to}
+                  hideLabels={hideLabels}
+                  panelExpanded={expanded}
+                />
+                {openDomain?.to === domain.to && domain.sections ? (
+                  <ul
+                    className={cn(
+                      "mt-1 space-y-1",
+                      // Icon rail: shallow indent, no border — the second icon
+                      // column must fit w-14. Expanded: the deeper indented
+                      // rail with the hairline border (inline or overlay).
+                      expanded
+                        ? "ml-7 border-l border-border-subtle pl-2"
+                        : "ml-4",
+                    )}
+                  >
+                    {domain.sections.map((section) => (
+                      <li key={section.to}>
+                        <SectionLink
+                          section={section}
+                          pathname={pathname}
+                          hideLabels={hideLabels}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {openDomain?.to === domain.to && domain.to === "/docs" ? (
+                  // The docs domain's THIRD layer (ADR 0016 / design spec §3):
+                  // project groups with nested categories, expanded from the
+                  // pathname alone. Owns its rail geometry + icon-rail fallback.
+                  <DocsSidebarGroups
+                    collapsed={!expanded}
+                    hideLabels={hideLabels}
+                  />
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        <div className={cn("min-w-0 pb-3", expanded ? "px-3 md:px-4" : "px-2")}>
+          {/* Session-aware mode line (fix/login-feedback): the old static
+           * «L1 · только чтение» kept claiming read-only AFTER a login. The
+           * line states the live contract — three honest states (UI-22):
+           * a ui token = active session; no ui token but a paired device
+           * identity = «устройство подключено» (read-only by DEVICE scope,
+           * ADR 0012 §5); neither = read-only. Owner feedback: the live
+           * server version rides the same footer line («какая версия перед
+           * глазами») — hidden when the gateway does not expose it
+           * (mock/legacy). One cached boardHealth read, no new polling. */}
+          <p
+            className={cn(
+              "min-w-0 truncate px-2 py-2 text-xs text-foreground-muted",
+              expanded ? "block" : "hidden",
+            )}
+          >
+            {t(
+              sessionMode === "active"
+                ? "nav.modeActive"
+                : sessionMode === "device"
+                  ? "nav.modeDevice"
+                  : "nav.modeReadOnly",
+            )}
+            <VersionLabel />
+          </p>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -191,11 +325,16 @@ function DomainLink({
   domain,
   expanded,
   hideLabels,
+  panelExpanded,
 }: {
   domain: NavDomain;
   expanded: boolean;
-  /** Visibility classes for the label span — derived from `collapsed` up top. */
+  /** Visibility classes for the label span — derived from the panel mode. */
   hideLabels: string;
+  /** The PANEL expansion (distinct from the domain-open `expanded`): the
+   * "soon" badge rides it — the label spans carry truncate, which a badge
+   * must not, so its display is derived here directly. */
+  panelExpanded: boolean;
 }) {
   const t = useT();
   const { pathname } = useLocation();
@@ -221,8 +360,8 @@ function DomainLink({
         <span className={hideLabels}>{label}</span>
         <span
           className={cn(
-            "hidden shrink-0 rounded-full border border-border-subtle px-1.5 text-xs text-foreground-muted",
-            hideLabels,
+            "shrink-0 rounded-full border border-border-subtle px-1.5 text-xs text-foreground-muted",
+            panelExpanded ? "inline-block" : "hidden",
           )}
         >
           {t("nav.soon")}
@@ -261,7 +400,7 @@ function SectionLink({
 }: {
   section: NavSection;
   pathname: string;
-  /** Visibility classes for the label span — derived from `collapsed` up top. */
+  /** Visibility classes for the label span — derived from the panel mode. */
   hideLabels: string;
 }) {
   const t = useT();

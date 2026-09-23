@@ -45,6 +45,9 @@ export const ru = {
   // that kept lying after login.
   "nav.modeReadOnly": "только чтение",
   "nav.modeActive": "сессия активна",
+  // UI-22: paired device without an owner session — идентификация есть,
+  // записи нет (device scope v0 read-only, ADR 0012 §5).
+  "nav.modeDevice": "устройство подключено",
   // Sidebar version label (owner feedback: «какая версия перед глазами»).
   // {{version}} is the live server version from /api/health.
   "nav.versionAria": "Версия приложения {{version}}",
@@ -356,6 +359,13 @@ export const ru = {
   "login.toastRejected": "Токен отклонён",
   "login.toastRejectedDetail":
     "Сервер вернул 401 — окно входа открыто, вставьте актуальное значение.",
+  // UI-22 device beat: the paired device's mutations are refused server-side
+  // (403, device scope v0 read-only) — the honest toast instead of the login
+  // window (which is the 401 affordance and would promise a continuation
+  // that can never run from this device).
+  "login.deviceForbidden": "Действия с устройства закрыты",
+  "login.deviceForbiddenDetail":
+    "v0 — только чтение: мутации выполняются в сессии владельца (ADR 0012 §5).",
   "login.logoutFailed":
     "Не удалось завершить сессию на сервере — вы всё ещё вошли. Проверьте связь и повторите.",
 
