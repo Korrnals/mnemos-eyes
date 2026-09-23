@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { CheckCircle2, CircleAlert, X } from "lucide-react";
 import { useContext } from "react";
 import { useT } from "@/i18n";
+import { useSidebarOverlayOpen } from "@/lib/sidebarOverlayState";
 import { ToastContext } from "./toastContext";
 import type { ToastEntry } from "./toastContext";
 
@@ -18,16 +19,23 @@ import type { ToastEntry } from "./toastContext";
  *
  * Auto-dismiss timing lives in the provider; every toast also carries a
  * visible dismiss button (pointer + keyboard paths, WCAG 2.1.1).
+ *
+ * ME-002: while the mobile sidebar overlay dialog covers the page, the
+ * region is `inert` (toast actions are background chrome of a modal state —
+ * they must not stay in the a11y tree or the tab order). The auth overlay
+ * needs no such wiring here: it inerts the whole router tree from App.
  */
 export function ToastViewport() {
   const view = useContext(ToastContext);
   const t = useT();
+  const sidebarOverlayOpen = useSidebarOverlayOpen();
   if (!view) return null;
   const { entries, dismiss } = view;
   if (entries.length === 0) return null;
   return (
     <div
       aria-label={t("toasts.regionLabel")}
+      inert={sidebarOverlayOpen ? "" : undefined}
       className="fixed bottom-3 right-3 z-40 flex w-[min(22rem,calc(100vw-1.5rem))] flex-col gap-2"
     >
       {entries.map((entry) => (

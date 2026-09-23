@@ -18,6 +18,7 @@ import {
 import { useBoardHealth } from "@/hooks/usePulse";
 import { DocsSidebarGroups } from "@/features/docs/DocsSidebarGroups";
 import { useFocusTrap } from "@/lib/useFocusTrap";
+import { setSidebarOverlayOpen } from "@/lib/sidebarOverlayState";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
 import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
@@ -63,9 +64,11 @@ function useIsDesktop(): boolean {
  * - < md (mobile): the toggle is VISIBLE on the rail header; expanding opens
  *   an OVERLAY — the panel floats fixed over the content with a translucent
  *   backdrop (click / Esc closes), focus moves into the panel and returns to
- *   the toggle on close, the body scroll locks while it is open, and Tab
+ *   the toggle on close, the body scroll locks while it is open, Tab
  *   cycles inside the panel (useFocusTrap — a modal dialog must not leak
- *   keyboard focus into the covered page). The mobile
+ *   keyboard focus into the covered page), and the covered page leaves the
+ *   accessibility tree (ME-002: Shell + chrome surfaces apply `inert` off
+ *   the shared sidebarOverlayState store). The mobile
  *   overlay state is SESSION-ONLY: every entry/reload starts collapsed
  *   regardless of the stored flag, and a mobile toggle click never touches
  *   the persisted desktop intent.
@@ -126,8 +129,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   // Overlay a11y mechanics: focus moves into the panel on open, Esc closes
   // (focus back to the toggle), the document scroll locks while the overlay
-  // covers it. Effects never run on the server — SSR harnesses are safe.
+  // covers it, and the covered page leaves the accessibility tree — the
+  // overlay flag rides the shared store (ME-002), whose consumers (Shell's
+  // skip link + content column, the toast region, the update banner) apply
+  // `inert` to themselves. The dialog subtree — this aside, the toggle
+  // INCLUDED — never goes inert, so the focus return to the toggle below
+  // keeps working (programmatic focus cannot cross an inert ancestor).
+  // Effects never run on the server — SSR harnesses are safe.
   useEffect(() => {
+    setSidebarOverlayOpen(overlay);
     if (!overlay) return;
     panelRef.current?.focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
@@ -137,6 +147,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
+      setSidebarOverlayOpen(false);
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = previousOverflow;
     };

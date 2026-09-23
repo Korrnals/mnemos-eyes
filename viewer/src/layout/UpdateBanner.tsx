@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "@/i18n";
+import { useSidebarOverlayOpen } from "@/lib/sidebarOverlayState";
 import { cn } from "@/lib/utils";
 
 /**
@@ -52,6 +53,10 @@ export function UpdateBanner() {
   const t = useT();
   const [stale, setStale] = useState(false);
   const bootedWith = useRef<string | null>(null);
+  // ME-002: the banner's reload button is background chrome while the mobile
+  // sidebar overlay dialog is open — go inert with the rest of the page.
+  // (The auth overlay inerts the whole router tree from App; no wiring here.)
+  const sidebarOverlayOpen = useSidebarOverlayOpen();
 
   const check = useCallback(async (signal: AbortSignal) => {
     try {
@@ -87,6 +92,7 @@ export function UpdateBanner() {
   return (
     <div
       role="status"
+      inert={sidebarOverlayOpen ? "" : undefined}
       className={cn(
         "fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-md",
         "border border-border bg-well px-3 py-2 shadow-float",

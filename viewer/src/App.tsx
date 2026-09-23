@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import { AuthScreen } from "@/features/auth/AuthScreen";
 import { AuthProvider } from "@/features/auth/AuthProvider";
@@ -32,11 +33,36 @@ export default function App() {
       <ToastProvider>
         {/* Ф3 ui-token gate: one login window for all mutations, queued retries. */}
         <UiTokenProvider>
-          <RouterProvider router={router} />
+          <RouterBackground>
+            <RouterProvider router={router} />
+          </RouterBackground>
           <AuthOverlay />
         </UiTokenProvider>
       </ToastProvider>
     </AuthProvider>
+  );
+}
+
+/**
+ * ME-002: while the auth overlay is open, the whole app it covers (the
+ * router tree, including the Shell chrome and toasts) leaves the
+ * accessibility tree — `inert` blocks SR reach, focus and pointer in one
+ * attribute. AuthScreen is a route-level dialog: the read-only app stays
+ * MOUNTED underneath (permissive deployments let the user dismiss it), so
+ * without this the covered pages remain reachable to a virtual cursor.
+ *
+ * `display: contents` keeps the wrapper layout-invisible (the Shell owns
+ * every layout decision). Focus return stays intact: React removes the
+ * `inert` attribute in the same commit that unmounts AuthScreen, and the
+ * screen's cleanup focuses the invoking control only after that commit —
+ * the return target is focusable again by the time it receives focus.
+ */
+function RouterBackground({ children }: { children: ReactNode }) {
+  const { state } = useAuth();
+  return (
+    <div className="contents" inert={state.overlayOpen ? "" : undefined}>
+      {children}
+    </div>
   );
 }
 
