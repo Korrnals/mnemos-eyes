@@ -206,6 +206,76 @@ class TestCreateLeg:
         assert r.status_code == 422
 
 
+# ------------------------------------------------- ca_fingerprint (AGW-9)
+class TestCaFingerprint:
+    """The mint response carries the lab-CA fingerprint in the BOARD canon
+    (SHA256:base64 over DER — provisioner fingerprint_of_bytes parity) so
+    the UI can bake --expect-fp into the bootstrap command. Same source
+    cert as GET /api/poller/artifacts/ca.crt; advisory: '' (never a 5xx)
+    when the CA is unknown."""
+
+    @staticmethod
+    def _fake_ca(tmp_path, name="ca.crt", der_body=b"lab-ca-der-bytes-AGW9"):
+        import base64 as b64
+        ca = tmp_path / name
+        ca.write_bytes(
+            b"-----BEGIN CERTIFICATE-----\n"
+            + b64.b64encode(der_body) + b"\n-----END CERTIFICATE-----\n")
+        return ca
+
+    def test_canon_fingerprint_present_when_ca_mounted(self, client, ui_auth,
+                                                       app_module,
+                                                       monkeypatch, tmp_path):
+        from server.provisioner import fingerprint_of_bytes
+        ca = self._fake_ca(tmp_path, der_body=b"AGW-9 canonical bytes")
+        monkeypatch.setenv("VESMARO_TLS_CA_FILE", str(ca))
+        out = _create(client, ui_auth, label="vps-fp")
+        assert out["ca_fingerprint"] == fingerprint_of_bytes(
+            b"AGW-9 canonical bytes")
+        assert out["ca_fingerprint"].startswith("SHA256:")
+        assert "=" not in out["ca_fingerprint"]       # unpadded canon
+
+    def test_empty_when_ca_not_configured(self, client, ui_auth, monkeypatch):
+        monkeypatch.delenv("VESMARO_TLS_CA_FILE", raising=False)
+        out = _create(client, ui_auth, label="vps-nofp")
+        assert out["ca_fingerprint"] == ""
+
+    def test_empty_not_5xx_when_ca_file_missing(self, client, ui_auth,
+                                                monkeypatch):
+        monkeypatch.setenv("VESMARO_TLS_CA_FILE", "/nonexistent/ca.crt")
+        out = _create(client, ui_auth, label="vps-missing")
+        assert out["ca_fingerprint"] == ""
+
+    def test_cache_recomputes_when_env_repoints(self, client, ui_auth,
+                                                monkeypatch, tmp_path):
+        from server.provisioner import fingerprint_of_bytes
+        ca1 = self._fake_ca(tmp_path, "ca1.crt", b"first ca material")
+        ca2 = self._fake_ca(tmp_path, "ca2.crt", b"second ca material")
+        monkeypatch.setenv("VESMARO_TLS_CA_FILE", str(ca1))
+        first = _create(client, ui_auth, label="vps-c1")["ca_fingerprint"]
+        monkeypatch.setenv("VESMARO_TLS_CA_FILE", str(ca2))
+        second = _create(client, ui_auth, label="vps-c2")["ca_fingerprint"]
+        assert first == fingerprint_of_bytes(b"first ca material")
+        assert second == fingerprint_of_bytes(b"second ca material")
+
+    def test_matches_the_ca_served_by_the_artifact_route(self, client,
+                                                         ui_auth, app_module,
+                                                         monkeypatch,
+                                                         tmp_path):
+        """Same cert, same canon: the fingerprint the enrollment prints is
+        the one the bootstrap would compute over the downloaded CA."""
+        from server.provisioner import fingerprint_of_bytes
+        ca = self._fake_ca(tmp_path, der_body=b"the served cert DER")
+        monkeypatch.setenv("VESMARO_TLS_CA_FILE", str(ca))
+        served = client.get("/api/poller/artifacts/ca.crt").content
+        assert served == ca.read_bytes()
+        out = _create(client, ui_auth, label="vps-same")
+        # the canon runs over the DER (what `openssl x509 -outform DER`
+        # yields in the bootstrap), never over the PEM text
+        assert out["ca_fingerprint"] == fingerprint_of_bytes(
+            b"the served cert DER")
+
+
 # ---------------------------------------------------------- registration leg
 class TestRegisterLeg:
     def test_register_creates_pending_with_origin(
