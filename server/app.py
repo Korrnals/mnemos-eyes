@@ -85,6 +85,8 @@ from .store import (
     VALID_STATUSES,
     presence_from_last_seen,
 )
+from . import provisioner as provisioning
+from . import provisioner as provisioner_mod
 from .task_inbox import _hits_of as _listing_hits_of
 from .task_inbox import background_refresher as inbox_background_refresher
 from .task_inbox import refresh_inbox
@@ -631,6 +633,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     validation_task = asyncio.create_task(_validation_sweeper())
     # ---- CV-7 (ADR 0012 §6): pairing/device TTL sweep (staggered).
     pairing_sweep_task = asyncio.create_task(_pairing_sweeper())
+    # ---- wave 4 provisioning: live jobs die with the old process (their
+    # transit token context is gone) — honest failure at boot, then the
+    # worker accepts new jobs (when provisioner.enabled).
+    restarted = provisioning.fail_stale(store, _broadcast)
+    if restarted:
+        logging.getLogger("vesmaro.provisioner").info(
+            "provision jobs failed on restart: %d", restarted)
     yield
     task.cancel()
     inbox_task.cancel()
@@ -1391,6 +1400,44 @@ class HarnessListOut(_ApiModel):
 class HarnessStateOut(_ApiModel):
     ok: bool
     harness: HarnessOut
+
+
+# Provisioner contracts (wave 4, blocks A/B/D variant α): the owner hands
+# the board an install-time SSH job; the board runs the FROZEN bootstrap
+# one-liner remotely and watches the enrollment. The enrollment token and
+# the ssh secret NEVER appear in a response (transit-only invariant).
+class ProvisionAuth(BaseModel):
+    kind: str = Field(pattern="^(password|key|alias)$")
+    secret: str = Field(default="", max_length=8192)
+    passphrase: str = Field(default="", max_length=8192)
+
+
+class ProvisionBody(BaseModel):
+    name: str = Field(default="", max_length=120)
+    host: str = Field(min_length=1, max_length=200)
+    port: int = Field(default=22, ge=1, le=65535)
+    auth: ProvisionAuth
+    harness_hint: str = Field(default="zcode", max_length=60)
+    board_url_for_host: str = Field(default="", max_length=200)
+    expected_host_key_fingerprint: str = Field(default="", max_length=128)
+    reuse_enrollment_id: str = Field(default="", max_length=64)
+
+
+class ProvisionCreatedOut(_ApiModel):
+    ok: bool
+    job_id: str
+    enrollment_id: str
+    state: str = "queued"
+
+
+class ProvisionJobOut(_ApiModel):
+    ok: bool
+    job: dict[str, Any]
+    enrollment: dict[str, Any]
+
+
+class HostRepinBody(BaseModel):
+    fingerprint: str = Field(min_length=8, max_length=128)
 
 
 # Enrollment contracts (ADR 0009 Amd 2 §4 supplement): one-time mne_ tokens
@@ -3754,6 +3801,194 @@ async def delete_harness(name: str, request: Request) -> OkOut:
     except HarnessError as exc:
         raise _harness_http(exc) from exc
     _broadcast({"kind": "harness.removed", "name": row["name"]})
+    return {"ok": True}
+
+
+# --------------------------------------- provisioner (wave 4, blocks A/B/D)
+# Variant α: the BOARD drives an install-time SSH job to run the frozen
+# bootstrap one-liner on the remote machine. Security posture (design
+# review): one global active-job cap (2) + one active job per host:port +
+# a per-host cooldown + a dedicated rate limit tighter than the ui one;
+# password auth is a deployment flag (default OFF); the enrollment token
+# and the ssh secret are TRANSIT-ONLY (worker task context, never SQLite/
+# logs/SSE); host keys are TOFU+pin with re-pin as a separate owner act.
+_PROVISION_RATE_LIMIT = 5        # creations per client ...
+_PROVISION_RATE_WINDOW = 60.0    # ... per sliding minute (tighter than ui)
+_provision_limiter = RateLimiter(
+    limit=_PROVISION_RATE_LIMIT, window=_PROVISION_RATE_WINDOW)
+_PROVISION_COOLDOWN_S = 90.0     # per host:port
+_PROVISION_ACTIVE_CAP = 2        # global active jobs
+_PROVISION_KEY_FP_RE = re.compile(r"^(SHA256:[A-Za-z0-9+/]{43}|[a-f0-9]{64})$")
+
+
+def _created_ts(iso: str) -> float:
+    try:
+        return time.mktime(time.strptime(iso, "%Y-%m-%dT%H:%M:%S+00:00")) - time.timezone
+    except ValueError:
+        return 0.0
+
+
+def _provisioner_enabled() -> bool:
+    return os.environ.get("VESMARO_PROVISIONER_ENABLED", "1") == "1"
+
+
+def _provision_password_auth() -> bool:
+    return os.environ.get("VESMARO_PROVISION_PASSWORD_AUTH", "0") == "1"
+
+
+def _key_fingerprint_of(secret: str) -> str:
+    """Best-effort public fingerprint for the job row (NEVER the key)."""
+    import base64
+    import hashlib
+    digest = hashlib.sha256(secret.encode("utf-8")).digest()
+    return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
+
+
+@app.post("/api/executors/provision", status_code=202)
+async def provision_executor(body: ProvisionBody,
+                             request: Request) -> ProvisionCreatedOut:
+    """Queue an install-time provisioning job (ui-token; wave 4). 202
+    carries the job id and the enrollment id — NEVER the mne_ token (the
+    worker consumes it transit-only). Anti-spray: a global cap of 2 live
+    jobs, one live job per host:port (409), a 90 s per-host cooldown
+    (429), and a dedicated 5/60 s rate limit. password auth answers 422
+    while the deployment flag is off."""
+    _guard_ui_write(request)
+    if not _provisioner_enabled():
+        raise HTTPException(
+            503, "the provisioner is disabled on this board (fail-closed; "
+                 "enable via the chart value provisioner.enabled)")
+    if body.auth.kind == "password" and not _provision_password_auth():
+        raise HTTPException(
+            422, "password ssh auth is disabled on this board (default) — "
+                 "use key or alias auth, or enable it via the chart value "
+                 "provisioner.passwordAuth")
+    client_ip = request.client.host if request.client else "unknown"
+    if not _provision_limiter.acquire(client_ip):
+        raise HTTPException(429, f"provision rate limit exceeded "
+                                 f"({_PROVISION_RATE_LIMIT} per "
+                                 f"{_PROVISION_RATE_WINDOW:.0f}s per client)")
+    if (body.auth.kind in ("password", "key")
+            and not body.auth.secret.strip()):
+        raise HTTPException(422, f"{body.auth.kind} auth requires secret")
+    if (body.expected_host_key_fingerprint
+            and not _PROVISION_KEY_FP_RE.match(
+                body.expected_host_key_fingerprint.strip())):
+        raise HTTPException(422, "expected_host_key_fingerprint must be "
+                                 "SHA256:base64 or hex sha256")
+
+    host = body.host.strip()
+    if live := store.active_job_for_host(host, body.port):
+        raise HTTPException(409, f"a provisioning job for {host}:{body.port} "
+                                 f"is already live ({live['id']}, {live['state']})")
+    if (last := store.last_provision_job_for_host(host, body.port)) is not None:
+        age = time.time() - _created_ts(last["created_at"])
+        if age < _PROVISION_COOLDOWN_S:
+            raise HTTPException(
+                429, f"host {host}:{body.port} is in cooldown — retry in "
+                     f"{int(_PROVISION_COOLDOWN_S - age)}s")
+    if store.count_active_provision_jobs() >= _PROVISION_ACTIVE_CAP:
+        raise HTTPException(429, f"the global live-job cap "
+                                 f"({_PROVISION_ACTIVE_CAP}) is reached — wait "
+                                 "for a job to finish")
+
+    board_url = (body.board_url_for_host.strip()
+                 or os.environ.get("VESMARO_PUBLIC_BOARD_URL", "").strip())
+    if not board_url.startswith("https://"):
+        raise HTTPException(
+            422, "board_url_for_host must be https and must resolve FROM the "
+                 "target machine (or set VESMARO_PUBLIC_BOARD_URL)")
+
+    name = (body.name.strip() or host)
+    # A live enrollment may be reused; otherwise the route mints one
+    # ATOMICALLY with the job (the token goes to the worker's transit
+    # context, never into the response or the DB).
+    if body.reuse_enrollment_id:
+        row = store.get_enrollment(body.reuse_enrollment_id.strip())
+        if row is None or row.get("state") != "created":
+            raise HTTPException(422, "reuse_enrollment_id is not a live token")
+        enrollment_id = row["id"]
+        mne_token = provisioning.reveal_by_enrollment(enrollment_id)
+        if not mne_token:
+            raise HTTPException(
+                422, "reuse_enrollment_id has no live token material — hash-only "
+                     "storage makes UI-minted tokens unreusable; leave the field "
+                     "empty to mint a fresh one")
+    else:
+        try:
+            row, mne_token = store.create_enrollment(
+                label=f"provision:{host}", harness_hint=body.harness_hint,
+                name_hint=name)
+        except EnrollmentQuotaError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        enrollment_id = row["enrollment_id"]
+
+    key_fp = (_key_fingerprint_of(body.auth.secret) if body.auth.kind == "key"
+              else ("alias:" + host if body.auth.kind == "alias" else
+                    _key_fingerprint_of(body.auth.secret)))
+    job = store.create_provision_job(
+        host=host, port=body.port, auth_kind=body.auth.kind,
+        key_fingerprint=key_fp, harness_hint=body.harness_hint,
+        board_url_for_host=board_url, enrollment_id=enrollment_id,
+        expected_host_key_fingerprint=body.expected_host_key_fingerprint.strip())
+    provisioning.remember(job["id"], enrollment_id, mne_token)
+    provisioning.get(store, _broadcast).start_job(provisioner_mod.JobFacts(
+        job_id=job["id"], host=host, port=body.port, auth_kind=body.auth.kind,
+        secret=provisioner_mod.Redacted(body.auth.secret) if body.auth.secret else None,
+        passphrase=(provisioner_mod.Redacted(body.auth.passphrase)
+                    if body.auth.passphrase else None),
+        username="", harness_hint=body.harness_hint,
+        enrollment_id=enrollment_id, executor_name=name, board_url=board_url,
+        bootstrap_token=provisioner_mod.Redacted(mne_token),
+        expected_host_key_fingerprint=body.expected_host_key_fingerprint.strip()))
+    _notify_and_broadcast(
+        "system", f"Подключение {host}:{body.port} запущено",
+        f"provision job {job['id']} ({body.auth.kind})",
+        None, {"kind": "provisioning.created", "job_id": job["id"],
+               "host": host, "port": body.port,
+               "enrollment_id": enrollment_id})
+    return {"ok": True, "job_id": job["id"], "enrollment_id": enrollment_id,
+            "state": job["state"]}
+
+
+@app.get("/api/executors/provision/{job_id}")
+async def provision_job_status(job_id: str, request: Request) -> ProvisionJobOut:
+    """Job progress for the owner UI (ui-token): state, steps, the pinned
+    host-key fingerprint and the linked enrollment. No secrets travel."""
+    _guard_ui_write(request)
+    row = store.get_provision_job(job_id)
+    if row is None:
+        raise HTTPException(404, f"provision job {job_id} not found")
+    enrollment: dict[str, Any] = {}
+    if row["enrollment_id"]:
+        erow = store.get_enrollment(row["enrollment_id"])
+        if erow is not None:
+            enrollment = {"state": erow["state"], "expires_at": erow["expires_at"],
+                          "executor_id": erow.get("executor_id", "")}
+    return {"ok": True, "job": row, "enrollment": enrollment}
+
+
+@app.post("/api/executors/provision/host/{host}/repin")
+async def provision_repin(host: str, body: HostRepinBody,
+                          request: Request) -> OkOut:
+    """Re-pin a host key (ui-token): a separate OWNER action with the
+    old→new pair in the audit (provisioning.host_key_repinned). Use after
+    a deliberate host reinstall — never to silence a mismatch."""
+    _guard_ui_write(request)
+    fp = body.fingerprint.strip()
+    if not _PROVISION_KEY_FP_RE.match(fp):
+        raise HTTPException(422, "fingerprint must be SHA256:base64 or hex sha256")
+    old = store.get_host_pin(host)
+    store.set_host_pin(host, fp)
+    store.log_board_event("provisioning.host_key_repinned", {
+        "host": host,
+        "old": old["fingerprint"] if old else "",
+        "new": fp,
+    })
+    _broadcast({"kind": "provisioning.repinned", "host": host,
+                "fingerprint": fp})
     return {"ok": True}
 
 
