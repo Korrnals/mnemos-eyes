@@ -110,8 +110,22 @@ export function stripLeadingH1(body: string): string {
 }
 
 /** First non-empty paragraph of a body — the category-row description. */
+/**
+ * Leading provenance banners (GENERATED/curated whole-line `<!-- ... -->`
+ * comments) are presentation noise — the sidecar badge carries provenance
+ * (АРХКОМ-8 verdict 1). Line-based by design: a comment embedded inside a
+ * content paragraph is NOT stripped here. Shared by the article pipeline
+ * (Markdown.tsx) and every description/snippet consumer.
+ */
+export function stripLeadingBanners(source: string): string {
+  const lines = source.split("\n");
+  let index = 0;
+  while (index < lines.length && /^\s*<!--.*-->\s*$/.test(lines[index])) index += 1;
+  return index === 0 ? source : lines.slice(index).join("\n").replace(/^\s+/, "");
+}
+
 export function firstParagraph(body: string): string {
-  const plain = stripLeadingH1(body)
+  const plain = stripLeadingBanners(body)
     // Fence contents are code, not prose — drop whole fenced blocks.
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```[\s\S]*$/g, " ");
