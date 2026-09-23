@@ -18,13 +18,14 @@ scan continues.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from . import mnemos_client
 from .memory_registry import ServerRegistry
-from .store import Store
+from .store import INBOX_EDITABLE_FIELDS, Store
 
 log = logging.getLogger("vesmaro.inbox")
 
@@ -45,6 +46,16 @@ EXCERPT_CHARS = 300
 SEVERITY_MAP = {
     "critical": "critical", "high": "high", "medium": "normal", "low": "low",
 }
+# board priority → severity:<x> tag (inverse, used when writing an edited
+# revision back to mnemos: board 'normal' is spelled severity:medium there)
+REVERSE_SEVERITY_MAP = {v: k for k, v in SEVERITY_MAP.items()}
+
+# UI-25: fields of the FUTURE task the owner may correct before adopting.
+# They ride the mirror row's ``edits`` JSON column (store.save_inbox_edits);
+# every other key in that JSON is bookkeeping (revision sync state) and is
+# never merged into task fields. The dictionary lives on the store (single
+# source, no import cycle); aliased here for the edit/revision helpers.
+EDITABLE_FIELDS = INBOX_EDITABLE_FIELDS
 
 # owner:<slug> tag → canonical @GCW specialist name (same map as the import
 # script; unknown slugs degrade to "@<slug>" rather than being dropped)
@@ -160,6 +171,81 @@ async def refresh_inbox(registry: ServerRegistry, store: Store) -> dict[str, Any
         "found": found,
         "new": new,
         "errors": errors,
+    }
+
+
+def parse_edits(raw: str | None) -> dict[str, Any]:
+    """Parse the mirror row's ``edits`` JSON (''/null → {}). Defensive: a
+    malformed blob degrades to {} — the base fields stay authoritative and
+    the row remains adoptable (an edit is an overlay, never a corruptor)."""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        log.warning("inbox edits blob is not JSON — ignored")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def field_edits(edits: dict[str, Any]) -> dict[str, str]:
+    """Only the owner-editable task fields of an edits blob — the overlay
+    the adopt flow merges over the base mirror fields. Empty strings are
+    meaningful (the owner CLEARED the field), never skipped."""
+    return {
+        key: str(edits[key]) for key in EDITABLE_FIELDS
+        if isinstance(edits.get(key), str)
+    }
+
+
+def revision_memory_body(rec: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any]:
+    """POST /memories body for the EDITED revision of a task:queue record
+    (UI-25 sync-back).
+
+    mnemos exposes NO content-update over HTTP (checked against the 4.1.0
+    prod surface and the 4.3.0 source: no PATCH/PUT /memories route —
+    ``manager.update`` is internal-only), so the honest minimal mechanism is
+    a NEW revision record on the same server:
+
+    - ``title``/``content`` carry the edited fields (content = the edited
+      summary, or the board-known excerpt when only other fields changed —
+      SEC-4: the board never holds more than the excerpt);
+    - ``tags`` = the source tags with ``project:``/``severity:`` replaced
+      by the edited values, plus the ``task:edit`` provenance tag;
+      ``task:queue`` is KEPT so the queue keeps describing this pending
+      work (the mirror re-sees the revision and dedups it via the native
+      task's memory_ids link);
+    - ``metadata.supersedes`` names the original memory id.
+
+    The original record is intentionally left untouched: mutability is not
+    an mnemos API concept — the revision is the supersession record."""
+    raw_tags = rec.get("tags") or []
+    if isinstance(raw_tags, str):  # raw mirror rows carry tags as JSON text
+        try:
+            raw_tags = json.loads(raw_tags)
+        except ValueError:
+            raw_tags = []
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+    tags = [t for t in raw_tags if isinstance(t, str)]
+    overlaid = field_edits(edits)
+    if "project" in overlaid:
+        tags = [t for t in tags if not t.startswith("project:")]
+        if overlaid["project"]:  # cleared project → no project: tag at all
+            tags.append(f"project:{overlaid['project']}")
+    if "priority" in overlaid:
+        tags = [t for t in tags if not t.startswith("severity:")]
+        tags.append(f"severity:{REVERSE_SEVERITY_MAP.get(overlaid['priority'], 'medium')}")
+    tags.append("task:edit")
+    return {
+        "title": overlaid.get("title") or rec.get("title") or "",
+        "content": overlaid.get("summary") or rec.get("excerpt") or "",
+        "tags": tags,
+        "memory_type": "note",
+        "metadata": {
+            "supersedes": rec.get("memory_id", ""),
+            "edited_by": "vesmaro-eyes:inbox-edit",
+        },
     }
 
 

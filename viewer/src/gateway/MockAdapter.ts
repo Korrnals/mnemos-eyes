@@ -2,7 +2,7 @@ import type { MemoryGateway } from "./MemoryGateway";
 import type { InboxParams } from "./BoardAdapter";
 import { resolveRoutingAnnotation } from "./routing";
 import { ApiError } from "@/lib/errors";
-import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
+import { MOCK_INBOX_MEMORY, MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
   MOCK_ARCHIVED_TASK,
   MOCK_ASSIGNMENTS,
@@ -57,6 +57,7 @@ import type {
   HookPatchInput,
   HookRule,
   HooksPage,
+  InboxEditInput,
   InboxRefreshResult,
   LaunchRow,
   LaunchesPage,
@@ -283,7 +284,9 @@ export class MockAdapter implements MemoryGateway {
     signal?: AbortSignal,
   ): Promise<Memory> {
     await this.delay(signal);
-    const memory = MOCK_MEMORIES.find((candidate) => candidate.id === id);
+    const memory =
+      (id === MOCK_INBOX_MEMORY.id ? MOCK_INBOX_MEMORY : undefined) ??
+      MOCK_MEMORIES.find((candidate) => candidate.id === id);
     if (!memory) {
       throw new ApiError(404, `Memory "${id}" not found`, {
         url: `mock:/memories/${id}`,
@@ -811,6 +814,59 @@ export class MockAdapter implements MemoryGateway {
       adopted_task_id: created.id,
     };
     return created;
+  }
+
+  /**
+   * UI-25 pre-adoption edit. The mock mirrors the wire semantics: the patch
+   * merges into the row's `edits` overlay and the row fields shown here ARE
+   * the effective projection (the playground keeps a single flat copy — the
+   * server keeps base + overlay separately; documented divergence).
+   */
+  async patchInboxItem(
+    memoryId: string,
+    patch: InboxEditInput,
+    signal?: AbortSignal,
+  ): Promise<TaskInboxEntry> {
+    await this.delay(signal);
+    const index = this.inboxItems.findIndex((row) => row.memory_id === memoryId);
+    if (index === -1) {
+      throw new ApiError(404, `inbox row '${memoryId}' not found`, {
+        url: `mock:/api/tasks/inbox/${memoryId}`,
+      });
+    }
+    const item = this.inboxItems[index];
+    if (item.adopted) {
+      throw new ApiError(409, "inbox record already adopted", {
+        url: `mock:/api/tasks/inbox/${memoryId}`,
+      });
+    }
+    if (patch.title != null && patch.title.trim().length === 0) {
+      // Wire parity: TaskInboxEditSpec.title is min_length=1 server-side.
+      throw new ApiError(422, "title must be 1..200 characters", {
+        url: `mock:/api/tasks/inbox/${memoryId}`,
+      });
+    }
+    const overlay: Record<string, string> = { ...(item.edits ?? {}) };
+    const next = { ...item };
+    if (patch.title != null && patch.title !== "") {
+      overlay.title = patch.title;
+      next.title = patch.title;
+    }
+    if (patch.summary != null) {
+      overlay.summary = patch.summary;
+      next.excerpt = patch.summary;
+    }
+    if (patch.priority != null) {
+      overlay.priority = patch.priority;
+      next.priority = patch.priority;
+    }
+    if (patch.project != null) {
+      overlay.project = patch.project;
+      next.project = patch.project;
+    }
+    const updated: TaskInboxEntry = { ...next, edits: overlay };
+    this.inboxItems[index] = updated;
+    return { ...updated };
   }
 
   async refreshInbox(signal?: AbortSignal): Promise<InboxRefreshResult> {

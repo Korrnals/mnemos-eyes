@@ -73,6 +73,10 @@ VALID_ENVS = frozenset({"cluster", "laptop", "local", "cloud", "unknown"})
 # BE-12: task priority dictionary. `normal` is both the API default and the
 # column DEFAULT, so pre-migration rows read `normal` with no backfill.
 TASK_PRIORITIES = frozenset({"critical", "high", "normal", "low"})
+# UI-25: owner-editable fields of a FUTURE task on an inbox mirror row
+# (pre-adoption corrections). Anything else inside the row's ``edits`` JSON
+# is bookkeeping (e.g. revision sync state) and is never overlaid.
+INBOX_EDITABLE_FIELDS = ("title", "summary", "priority", "project")
 # BE-12: content fields guarded by the 24h edit window. `status` is
 # deliberately NOT here: status changes are workflow transitions (column
 # moves, UI-8 «Вернуть в работу» → PATCH status), free at any task age —
@@ -766,7 +770,8 @@ CREATE TABLE IF NOT EXISTS task_inbox (
     specialist        TEXT NOT NULL DEFAULT '',
     source_created_at TEXT NOT NULL DEFAULT '',
     last_seen         TEXT NOT NULL,
-    adopted_task_id   TEXT
+    adopted_task_id   TEXT,
+    edits             TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS task_assignments (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1233,6 +1238,15 @@ class Store:
             db.execute(
                 "ALTER TABLE executors "
                 "ADD COLUMN registered_via TEXT NOT NULL DEFAULT ''")
+        # UI-25: owner edits of an inbox row BEFORE adoption (title/summary/
+        # priority/project overlay as JSON; '' = unedited). Additive ALTER —
+        # the '' DEFAULT covers pre-UI-25 rows; no SEED_VERSION bump.
+        icols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(task_inbox)").fetchall()}
+        if "edits" not in icols:
+            db.execute(
+                "ALTER TABLE task_inbox "
+                "ADD COLUMN edits TEXT NOT NULL DEFAULT ''")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
@@ -4653,7 +4667,9 @@ class Store:
     # refreshed ONLY for records their server actually returned, so a record
     # that vanished from mnemos simply ages out into "stale" instead of
     # being deleted — the mirror never destroys data. adopted_task_id is
-    # write-once from the adopt flow and survives re-scans.
+    # write-once from the adopt flow and survives re-scans. The ``edits``
+    # JSON (UI-25, owner corrections before adoption) survives re-scans the
+    # same way — it is an overlay the API merges over the base fields.
     INBOX_STALE_SECONDS = 30 * 60
     INBOX_REFRESHED_AT_KEY = "task_inbox_refreshed_at"
 
@@ -4714,24 +4730,60 @@ class Store:
             )
         return cur.rowcount > 0
 
+    def save_inbox_edits(self, memory_id: str, edits: dict[str, Any]) -> bool:
+        """Merge owner field edits into the row's ``edits`` JSON (UI-25).
+        Provided keys override, omitted keys keep their previous value;
+        bookkeeping keys (revision sync state) are preserved. False when the
+        row is gone."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT edits FROM task_inbox WHERE memory_id=?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            current = _loads(row["edits"]) if row["edits"] else {}
+            merged = {**current, **edits}
+            cur = db.execute(
+                "UPDATE task_inbox SET edits=? WHERE memory_id=?",
+                (json.dumps(merged, ensure_ascii=False), memory_id),
+            )
+        return cur.rowcount > 0
+
+    @staticmethod
+    def _inbox_overlay(edits_raw: str) -> dict[str, str]:
+        """Editable-field overlay of one row's edits JSON. Empty strings are
+        meaningful (an owner CLEARED the field) — only non-str junk drops."""
+        data = _loads(edits_raw) if edits_raw else {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            key: str(data[key]) for key in INBOX_EDITABLE_FIELDS
+            if isinstance(data.get(key), str)
+        }
+
     def inbox_refreshed_at(self) -> str:
         return self.get_meta(self.INBOX_REFRESHED_AT_KEY) or ""
 
     def list_inbox(self, scope: str = "all", project: str = "",
-                   include_adopted: bool = False) -> list[dict[str, Any]]:
+                   include_adopted: bool = False,
+                   memory_id: str | None = None) -> list[dict[str, Any]]:
         """Inbox projection for the API.
 
         Filters: ``scope`` is 'all' or one source server name (mirror rows
         know their server); ``project`` is an exact match; rows already
-        adopted into a native task are hidden unless include_adopted.
-        Dedup (unconditional): rows whose memory_id appears in ANY native
-        task's memory_ids — archived included, the bulk import included —
-        never leak back into the inbox. ``stale`` = last_seen older than
+        adopted into a native task are hidden unless include_adopted;
+        ``memory_id`` pins one row (UI-25 PATCH answer). Dedup
+        (unconditional): rows whose memory_id appears in ANY native task's
+        memory_ids — archived included, the bulk import included — never
+        leak back into the inbox. ``stale`` = last_seen older than
         INBOX_STALE_SECONDS, i.e. the source memory stopped coming back.
         """
         q = "SELECT * FROM task_inbox"
         where: list[str] = []
         params: list[Any] = []
+        if memory_id is not None:
+            where.append("memory_id=?")
+            params.append(memory_id)
         if scope and scope != "all":
             where.append("server=?")
             params.append(scope)
@@ -4752,20 +4804,25 @@ class Store:
         for r in rows:
             if r["memory_id"] in linked:
                 continue
+            # UI-25: the owner's pre-adoption edits are an overlay — the
+            # projection shows the EFFECTIVE fields plus the raw overlay
+            # (None when unedited) so clients can flag/prefill edits.
+            overlay = self._inbox_overlay(r["edits"])
             items.append({
                 "memory_id": r["memory_id"],
                 "server": r["server"],
-                "project": r["project"],
-                "title": r["title"],
-                "excerpt": r["excerpt"],
+                "project": overlay.get("project", r["project"]),
+                "title": overlay.get("title", r["title"]),
+                "excerpt": overlay.get("summary", r["excerpt"]),
                 "tags": _loads(r["tags"]),
-                "priority": r["priority"],
+                "priority": overlay.get("priority", r["priority"]),
                 "specialist": r["specialist"],
                 "created_at": r["source_created_at"],
                 "last_seen": r["last_seen"],
                 "stale": _age_seconds(r["last_seen"]) > self.INBOX_STALE_SECONDS,
                 "adopted": r["adopted_task_id"] is not None,
                 "adopted_task_id": r["adopted_task_id"],
+                "edits": overlay or None,
             })
         return items
 

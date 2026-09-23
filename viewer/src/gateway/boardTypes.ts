@@ -175,6 +175,14 @@ export type TaskUnarchiveResult = Schemas["UnarchiveOut"];
  */
 export type InboxRefreshResult = Schemas["TaskInboxRefreshOut"];
 
+/**
+ * Pre-adoption edit payload — board `TaskInboxEditSpec` schema
+ * (`PATCH /api/tasks/inbox/{memory_id}`, UI-25). Partial: omitted fields
+ * stay at their current mirror/edited value; the server stores the overlay
+ * and adopt merges it over the mirror fields.
+ */
+export type InboxEditInput = Schemas["TaskInboxEditSpec"];
+
 // --- AGW-1 agents-domain wire types (ARCH-9, ADR 0009 Amd 2; SCHED-1) ----------
 // Hand-written refinements over the generated schemas where the server
 // answers anonymous dicts (routing, executor-list meta) or enum-ish strings;
