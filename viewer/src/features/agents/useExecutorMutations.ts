@@ -38,6 +38,17 @@ interface RunOptions {
   errorTitleKey: TranslationKey;
 }
 
+/**
+ * Optional run-lifecycle callbacks (PR #99 review P3-1): onSuccess runs
+ * after the write + its toast; onError runs ONLY on terminal failures —
+ * a 401 goes to the token gate with the run queued for retry, so the
+ * caller keeps its in-flight state through the dialog.
+ */
+export interface ExecutorMutationCallbacks {
+  onSuccess?: () => void;
+  onError?: () => void;
+}
+
 export interface ExecutorMutationDeps {
   /** Gate runner (UiTokenGate.runAuthorized). */
   runAuthorized: (run: () => Promise<void>, onDeferred?: () => void) => void;
@@ -69,10 +80,15 @@ export function createExecutorMutations(deps: ExecutorMutationDeps) {
     void queryClient.invalidateQueries({ queryKey: keys.agents.assignments.all });
   };
 
-  const run = (options: RunOptions, fn: () => Promise<void>): void => {
+  const run = (
+    options: RunOptions,
+    fn: () => Promise<void>,
+    callbacks?: ExecutorMutationCallbacks,
+  ): void => {
     runAuthorized(async () => {
       try {
         await fn();
+        callbacks?.onSuccess?.();
       } catch (error) {
         // 401 escalates to the token gate (drop token → dialog → retry).
         if (isApiError(error) && error.status === 401) throw error;
@@ -81,6 +97,7 @@ export function createExecutorMutations(deps: ExecutorMutationDeps) {
           title: t(options.errorTitleKey),
           detail: error instanceof Error ? error.message : undefined,
         });
+        callbacks?.onError?.();
       }
     });
   };
@@ -92,8 +109,13 @@ export function createExecutorMutations(deps: ExecutorMutationDeps) {
    * Approve a pending registration (`PATCH {state:"approved"}`). The
    * MAIN action of the page — the whole connect flow funnels here. The
    * toast honestly points at the follow-up: routing needs «Включить».
+   * Optional callbacks (PR #99 review P3-1): the paste-back verify
+   * consumes its one-shot context in onSuccess — never before the write.
    */
-  const approveExecutor = (executor: ExecutorItem): void => {
+  const approveExecutor = (
+    executor: ExecutorItem,
+    callbacks?: ExecutorMutationCallbacks,
+  ): void => {
     run({ errorTitleKey: "agents.executors.actionFailed" }, async () => {
       await patch(executor, { state: "approved" });
       toast.push({
@@ -101,7 +123,7 @@ export function createExecutorMutations(deps: ExecutorMutationDeps) {
         title: t("agents.executors.approved", { name: executor.name }),
         detail: t("agents.executors.approvedDetail"),
       });
-    });
+    }, callbacks);
   };
 
   /** Flip the routing kill-switch (`PATCH {enabled:bool}`). */

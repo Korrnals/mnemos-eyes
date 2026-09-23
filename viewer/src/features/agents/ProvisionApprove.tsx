@@ -41,12 +41,20 @@ export function PasteBackApprove({
   const mutations = useExecutorMutations();
   const { copied, copy } = useHonestCopy();
   const [tail, setTail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const matches = !tofu || pasteBackMatches(fingerprint, tail);
   const approve = (): void => {
-    if (!matches) return;
-    clearProvisionApprove(executor.id);
-    mutations.approveExecutor(executor);
+    if (!matches || submitting) return;
+    setSubmitting(true);
+    mutations.approveExecutor(executor, {
+      // PR #99 review P3-1: consume the one-shot context ONLY after the
+      // PATCH succeeded — a network failure keeps the verify armed for
+      // the re-opened sheet instead of silently degrading to the plain
+      // approve. onError re-arms the button (a 401 stays with the gate).
+      onSuccess: () => clearProvisionApprove(executor.id),
+      onError: () => setSubmitting(false),
+    });
   };
 
   return (
@@ -108,8 +116,8 @@ export function PasteBackApprove({
         <Button
           type="button"
           size="sm"
-          disabled={!matches}
-          aria-disabled={!matches}
+          disabled={!matches || submitting}
+          aria-disabled={!matches || submitting}
           onClick={approve}
         >
           {t("agents.registry.approve")}

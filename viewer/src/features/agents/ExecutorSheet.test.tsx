@@ -7,6 +7,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ExecutorSheet } from "./ExecutorSheet";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
+import { ApiError } from "@/lib/errors";
+import { rememberProvisionApprove } from "./provisionContext";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
@@ -358,6 +360,60 @@ describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
       .query<HTMLButtonElement>("button")
       .find((candidate) => candidate.textContent?.includes("Approve"))!;
     expect(approve.disabled).toBe(false);
+    mount.root.unmount();
+  });
+
+  it("PR #99 P3-1: a FAILED approve keeps the context — the re-opened sheet still verifies", async () => {
+    sessionStorage.setItem(
+      "vesmaro.provision-approve.exec-copilot-pending",
+      JSON.stringify({ fingerprint: hexPin, tofu: true, jobId: "pj-1" }),
+    );
+    const mount = await mountCard("exec-copilot-pending");
+    vi.spyOn(mount.gateway, "patchExecutor").mockRejectedValue(
+      new ApiError(500, "board unreachable", { url: "mock:/api/executors" }),
+    );
+    const input = mount.query<HTMLInputElement>("input[maxlength='8']")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, tail);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickButton(mount, "Approve");
+    // The server text landed in the toast; the one-shot context SURVIVED.
+    await vi.waitFor(() => {
+      expect(mount.text()).toContain("board unreachable");
+    });
+    expect(
+      sessionStorage.getItem("vesmaro.provision-approve.exec-copilot-pending"),
+    ).not.toBeNull();
+    mount.root.unmount();
+
+    // The re-opened sheet demands the tail again — no silent downgrade
+    // to the plain approve after a network failure.
+    const reopened = await mountCard("exec-copilot-pending");
+    expect(reopened.text()).toContain("Last 8 hex chars");
+    reopened.root.unmount();
+  });
+
+  it("PR #99 P3-1: a verdict published while the sheet is OPEN is picked up live", async () => {
+    const mount = await mountCard("exec-copilot-pending");
+    expect(mount.text()).not.toContain("Last 8 hex chars");
+    // The connect card reaches done while the sheet stays open — it
+    // publishes through rememberProvisionApprove (storage + the same-tab
+    // signal; a bare setItem + no-change refetch re-renders nothing).
+    act(() => {
+      rememberProvisionApprove("exec-copilot-pending", {
+        fingerprint: hexPin,
+        tofu: true,
+        jobId: "pj-1",
+      });
+    });
+    await vi.waitFor(() => {
+      expect(mount.text()).toContain("Last 8 hex chars");
+    });
     mount.root.unmount();
   });
 });

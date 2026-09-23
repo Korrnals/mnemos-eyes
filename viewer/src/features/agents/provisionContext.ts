@@ -29,6 +29,15 @@ export interface ProvisionApproveContext {
 
 const STORAGE_PREFIX = "vesmaro.provision-approve.";
 
+/**
+ * Same-tab publish signal (PR #99 review P3-1): the `storage` event never
+ * fires in the tab that WROTE, and a no-change refetch re-renders nothing
+ * (React Query structural sharing) — so the connect card dispatches this
+ * CustomEvent when a job verdict lands, and an already-open registry
+ * sheet picks the paste-back up live instead of waiting for a remount.
+ */
+export const PROVISION_APPROVE_PUBLISHED = "vesmaro:provision-approve";
+
 function keyOf(executorId: string): string {
   return `${STORAGE_PREFIX}${executorId}`;
 }
@@ -44,8 +53,13 @@ export function rememberProvisionApprove(
       JSON.stringify(context),
     );
   } catch {
-    // Private mode / quota — the sheet falls back to the plain approve.
+    // Private mode / quota — no storage, no signal: the sheet keeps the
+    // plain approve (the honest fallback).
+    return;
   }
+  window.dispatchEvent(
+    new CustomEvent(PROVISION_APPROVE_PUBLISHED, { detail: { executorId } }),
+  );
 }
 
 /** Peek WITHOUT consuming (rendering may happen before the click). */
