@@ -418,6 +418,11 @@ TTL 3 мин, code однократный, exchange привязан к IP пе�
 
 ## 11. helm upgrade и image.tag (конвенция деплоя)
 
+> **AGW-10:** деплой борда — ТОЛЬКО через обёртку
+> `scripts/deploy.sh` (гейты preflight/версий/лока/истории/values +
+> JOURNAL). Эта секция — семантика, которую обёртка реализует;
+> runbook обёртки — `docs/deploy-runbook.md`.
+
 helm 3 переиспользует user-supplied values прошлых апгрейдов: если тег
 когда-то задавался `--set`, последующие `helm upgrade` молча держат
 старый тег, даже если `values.yaml` чарта уже несёт новый (инцидент
