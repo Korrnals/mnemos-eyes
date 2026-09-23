@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import fnmatch
 import ipaddress
+import math
 import os
 import re
 import socket
@@ -257,3 +258,15 @@ class RateLimiter:
                 return False
             q.append(now)
             return True
+
+    def retry_after(self, key: str) -> int:
+        """Seconds until ``acquire(key)`` can succeed again (0 = free now).
+        Read AFTER a failed ``acquire`` to feed the Retry-After header
+        (ADR 0012 §A.5 device-mutation limiter); advisory only — a
+        concurrent consume may free a slot sooner than the hint."""
+        now = time.monotonic()
+        with self._lock:
+            q = self._events.get(key)
+            if not q or len(q) < self.limit:
+                return 0
+            return max(1, math.ceil(q[0] + self.window - now))

@@ -315,7 +315,11 @@ def _assignment_reaper_tick() -> dict[str, int]:
                              row["id"], exc)
             continue
         if moved_from and task is not None:
-            _broadcast({"kind": "task.moved", "task": task})
+            # §A.5 actor: the reaper is server-internal, board-class
+            # trust — no request to classify, the machine prefix says
+            # who moved the card (in-progress → blocked).
+            _broadcast({"kind": "task.moved", "task": task,
+                        "actor": "machine:reaper"})
         _notify_and_broadcast(
             "work", f"{a['task_id']}: назначение истекло (reaper)",
             row["reap_reason"], a["task_id"],
@@ -460,7 +464,8 @@ def _validation_sweep_once() -> int:
         _notify_and_broadcast(
             "work", f"{task['id']}: в валидации >24ч",
             "требуется решение: подтвердить или вернуть",
-            task["id"], {"kind": "task.updated", "task": task})
+            task["id"], {"kind": "task.updated", "task": task,
+                         "actor": "machine:validation-sweep"})
         _validation_sweep_log.info(
             "validation timeout flagged task=%s since=%s",
             task["id"], task.get("validating_since", ""))
@@ -758,6 +763,8 @@ app.router.route_class = _UiCookieReissueRoute
 #   - route allowed → the handler runs; _guard_write accepts the
 #     middleware's verdict via request.state.device (the choke point —
 #     no per-handler re-derivation).
+#   - allowed MUTATION → the per-device budget (§A.5) is spent first;
+#     exhausted = 429 + Retry-After, reads are never counted.
 # Comparison discipline: classification is prefix-only (no secret
 # material); the digest compare inside the store is constant-time.
 # Registered BEFORE add_security_headers so the header middleware stays
@@ -817,6 +824,23 @@ _DEVICE_SCOPE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         for row in _DEVICE_GRANT_ROUTES[granule]),
 }
 
+# Mutation budget per device (ADR 0012 Amendment §A.5, board backlog
+# t-1790196252894-9b17): a compromised/ runaway mnd_ bearer must not be
+# able to churn the board (or the SSE fan-out) unbounded. 30/60s per
+# DEVICE — flat, same engine as the auth throttling (in-memory sliding
+# window; the EXPONENTIAL lockout stays postponed, ADR 0014 logic: one
+# number is enough to reason about, and the threat is a runaway client,
+# not credential brute force). Symmetry: agents report at 30/60s, login
+# verify sits at 10/60s per IP — 30/60s per device ≈ one card move every
+# 2s sustained, far above any human phone pace, tight enough to cap a
+# script. Keyed by the device id, NOT per granule: the owner granted the
+# DEVICE, the budget is the device's. Reads are never counted; the ui
+# class never enters this middleware.
+_DEVICE_MUTATION_RATE_LIMIT = 30        # mutations per device ...
+_DEVICE_MUTATION_RATE_WINDOW = 60.0     # ... per sliding minute
+_device_mutation_limiter = RateLimiter(
+    limit=_DEVICE_MUTATION_RATE_LIMIT, window=_DEVICE_MUTATION_RATE_WINDOW)
+
 
 @app.middleware("http")
 async def device_scope_guard(request: Request, call_next):
@@ -838,14 +862,13 @@ async def device_scope_guard(request: Request, call_next):
             status_code=401,
             content={"detail": "device token is invalid, expired or revoked"})
     path = request.url.path
+    is_read = any(request.method == method and fnmatch.fnmatch(path, pattern)
+                  for method, pattern in _DEVICE_READ_ROUTES)
     granted: frozenset[str] = frozenset(device.get("grants") or [])
-    allowed = (
-        any(request.method == method and fnmatch.fnmatch(path, pattern)
-            for method, pattern in _DEVICE_READ_ROUTES)
-        or any(
-            request.method == method and fnmatch.fnmatch(path, pattern)
-            for granule in granted
-            for method, pattern in _DEVICE_GRANT_ROUTES.get(granule, ())))
+    allowed = is_read or any(
+        request.method == method and fnmatch.fnmatch(path, pattern)
+        for granule in granted
+        for method, pattern in _DEVICE_GRANT_ROUTES.get(granule, ()))
     if not allowed:
         return JSONResponse(
             status_code=403,
@@ -856,6 +879,24 @@ async def device_scope_guard(request: Request, call_next):
                                "devices always: pairing/devices/auth "
                                "management, agent loop, automation, "
                                "memory-server config, task DELETE)"})
+    # Mutation budget (§A.5): only ROUTES the grants already opened get
+    # counted — a 403 noise flood burns nothing, and the budget answers
+    # "how much can this device WRITE", not "how much can it probe".
+    if not is_read:
+        key = str(device["id"])
+        if not _device_mutation_limiter.acquire(key):
+            retry_after = _device_mutation_limiter.retry_after(key)
+            logging.getLogger("vesmaro.device").warning(
+                "device mutation budget exhausted id=%s retry_after=%ss",
+                device["id"], retry_after)
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+                content={
+                    "detail": "device mutation rate limit exceeded "
+                              f"({_DEVICE_MUTATION_RATE_LIMIT} mutations "
+                              f"per {_DEVICE_MUTATION_RATE_WINDOW:.0f}s "
+                              "per device) — wait and retry"})
     # identity for downstream handlers/audit (task-history actor,
     # reports composition); nothing else reads it
     request.state.device = device
@@ -1935,7 +1976,7 @@ async def create_task(body: TaskCreate, request: Request) -> TaskOut:
                                  actor=_device_actor(request))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task})
+    _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task, "actor": _sse_actor(request)})
     return task
 
 
@@ -1977,7 +2018,8 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
     if force:
         # extra="allow" keeps the flag in the serialized TaskOut
         task["forced"] = True
-    _broadcast({"kind": "task.updated", "task": task})
+    _broadcast({"kind": "task.updated", "task": task,
+                "actor": _sse_actor(request)})
     return task
 
 
@@ -1995,7 +2037,7 @@ async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
         raise HTTPException(422, str(exc)) from exc
     if task is None:
         raise HTTPException(404, "task not found")
-    _notify_and_broadcast("work", f"{task['id']}: статус → {COLUMN_RU.get(task['col'], task['col'])}", "", task["id"], {"kind": "task.moved", "task": task})
+    _notify_and_broadcast("work", f"{task['id']}: статус → {COLUMN_RU.get(task['col'], task['col'])}", "", task["id"], {"kind": "task.moved", "task": task, "actor": _sse_actor(request)})
     return task
 
 
@@ -2004,7 +2046,7 @@ async def delete_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request, classes=("ui",))
     if not store.delete_task(task_id):
         raise HTTPException(404, "task not found")
-    _notify_and_broadcast("work", f"{task_id}: удалена", "", task_id, {"kind": "task.deleted", "task_id": task_id})
+    _notify_and_broadcast("work", f"{task_id}: удалена", "", task_id, {"kind": "task.deleted", "task_id": task_id, "actor": _sse_actor(request)})
     return {"ok": True}
 
 
@@ -3017,7 +3059,7 @@ async def archive_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request, classes=("ui",))
     if not store.archive_task(task_id, actor=_device_actor(request)):
         raise HTTPException(404, "task not found or already archived")
-    _notify_and_broadcast("work", f"{task_id}: в архиве", "задача архивирована", task_id, {"kind": "task.archived", "task_id": task_id})
+    _notify_and_broadcast("work", f"{task_id}: в архиве", "задача архивирована", task_id, {"kind": "task.archived", "task_id": task_id, "actor": _sse_actor(request)})
     return {"ok": True}
 
 
@@ -3029,7 +3071,7 @@ async def unarchive_task(task_id: str, request: Request) -> UnarchiveOut:
     task = store.unarchive_task(task_id, actor=_device_actor(request))
     if task is None:
         raise HTTPException(404, "task not found or not archived")
-    _notify_and_broadcast("work", f"{task_id}: из архива", "задача возвращена на доску", task_id, {"kind": "task.unarchived", "task_id": task_id})
+    _notify_and_broadcast("work", f"{task_id}: из архива", "задача возвращена на доску", task_id, {"kind": "task.unarchived", "task_id": task_id, "actor": _sse_actor(request)})
     return {"ok": True, "task": task}
 
 
@@ -3340,7 +3382,8 @@ async def claim_assignment(assignment_id: int, body: AssignmentClaimBody,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved and task is not None:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _machine_actor(executor)})
     _broadcast({"kind": "assignment.claimed",
                 "assignment": _assignment_public(a),
                 "task_id": a["task_id"]})
@@ -3431,7 +3474,8 @@ async def complete_assignment(assignment_id: int,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _machine_actor(executor)})
     _notify_and_broadcast(
         "work", f"{a['task_id']}: назначение выполнено",
         (final or "финальный отчёт отсутствует")[:120], a["task_id"],
@@ -3466,7 +3510,8 @@ async def fail_assignment(assignment_id: int, body: AssignmentFailBody,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _machine_actor(executor)})
     _notify_and_broadcast(
         "work", f"{a['task_id']}: назначение провалено",
         body.reason[:120], a["task_id"],
@@ -3491,7 +3536,8 @@ async def cancel_assignment(assignment_id: int, body: AssignmentCancelBody,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _sse_actor(request)})
     _notify_and_broadcast(
         "work", f"{a['task_id']}: назначение отменено",
         body.reason[:120], a["task_id"],
@@ -4945,13 +4991,15 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
     _notify_and_broadcast(
         "work", f"{task['id']}: принята из task:queue",
         task["title"][:120], task["id"],
-        {"kind": "task.created", "task": task},
+        {"kind": "task.created", "task": task,
+         "actor": _sse_actor(request)},
     )
     if sync_error:
         _notify_and_broadcast(
             "work", f"{task['id']}: правка НЕ синхронизирована в память",
             sync_error[:200], task["id"],
-            {"kind": "task.updated", "task": task},
+            {"kind": "task.updated", "task": task,
+             "actor": _sse_actor(request)},
         )
     return task
 
@@ -5325,6 +5373,30 @@ def _device_actor(request: Request) -> str:
     if not device:
         return ""
     return f"device:{device['id']} {device.get('name') or ''}".strip()[:120]
+
+
+def _machine_actor(executor: dict[str, Any] | None) -> str:
+    """Actor for machine-leg task.* SSE frames (§A.5): the board token
+    has no per-caller identity → ``machine:board``; an approved executor
+    token carries its registry id → ``machine:<executor_id>``. Same
+    class:identity grammar as the device/ui legs."""
+    return f"machine:{executor['id']}" if executor else "machine:board"
+
+
+def _sse_actor(request: Request) -> str:
+    """Uniform actor for task.* SSE frames (ADR 0012 Amendment §A.5) —
+    additive: pre-§A.5 viewers ignore the unknown key. The device leg
+    reuses the task-history attribution VERBATIM (``device:<id> <name>``,
+    AUTH-2: one builder, one format across audit trail and stream).
+    Otherwise the actor mirrors the leg the guard accepted (the guards'
+    bearer classification is the single source of truth): every
+    _sse_actor call site is a ui+device guard, so a non-device request
+    is the ui class — header or cookie leg alike, the transition-mode
+    board token included (the guard counts it as ui)."""
+    device = getattr(request.state, "device", None)
+    if device is not None:
+        return _device_actor(request)
+    return "ui"
 
 
 def _cookie_ui_ok(request: Request) -> bool:
