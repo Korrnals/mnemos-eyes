@@ -52,6 +52,7 @@ from .store import (
     REAP_QUEUED_AFTER_S,
     AutomationError,
     AutomationValidationError,
+    DEVICE_GRANTS,
     DEVICE_TOKEN_PREFIX,
     DeviceQuotaError,
     ENROLLMENT_MAX_LIVE,
@@ -699,13 +700,18 @@ app.router.route_class = _UiCookieReissueRoute
 # Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): the table became
 # LOAD-BEARING per scope — (method, fnmatch-pattern) pairs. `read` is the
 # v0 GET table plus the reads-добавка (board/tags/archive/notifications/
-# assignments); `control` adds board mutations. New pairings default to
-# control (store layer); the v1 data migration flipped every active
-# read-scope session in place (Store._migrate_device_scope_v1).
+# assignments); `control` added board mutations. Owner override
+# 2026-09-23 (§A.7, revocation-first): the load-bearing rights split is
+# now the PER-DEVICE GRANTS set (store.device_sessions.grants), not the
+# scope column — the tables below decompose the old control scope into
+# granules (DEVICE_GRANTS in store.py). New pairings default to control
+# + the full granule set (store layer); the data migrations backfilled
+# active rows in place (Store._migrate_device_scope_v1 /
+# Store._migrate_device_grants_v1).
 #
-# HARD-DENY (never in any scope table — closed for devices ALWAYS; the
-# allow-list below is exhaustive, so anything outside it is already 403 —
-# this list documents the intent so nobody "fixes" the table later):
+# HARD-DENY (never in any scope/grant table — closed for devices ALWAYS;
+# the allow-list below is exhaustive, so anything outside it is already
+# 403 — this list documents the intent so nobody "fixes" the table later):
 #   pairing*, devices*, auth*        — pairing/device/token management is
 #                                      owner-only (a device must never be
 #                                      able to pair, list or revoke peers,
@@ -726,12 +732,16 @@ app.router.route_class = _UiCookieReissueRoute
 #   GET /api/agents/*, POST /api/task-drafts, GET /api/mnemos/search
 #                                    — outside both scopes in v1
 #
-# Semantics (QA matrix v1):
+# Semantics (QA matrix v1 + §A.7):
 #   - VALIDATE FIRST: an invalid/revoked/expired mnd_ token answers 401 on
 #     ANY route — an unauthenticated request gets no scope verdict (v0
 #     answered 403 for mutations; that ordering inverted the honest codes).
-#   - route not in the scope's table → 403: the token authenticates fine,
-#     the scope does not cover the route — 403, never 401.
+#   - GLOBAL READ always: a hit in _DEVICE_READ_ROUTES lets the request
+#     through for EVERY valid device (the owner's «глобальные read
+#     всегда») — grants gate MUTATIONS only.
+#   - mutation route → its granule must be in the device's grants; not
+#     there (or grants empty) → 403: the token authenticates fine, the
+#     owner has not granted this component — 403, never 401.
 #   - route allowed → the handler runs; _guard_write accepts the
 #     middleware's verdict via request.state.device (the choke point —
 #     no per-handler re-derivation).
@@ -756,35 +766,55 @@ _DEVICE_READ_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/assignments"),
 )
 
-_DEVICE_CONTROL_ROUTES: tuple[tuple[str, str], ...] = _DEVICE_READ_ROUTES + (
-    # board mutations (archcom compromise: tasks/reports/inbox/notifications;
-    # DELETE and everything on the hard-deny list stay closed)
-    ("POST", "/api/tasks"),
-    ("PATCH", "/api/tasks/*"),
-    ("POST", "/api/tasks/*/move"),
-    ("POST", "/api/tasks/*/archive"),
-    ("POST", "/api/tasks/*/unarchive"),
-    ("POST", "/api/tasks/*/reports"),
-    ("POST", "/api/tasks/inbox/refresh"),
-    ("POST", "/api/tasks/inbox/*/adopt"),
-    ("POST", "/api/notifications/read"),
-)
+# The old control scope, decomposed into per-device granules (§A.7). Each
+# key MUST exist in store.DEVICE_GRANTS (pinned by tests); appending a new
+# granule = add it there + add its rows here. fnmatch is whole-string, so
+# the exact "POST /api/tasks" row does NOT swallow the inbox/reports
+# sub-rows — every mutation belongs to EXACTLY one granule.
+_DEVICE_GRANT_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
+    # task mutations (board management proper; DELETE stays hard-denied)
+    "tasks": (
+        ("POST", "/api/tasks"),
+        ("PATCH", "/api/tasks/*"),
+        ("POST", "/api/tasks/*/move"),
+        ("POST", "/api/tasks/*/archive"),
+        ("POST", "/api/tasks/*/unarchive"),
+    ),
+    # reports — the device is the 4th leg of the composition
+    "reports": (
+        ("POST", "/api/tasks/*/reports"),
+    ),
+    # inbox pipeline (mirror queue refresh + adopt into the board)
+    "inbox": (
+        ("POST", "/api/tasks/inbox/refresh"),
+        ("POST", "/api/tasks/inbox/*/adopt"),
+    ),
+    # notification state (mark-read)
+    "notifications": (
+        ("POST", "/api/notifications/read"),
+    ),
+}
 
+# Legacy names kept for the 403 detail + the pairing scope record; NOT
+# consulted by the guard anymore (grants are the single source of truth).
 _DEVICE_SCOPE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "read": _DEVICE_READ_ROUTES,
-    "control": _DEVICE_CONTROL_ROUTES,
+    "control": _DEVICE_READ_ROUTES + tuple(
+        row for granule in DEVICE_GRANTS
+        for row in _DEVICE_GRANT_ROUTES[granule]),
 }
 
 
 @app.middleware("http")
 async def device_scope_guard(request: Request, call_next):
-    """Classify bearers by token prefix (ADR 0012 §5 + Amendment). Everything
-    not starting with ``Bearer mnd_`` rides the existing guards unchanged."""
+    """Classify bearers by token prefix (ADR 0012 §5 + Amendment §A.7).
+    Everything not starting with ``Bearer mnd_`` rides the existing guards
+    unchanged."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith(f"Bearer {DEVICE_TOKEN_PREFIX}"):
         return await call_next(request)
-    # Order (QA matrix v1): validate → scope. An invalid token is 401 on
-    # ANY route; only a VALID session earns a scope verdict.
+    # Order (QA matrix v1): validate → rights. An invalid token is 401 on
+    # ANY route; only a VALID session earns a rights verdict.
     device = store.validate_device_token(
         auth[len("Bearer "):].strip(),
         ua=request.headers.get("User-Agent", ""),
@@ -794,16 +824,24 @@ async def device_scope_guard(request: Request, call_next):
         return JSONResponse(
             status_code=401,
             content={"detail": "device token is invalid, expired or revoked"})
-    scope = device["scope"] if device["scope"] in _DEVICE_SCOPE_ROUTES else "read"
-    allowed = any(
-        request.method == method and fnmatch.fnmatch(request.url.path, pattern)
-        for method, pattern in _DEVICE_SCOPE_ROUTES[scope])
+    path = request.url.path
+    granted: frozenset[str] = frozenset(device.get("grants") or [])
+    allowed = (
+        any(request.method == method and fnmatch.fnmatch(path, pattern)
+            for method, pattern in _DEVICE_READ_ROUTES)
+        or any(
+            request.method == method and fnmatch.fnmatch(path, pattern)
+            for granule in granted
+            for method, pattern in _DEVICE_GRANT_ROUTES.get(granule, ())))
     if not allowed:
         return JSONResponse(
             status_code=403,
-            content={"detail": f"device scope '{scope}' does not cover this "
-                               "route (closed for devices: pairing/devices/"
-                               "auth management, agent loop, automation, "
+            content={"detail": f"device grants {sorted(granted)} do not "
+                               "cover this route (global reads are open "
+                               "to every valid device; mutations need a "
+                               "granule the owner granted; closed for "
+                               "devices always: pairing/devices/auth "
+                               "management, agent loop, automation, "
                                "memory-server config, task DELETE)"})
     # identity for downstream handlers/audit (task-history actor,
     # reports composition); nothing else reads it
@@ -5207,10 +5245,13 @@ class PairingConfirmOut(_ApiModel):
 
 
 class DeviceOut(_ApiModel):
-    """Public device session — token_hash never leaves the store."""
+    """Public device session — token_hash never leaves the store. grants is
+    the live per-device granule set (Amendment §A.7) the owner panel's
+    toggles bind to."""
     id: str
     name: str
     scope: str
+    grants: list[str] = []
     state: str
     created_at: str
     last_seen_at: str = ""
@@ -5228,6 +5269,18 @@ class DevicesOut(_ApiModel):
 
 
 class DeviceRevokedOut(_ApiModel):
+    ok: bool
+    device: DeviceOut
+
+
+class DeviceGrantsBody(_ApiModel):
+    """FULL-REPLACEMENT granule set (PUT semantics). Unknown names → 422
+    (the granule dictionary is server-owned — the viewer mirrors it for
+    labels, never for validation)."""
+    grants: list[str] = Field(default_factory=list)
+
+
+class DeviceGrantsOut(_ApiModel):
     ok: bool
     device: DeviceOut
 
@@ -5487,6 +5540,40 @@ async def revoke_device(device_id: str, request: Request) -> DeviceRevokedOut:
             "system", "Устройство отключено",
             f"device-сессия «{row['name']}» ({device_id}) отозвана", None,
             {"kind": "pairing.revoked", "device_id": device_id})
+    return {"ok": True, "device": row}
+
+
+@app.put("/api/devices/{device_id}/grants")
+async def set_device_grants(device_id: str, body: DeviceGrantsBody,
+                            request: Request) -> DeviceGrantsOut:
+    """Owner sets the per-device granule set (ui-token; Amendment §A.7,
+    owner directive «пользователь-администратор сам определяет кому
+    сколько и куда разрешений выдать и забрать»). FULL replacement (PUT):
+    the sent list IS the set — [] revokes every granule (reads stay open,
+    global-read always). Idempotent 200 on an unchanged set; applies to
+    the LIVE session immediately (the guard reads grants per request —
+    the device's very next call runs under the new set). 404 unknown
+    device; 409 not-active (granting to a dead session is meaningless —
+    revoke/re-pair instead); 422 unknown granule names."""
+    _guard_ui_write(request)
+    unknown = sorted(set(body.grants) - set(DEVICE_GRANTS))
+    if unknown:
+        raise HTTPException(
+            422, f"unknown device grants: {', '.join(unknown)} "
+                 f"(known: {', '.join(DEVICE_GRANTS)})")
+    result = store.set_device_grants(device_id, body.grants)
+    if result is None:
+        raise HTTPException(404, f"device {device_id} not found")
+    row, changed = result
+    if row["state"] != "active":
+        raise HTTPException(
+            409, f"device {device_id} is {row['state']} — grants apply to "
+                 "active sessions only (revoke it or pair a new one)")
+    if changed:
+        _notify_and_broadcast(
+            "system", "Доступы устройства изменены",
+            f"«{row['name']}» ({device_id}): гранулы "
+            f"{row['grants'] or '— ничего —'}")
     return {"ok": True, "device": row}
 
 

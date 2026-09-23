@@ -10,8 +10,9 @@ Pinned contract (each test names its matrix line):
   5/10 min per pairing);
 - source-IP binding: a second client IP → 403 + security notification;
 - device-token revoke → 401 on the next request;
-- sliding TTL by scope (control 7 d / read 30 d, ADR 0012 Amendment) /
-  hard 90 d for both;
+- sliding TTL uniform for every device (30 d, §A.7 owner override —
+  the scope-differentiated 7 d control clock is retired) /
+  hard 90 d;
 - 6th device → 409 with NO auto-eviction (oldest stays active; freeing a
   slot manually lets the pending exchange succeed);
 - device token outside its scope → 403, never 401 (scope middleware stands
@@ -537,8 +538,8 @@ class TestDeviceTokens:
     def test_sliding_window_refreshes_on_use(self, client, ui_auth):
         dev = _paired_device(client, ui_auth)
         first = _device_row(dev["device_id"])["expires_at"]
-        # scope v1: new pairings default to control → the sliding window is
-        # 7 days; activity must push it out to ~now+7d (not the read 30 d)
+        # §A.7 owner override: ONE sliding window for every device — 30 d
+        # of inactivity; activity must push it out to ~now+30d
         assert dev["scope"] == "control"
         with _db() as db:
             db.execute("UPDATE device_sessions SET expires_at=? WHERE id=?",
@@ -548,8 +549,8 @@ class TestDeviceTokens:
                               dev["device_token"])).status_code == 200
         refreshed = _device_row(dev["device_id"])["expires_at"]
         refreshed_dt = datetime.fromisoformat(refreshed)
-        assert refreshed_dt > datetime.fromisoformat(_future_iso(6 * 86400))
-        assert refreshed_dt < datetime.fromisoformat(_future_iso(8 * 86400))
+        assert refreshed_dt > datetime.fromisoformat(_future_iso(29 * 86400))
+        assert refreshed_dt < datetime.fromisoformat(_future_iso(31 * 86400))
         assert first  # (sanity: the original window existed)
 
     def test_sweep_expires_lapsed_devices(self, client, ui_auth, app_module):

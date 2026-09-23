@@ -28,6 +28,7 @@ import type {
   AutomationSettings,
   AutomationSettingsInput,
   AutomationStatus,
+  DeviceGrantsResult,
   DeviceRevokedResult,
   DevicesPage,
   ExecutionSettings,
@@ -406,6 +407,15 @@ export interface PairingSource {
   listDevices(signal?: AbortSignal): Promise<DevicesPage>;
   /** Revoke one device (`DELETE /api/devices/{id}`, ui-token; terminal). */
   revokeDevice(deviceId: string): Promise<DeviceRevokedResult>;
+  /**
+   * Set the per-device granule set (`PUT /api/devices/{id}/grants`,
+   * ui-token; Amendment §A.7) — FULL replacement, live on the next
+   * device request.
+   */
+  setDeviceGrants(
+    deviceId: string,
+    grants: readonly string[],
+  ): Promise<DeviceGrantsResult>;
   /** Start a pairing (`POST /api/pairing`, ui-token; 201 = code + verify). */
   createPairing(): Promise<PairingCreatedResult>;
   /** Trusted-side status (`GET /api/pairing/{id}`, ui-token; verify source). */
@@ -421,6 +431,8 @@ export type PairingGateway = MemoryGateway & PairingSource;
 export function isPairingSource(gateway: MemoryGateway): gateway is PairingGateway {
   return (
     typeof (gateway as Partial<PairingSource>).listDevices === "function" &&
+    typeof (gateway as Partial<PairingSource>).revokeDevice === "function" &&
+    typeof (gateway as Partial<PairingSource>).setDeviceGrants === "function" &&
     typeof (gateway as Partial<PairingSource>).createPairing === "function" &&
     typeof (gateway as Partial<PairingSource>).confirmPairing === "function" &&
     typeof (gateway as Partial<PairingSource>).cancelPairing === "function"

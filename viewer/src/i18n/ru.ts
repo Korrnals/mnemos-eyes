@@ -1032,6 +1032,10 @@ export const ru = {
   "settings.hub.navigationTitle": "Навигация",
   "settings.hub.executionTitle": "Исполнение",
   "settings.hub.automationTitle": "Автоматизация",
+  "settings.hub.devicesTitle": "Устройства",
+  "settings.hub.devicesHint":
+    "Отзыв скомпрометированного устройства и доступы к компонентам (задачи, отчёты, инбокс, уведомления) — по каждому подключённому устройству.",
+  "settings.hub.devicesCta": "Управлять устройствами",
   "settings.hub.themeLabel": "Тема",
   "settings.hub.themeSystem": "Системная",
   "settings.hub.themeDark": "Тёмная",
@@ -1330,6 +1334,21 @@ export const ru = {
     "Отозвать «{{name}}»? Отзыв необратим — устройству понадобится новый пейринг.",
   "pairing.devices.revoked": "Устройство отозвано",
   "pairing.devices.revokeFailed": "Не удалось отозвать устройство",
+  // Пер-устройственные гранулы (Amendment §A.7 — «давать и забирать
+  // доступы к компонентам»; глобальные read всегда открыты, свитча нет).
+  "pairing.devices.grantsExpand": "Показать доступы к компонентам",
+  "pairing.devices.grantsCollapse": "Скрыть доступы к компонентам",
+  "pairing.devices.grantsTitle": "Доступы к компонентам",
+  "pairing.devices.grantsHint":
+    "Чтение всегда открыто; переключатель выдаёт или забирает мутации компонента — действует сразу, без переподключения.",
+  "pairing.devices.granule.tasks": "Задачи",
+  "pairing.devices.granule.reports": "Отчёты",
+  "pairing.devices.granule.inbox": "Инбокс",
+  "pairing.devices.granule.notifications": "Уведомления",
+  "pairing.devices.grantOn": "выдано",
+  "pairing.devices.grantOff": "закрыто",
+  "pairing.devices.grantsSaved": "Доступы обновлены",
+  "pairing.devices.grantsFailed": "Не удалось обновить доступы",
   "pairing.unsupportedTitle": "Пейринг недоступен в этом режиме",
   "pairing.unsupportedMessage":
     "Домен устройств говорит на merge-API борда (ADR 0012); в режиме прямого mnemos этой страницы нет.",

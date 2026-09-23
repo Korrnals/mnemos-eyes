@@ -30,12 +30,16 @@ import { UiTokenContext } from "@/features/ui-token/UiTokenContext";
 function mount(
   script: PairingGatewayScript = {},
   options: { tokenPresent?: boolean; confirmAnswer?: boolean } = {},
+  scriptOverride: PairingGatewayScript = {},
 ): {
   calls: ReturnType<typeof createPairingTestGateway>["calls"];
   root: Root;
   client: QueryClient;
 } {
-  const { gateway, calls } = createPairingTestGateway(script);
+  const { gateway, calls } = createPairingTestGateway({
+    ...script,
+    ...scriptOverride,
+  });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRoot(document.body);
   const tokenPresent = options.tokenPresent ?? true;
@@ -182,5 +186,112 @@ describe("DevicesPage — revoke (terminal, behind confirm)", () => {
     expect(document.body.textContent).toContain("Device revoked");
     // The invalidation refetched the list (the row flips to revoked).
     expect(calls.listDevices).toBeGreaterThan(listCallsBefore);
+  });
+});
+
+describe("DevicesPage — per-device grants (ADR 0012 Amendment §A.7)", () => {
+  const expandActiveRow = async () => {
+    const expander = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show component grants"]',
+    );
+    expect(expander).toBeDefined();
+    await act(async () => {
+      expander!.click();
+      await Promise.resolve();
+    });
+  };
+
+  it("active row collapses by default; expanding shows the granule switches", async () => {
+    mount(devicesScript());
+    await vi.waitFor(() => {
+      expect(button("Revoke")).toBeDefined();
+    });
+    // Hidden until expanded; the revoked row never shows an expander.
+    expect(document.body.textContent).not.toContain("Component grants");
+    expect(
+      document.querySelector('button[aria-label="Show component grants"]'),
+    ).toBeDefined();
+    expect(
+      document.querySelector('button[aria-label="Hide component grants"]'),
+    ).toBeNull();
+    await expandActiveRow();
+    expect(document.body.textContent).toContain("Component grants");
+    // One switch per granule in the dictionary order + honest state text.
+    const switches = [
+      ...document.querySelectorAll<HTMLInputElement>('input[role="switch"]'),
+    ];
+    expect(switches.map((box) => box.id)).toEqual([
+      `device-grants-dev-1-tasks`,
+      `device-grants-dev-1-reports`,
+      `device-grants-dev-1-inbox`,
+      `device-grants-dev-1-notifications`,
+    ]);
+    expect(switches.every((box) => box.checked)).toBe(true);
+    expect(document.body.textContent).toContain("granted");
+  });
+
+  it("flipping a granule PUTs the FULL remaining set (replacement semantics)", async () => {
+    const { calls } = mount(devicesScript());
+    await vi.waitFor(() => {
+      expect(button("Revoke")).toBeDefined();
+    });
+    await expandActiveRow();
+    const tasks = document.getElementById(
+      "device-grants-dev-1-tasks",
+    ) as HTMLInputElement;
+    await act(async () => {
+      tasks.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(calls.setGrants).toEqual([
+      {
+        id: "dev-1",
+        // tasks unchecked → the OTHER three ride the replacement PUT
+        grants: ["reports", "inbox", "notifications"],
+      },
+    ]);
+    expect(document.body.textContent).toContain("Grants updated");
+  });
+
+  it("a failed PUT surfaces the server text and refetches (the flip reverts)", async () => {
+    const { calls } = mount(
+      devicesScript(),
+      {},
+      {
+        grantsError: new Error("unknown device grants: fortran"),
+      },
+    );
+    await vi.waitFor(() => {
+      expect(button("Revoke")).toBeDefined();
+    });
+    await expandActiveRow();
+    const reports = document.getElementById(
+      "device-grants-dev-1-reports",
+    ) as HTMLInputElement;
+    await act(async () => {
+      reports.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(calls.setGrants).toHaveLength(1);
+    expect(document.body.textContent).toContain(
+      "Could not update the grants",
+    );
+    expect(document.body.textContent).toContain(
+      "unknown device grants: fortran",
+    );
+  });
+
+  it("revoked/expired rows have NO grants editor (dead sessions get nothing)", async () => {
+    mount(devicesScript());
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Планшет");
+    });
+    // Only the ACTIVE row carries an expander; the revoked row is bare.
+    const expanders = document.querySelectorAll(
+      'button[aria-label="Show component grants"]',
+    );
+    expect(expanders).toHaveLength(1);
   });
 });

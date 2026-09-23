@@ -193,7 +193,39 @@ export function createPairingActions(deps: PairingActionDeps) {
     });
   };
 
-  return { createPairing, confirmPairing, cancelPairing, revokeDevice, invalidateDevices };
+  /**
+   * Set the per-device granule set (`PUT /api/devices/{id}/grants`,
+   * ui-token; ADR 0012 Amendment §A.7) — the toggles' wire. FULL
+   * replacement (the sent array IS the set), applies to the LIVE device
+   * on its very next request; the 200 row replaces the cached one so the
+   * switches show the server's truth (a lost race or a concurrent edit
+   * cannot desync the UI). Failure → error toast with the SERVER's text
+   * (422 unknown granule, 409 dead session) and the list refetch reverts
+   * the optimistic flip.
+   */
+  const setDeviceGrants = (
+    device: Pick<DeviceSession, "id" | "name">,
+    grants: readonly string[],
+    callbacks?: { onSettled?: (ok: boolean) => void },
+  ): void => {
+    run("pairing.devices.grantsFailed", async () => {
+      let ok = false;
+      try {
+        await mutations().setDeviceGrants(device.id, grants);
+        invalidateDevices();
+        ok = true;
+        toast.push({
+          kind: "ok",
+          title: t("pairing.devices.grantsSaved"),
+          detail: device.name || device.id,
+        });
+      } finally {
+        callbacks?.onSettled?.(ok);
+      }
+    });
+  };
+
+  return { createPairing, confirmPairing, cancelPairing, revokeDevice, setDeviceGrants, invalidateDevices };
 }
 
 export type PairingActions = ReturnType<typeof createPairingActions>;

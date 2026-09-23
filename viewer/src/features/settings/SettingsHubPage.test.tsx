@@ -122,7 +122,7 @@ afterEach(() => {
 });
 
 describe("SettingsHubPage v2 — structure (spec §3.1, acceptance §8.1)", () => {
-  it("renders ONE h1, the sticky anchor menu and all six anchored sections", async () => {
+  it("renders ONE h1, the sticky anchor menu and all seven anchored sections", async () => {
     const { root, container } = await mountHub();
     const h1s = container.querySelectorAll("h1");
     expect(h1s).toHaveLength(1);
@@ -141,6 +141,8 @@ describe("SettingsHubPage v2 — structure (spec §3.1, acceptance §8.1)", () =
       "#navigation",
       "#execution",
       "#automation",
+      // §A.7 pointer: device access management lives on /system/devices.
+      "#devices",
     ]);
 
     for (const anchor of [
@@ -150,6 +152,7 @@ describe("SettingsHubPage v2 — structure (spec §3.1, acceptance §8.1)", () =
       "navigation",
       "execution",
       "automation",
+      "devices",
     ]) {
       const section = container.querySelector(`#${anchor}`);
       expect(section, `#${anchor}`).not.toBeNull();
@@ -165,6 +168,7 @@ describe("SettingsHubPage v2 — structure (spec §3.1, acceptance §8.1)", () =
         "Navigation",
         "Execution",
         "Automation",
+        "Devices",
       ]),
     );
     root.unmount();

@@ -1013,6 +1013,10 @@ export const en: Record<TranslationKey, string> = {
   "settings.hub.navigationTitle": "Navigation",
   "settings.hub.executionTitle": "Execution",
   "settings.hub.automationTitle": "Automation",
+  "settings.hub.devicesTitle": "Devices",
+  "settings.hub.devicesHint":
+    "Revoke a compromised device or grant per-component access (tasks, reports, inbox, notifications) — managed per connected device.",
+  "settings.hub.devicesCta": "Manage devices",
   "settings.hub.themeLabel": "Theme",
   "settings.hub.themeSystem": "System",
   "settings.hub.themeDark": "Dark",
@@ -1308,6 +1312,21 @@ export const en: Record<TranslationKey, string> = {
     "Revoke «{{name}}»? Revocation is irreversible — the device will need a fresh pairing.",
   "pairing.devices.revoked": "Device revoked",
   "pairing.devices.revokeFailed": "Could not revoke the device",
+  // Per-device granules (Amendment §A.7 — «давать и забирать доступы»;
+  // global reads are always open and have no switch).
+  "pairing.devices.grantsExpand": "Show component grants",
+  "pairing.devices.grantsCollapse": "Hide component grants",
+  "pairing.devices.grantsTitle": "Component grants",
+  "pairing.devices.grantsHint":
+    "Reads are always open; a switch grants or revokes the component's mutations — effective immediately, no re-pairing.",
+  "pairing.devices.granule.tasks": "Tasks",
+  "pairing.devices.granule.reports": "Reports",
+  "pairing.devices.granule.inbox": "Inbox",
+  "pairing.devices.granule.notifications": "Notifications",
+  "pairing.devices.grantOn": "granted",
+  "pairing.devices.grantOff": "closed",
+  "pairing.devices.grantsSaved": "Grants updated",
+  "pairing.devices.grantsFailed": "Could not update the grants",
   "pairing.unsupportedTitle": "Pairing is unavailable in this mode",
   "pairing.unsupportedMessage":
     "The devices domain speaks the board merge-API (ADR 0012); the direct-mnemos mode has no such page.",
