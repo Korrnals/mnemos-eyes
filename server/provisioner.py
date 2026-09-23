@@ -35,6 +35,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import shlex
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -260,15 +261,19 @@ class Provisioner:
     # ------------------------------------------------- the FROZEN template
     @staticmethod
     def bootstrap_command(facts: JobFacts, token: str) -> str:
-        """The EXACT one-liner of REMOTE-EXECUTOR.md Путь 1 — this module
-        executes nothing else (Amendment 3). The token is mne_-shaped by
-        construction; the command line is not logged."""
-        parts = [f"--url {facts.board_url}",
-                 f"--token {token}",
-                 f"--name {facts.executor_name}"]
+        """The one-liner of REMOTE-EXECUTOR.md Путь 1 with EVERY argument
+        shlex.quote-d — layer two of the injection defence (design §B):
+        the route boundary enforces strict charsets, this quoting keeps
+        the command safe even if a value ever slips past it (the
+        reuse_enrollment_id path skipped enrollment validation once —
+        the quote is the layer that must not care). The token is
+        mne_-shaped by construction; the command line is never logged."""
+        parts = [f"--url {shlex.quote(facts.board_url)}",
+                 f"--token {shlex.quote(token)}",
+                 f"--name {shlex.quote(facts.executor_name)}"]
         if facts.harness_hint:
-            parts.append(f"--harness {facts.harness_hint}")
-        return (f"curl -kfsSL {facts.board_url}/api/poller/bootstrap.sh"
+            parts.append(f"--harness {shlex.quote(facts.harness_hint)}")
+        return (f"curl -kfsSL {shlex.quote(facts.board_url)}/api/poller/bootstrap.sh"
                 f" | sudo bash -s -- " + " ".join(parts))
 
     # ------------------------------------------------------- real transport

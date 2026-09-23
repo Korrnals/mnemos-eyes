@@ -32,6 +32,7 @@ QA matrix:
 from __future__ import annotations
 
 import json
+import shlex
 
 import pytest
 
@@ -61,9 +62,25 @@ class FakeConn:
         self.stderr = stderr
         self.commands: list[str] = []
         self.closed = False
+        # simulated registration leg: set per connect by the fixture —
+        # running the bootstrap spends the enrollment IN THE STORE exactly
+        # like the real script, which keeps the live-enrollment quota
+        # honest across the whole file (was the cross-test pollution root)
+        self.registration: dict = {}
 
     async def run(self, command: str) -> FakeResult:
         self.commands.append(command)
+        if command == "sudo -n true":  # typed sudo preflight (P2-4)
+            return FakeResult(0)
+        if self.registration.get("enrollment_id"):
+            import sqlite3
+            from conftest import DATA_DIR
+            db = sqlite3.connect(DATA_DIR / "board.db")
+            db.execute(
+                "UPDATE enrollment_tokens SET state='used', executor_id='ex-fake' "
+                "WHERE id=?", (self.registration["enrollment_id"],))
+            db.commit()
+            db.close()
         return FakeResult(self.exit_status, self.stderr)
 
 
@@ -75,10 +92,15 @@ def fake_provisioner(app_module, monkeypatch):
     audits: list[tuple[str, dict]] = []
     conn_holder: dict = {"conn": FakeConn(0)}
     connect_calls: list[JobFacts] = []
+    flags = {"simulate_registration": True}
 
     async def fake_connect(facts: JobFacts, host_key_check):
+        # commit-scoped arity: until the transport rewrite (P1-2) the worker
+        # passes a 1-arg validator closure; the fixture follows the worker
         connect_calls.append(facts)
         host_key_check(FakeKey())
+        if flags.get("simulate_registration"):
+            conn_holder["conn"].registration = {"enrollment_id": facts.enrollment_id}
         return conn_holder["conn"]
 
     p = Provisioner(app_module.store, audit=lambda *, kind, payload: audits.append((kind, payload)),
@@ -86,23 +108,19 @@ def fake_provisioner(app_module, monkeypatch):
     monkeypatch.setattr(prov, "_provisioner", p)
     monkeypatch.setattr(prov, "_TOKENS", {})
     monkeypatch.setattr(prov, "_BY_ENROLLMENT", {})
-    # WIP-note: the fake bootstrap does not consume the enrollment on the
-    # board; a flag simulates the registration leg (server-side CAS) so
-    # the watcher sees state=used + executor_id.
-    flags = {"simulate_registration": True}
-    real_get_enrollment = app_module.store.get_enrollment
-
-    def fake_get_enrollment(eid):
-        row = real_get_enrollment(eid)
-        if (flags.get("simulate_registration") and row is not None
-                and row.get("state") == "created"
-                and row.get("label", "").startswith("provision:")):
-            row = {**row, "state": "used", "executor_id": "ex-fake"}
-        return row
-
-    monkeypatch.setattr(app_module.store, "get_enrollment", fake_get_enrollment)
     yield {"events": events, "audits": audits, "conn": conn_holder,
            "connect": connect_calls, "flags": flags}
+
+
+@pytest.fixture(autouse=True)
+def board_ca_file(app_module, monkeypatch):
+    """The install leg delivers the board CA over the SSH channel from
+    VESMARO_TLS_CA_FILE (P2-3): point the env at a synthetic PEM."""
+    from conftest import DATA_DIR
+    ca_path = DATA_DIR / "test-lab-ca.crt"
+    ca_path.write_bytes(b"-----BEGIN CERTIFICATE-----\nQA\n-----END CERTIFICATE-----\n")
+    monkeypatch.setenv("VESMARO_TLS_CA_FILE", str(ca_path))
+    yield str(ca_path)
 
 
 def _provision(client, ui_auth, **overrides):
@@ -118,22 +136,22 @@ def fresh_rate_limiter(app_module, monkeypatch):
                         type(limiter)(limit=limiter.limit, window=limiter.window))
     yield
     # no-op-worker tests leave eternal queued rows — clean them so the
-    # global live-cap does not leak across tests
+    # global live-cap, the enrollment quota and the TOFU pin state do not
+    # leak across tests
     import sqlite3
     from conftest import DATA_DIR
     db = sqlite3.connect(DATA_DIR / "board.db")
     db.execute("DELETE FROM provision_jobs")
+    db.execute("DELETE FROM provision_host_pins")
+    db.execute("DELETE FROM enrollment_tokens")
     db.commit()
     db.close()
 
 
 # ---------------------------------------------------------------- happy path
 class TestHappyPath:
-    @pytest.mark.xfail(reason="WIP M1.x: cross-test pollution in full-file "
-                              "runs (installing step skipped); isolated run "
-                              "is green", strict=False)
     def test_202_then_lifecycle_done(self, client, ui_auth, fake_provisioner):
-        r = _provision(client, ui_auth, host="happy-1")
+        r = _provision(client, ui_auth, host="happy-1", name="vps-1")
         assert r.status_code == 202, r.text
         body = r.json()
         assert body["state"] == "queued"
@@ -151,8 +169,9 @@ class TestHappyPath:
         steps_text = " ".join(json.loads(row["steps"]))
         assert "bootstrap" in steps_text
         # the FROZEN one-liner: url, token, name, harness — verbatim
-        cmd = fake_provisioner["conn"]["conn"].commands[0]
-        assert cmd.startswith("curl -kfsSL https://b.example/api/poller/bootstrap.sh")
+        cmd = _bootstrap_command(fake_provisioner["conn"]["conn"])
+        assert cmd.startswith(
+            "curl -kfsSL https://b.example/api/poller/bootstrap.sh")
         assert "| sudo bash -s -- --url https://b.example --token mne_" in cmd
         assert "--name vps-1 --harness zcode" in cmd
         # the enrollment was consumed
@@ -210,6 +229,76 @@ class TestHappyPath:
         row = _job(client, ui_auth, "pj-x")
         assert row["state"] == "failed"
         assert row["error_code"] == "host_key_mismatch"
+
+
+# --------------------------------------------------- input validation (P1-1)
+class TestInputValidation:
+    """Shell-injection boundary: strict charsets at the route (422) plus
+    shlex.quote in the worker as the second, charset-agnostic layer."""
+
+    @pytest.mark.parametrize("field,value", [
+        ("host", "vps-1; rm -rf /"),
+        ("host", "vps-1$(reboot)"),
+        ("host", "VPS-1"),                # charset is lowercase
+        ("host", "vps-1.example."),       # no trailing dot
+        ("host", "-leading-dash"),
+        ("name", "x; reboot"),
+        ("name", "x$(touch /tmp/pwned)"),
+        ("name", "-nope"),
+        ("name", ".nope"),
+    ])
+    def test_shell_meta_rejected_422(self, client, ui_auth, field, value):
+        body = {"host": "val-1", "auth": {"kind": "alias"},
+                "board_url_for_host": "https://b.example", field: value}
+        r = client.post("/api/executors/provision", json=body, headers=ui_auth)
+        assert r.status_code == 422, r.text
+
+    def test_board_url_with_path_rejected_422(self, client, ui_auth):
+        r = _provision(client, ui_auth,
+                       board_url_for_host="https://b.example/evil;x=1")
+        assert r.status_code == 422, r.text
+
+    def test_board_url_with_port_accepted(self, client, ui_auth,
+                                          fake_provisioner):
+        r = _provision(client, ui_auth, host="val-port-1",
+                       board_url_for_host="https://b.example:8443")
+        assert r.status_code == 202, r.text
+        _poll_until(lambda: _job(client, ui_auth, r.json()["job_id"],
+                                 state="done"))
+        cmd = _bootstrap_command(fake_provisioner["conn"]["conn"])
+        assert "--url https://b.example:8443" in cmd
+
+    def test_unknown_harness_hint_rejected_422(self, client, ui_auth):
+        r = _provision(client, ui_auth, harness_hint="not-in-dictionary")
+        assert r.status_code == 422
+        assert "unknown harness" in r.json()["detail"]
+
+    def test_reuse_branch_validates_harness_hint(self, client, ui_auth,
+                                                 app_module):
+        # the reuse path skips create_enrollment entirely — the dictionary
+        # gate must hold BEFORE the raw hint can reach JobFacts (P1-1)
+        row, _token = app_module.store.create_enrollment(
+            label="provision:val-reuse", harness_hint="zcode")
+        r = _provision(client, ui_auth, host="val-reuse",
+                       reuse_enrollment_id=row["enrollment_id"],
+                       harness_hint="not-in-dictionary")
+        assert r.status_code == 422
+        assert "unknown harness" in r.json()["detail"]
+
+    def test_bootstrap_command_quotes_adversarial_values(self):
+        # unit-level second layer: whatever slips past the boundary cannot
+        # break the argument quoting
+        facts = _facts(job_id="pj-quote", executor_name="x; reboot",
+                       harness_hint="z; rm -rf /",
+                       board_url="https://b.example/evil $(calc)")
+        cmd = Provisioner.bootstrap_command(facts, "mne_t")
+        # every adversarial value appears ONLY inside single quotes
+        assert "--name x; reboot" not in cmd
+        assert "--harness z; rm -rf /" not in cmd
+        assert "-fsSL https://b.example/evil $(calc)" not in cmd
+        assert shlex.quote("x; reboot") in cmd
+        assert shlex.quote("z; rm -rf /") in cmd
+        assert shlex.quote("https://b.example/evil $(calc)") in cmd
 
 
 # ---------------------------------------------------------------- anti-spray
@@ -274,8 +363,6 @@ class TestPasswordAuthToggle:
 
 # ------------------------------------------------------------ transit invariants
 class TestTransitInvariants:
-    @pytest.mark.xfail(reason="WIP M1.x: same cross-test pollution family; "
-                              "isolated run is green", strict=False)
     def test_no_secret_material_anywhere(self, client, ui_auth,
                                          fake_provisioner):
         secret = "SUPER-SECRET-KEY-MATERIAL"
@@ -341,6 +428,26 @@ class TestDisabled:
 
 
 # ------------------------------------------------------------------ helpers
+def _facts(**overrides) -> JobFacts:
+    """A valid JobFacts for unit-level worker tests."""
+    base = dict(job_id="pj-t", host="unit-1", port=22, auth_kind="alias",
+                secret=None, passphrase=None, username="",
+                harness_hint="zcode", enrollment_id="enr-t",
+                executor_name="unit-1", board_url="https://b.example",
+                bootstrap_token=Redacted("mne_t"),
+                expected_host_key_fingerprint="")
+    base |= overrides
+    return JobFacts(**base)
+
+
+def _bootstrap_command(conn) -> str:
+    """The install command among the session's exec calls (the sudo
+    preflight runs first, the CA cleanup last — P2-4/P2-3)."""
+    matches = [c for c in conn.commands if c.startswith("curl")]
+    assert matches, f"no bootstrap command in {conn.commands!r}"
+    return matches[0]
+
+
 def _live_job_direct(app_module, host: str, port: int = 22) -> str:
     """Create a LIVE job row without starting the worker (queued forever):
     the deterministic way to test the route-level anti-spray gates."""

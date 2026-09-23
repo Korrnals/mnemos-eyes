@@ -1412,9 +1412,22 @@ class ProvisionAuth(BaseModel):
     passphrase: str = Field(default="", max_length=8192)
 
 
+# Injection boundary (design §B, security P1-1): host/name ride into the
+# SSH command line and into SSE/audit/step texts — strict charsets here,
+# shlex.quote in the worker as the second layer. host is a lowercase
+# FQDN/IP charset label sequence WITHOUT a trailing dot; name is the
+# executor registry charset.
+_PROVISION_HOST_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
+_PROVISION_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$")
+
+
 class ProvisionBody(BaseModel):
-    name: str = Field(default="", max_length=120)
-    host: str = Field(min_length=1, max_length=200)
+    name: str = Field(default="", max_length=120,
+                      pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$")
+    host: str = Field(min_length=1, max_length=253,
+                      pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+                              r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
     port: int = Field(default=22, ge=1, le=65535)
     auth: ProvisionAuth
     harness_hint: str = Field(default="zcode", max_length=60)
@@ -3818,6 +3831,7 @@ _provision_limiter = RateLimiter(
     limit=_PROVISION_RATE_LIMIT, window=_PROVISION_RATE_WINDOW)
 _PROVISION_COOLDOWN_S = 90.0     # per host:port
 _PROVISION_ACTIVE_CAP = 2        # global active jobs
+_PROVISION_BOARD_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d{1,5})?$")
 _PROVISION_KEY_FP_RE = re.compile(r"^(SHA256:[A-Za-z0-9+/]{43}|[a-f0-9]{64})$")
 
 
@@ -3871,6 +3885,15 @@ async def provision_executor(body: ProvisionBody,
     if (body.auth.kind in ("password", "key")
             and not body.auth.secret.strip()):
         raise HTTPException(422, f"{body.auth.kind} auth requires secret")
+    # Injection boundary (P1-1): the harness hint feeds the remote command
+    # line — validated against the LIVE dictionary on EVERY path here
+    # (the reuse_enrollment_id branch never calls create_enrollment, whose
+    # allowlist gate is the only other one), before anything is stored.
+    harness_hint = body.harness_hint.strip()
+    if harness_hint and harness_hint not in store.harness_names():
+        raise HTTPException(
+            422, f"unknown harness: {harness_hint}; "
+                 f"known: {sorted(store.harness_names())}")
     if (body.expected_host_key_fingerprint
             and not _PROVISION_KEY_FP_RE.match(
                 body.expected_host_key_fingerprint.strip())):
@@ -3894,12 +3917,23 @@ async def provision_executor(body: ProvisionBody,
 
     board_url = (body.board_url_for_host.strip()
                  or os.environ.get("VESMARO_PUBLIC_BOARD_URL", "").strip())
-    if not board_url.startswith("https://"):
+    # P1-1: charset-strict URL (no path, no query — the host part rides the
+    # command line twice); anything the regex refuses cannot be quoted into
+    # an argument boundary anyway, but refusing HERE keeps bad values out of
+    # job facts, steps and SSE.
+    if not _PROVISION_BOARD_URL_RE.match(board_url):
         raise HTTPException(
-            422, "board_url_for_host must be https and must resolve FROM the "
-                 "target machine (or set VESMARO_PUBLIC_BOARD_URL)")
+            422, "board_url_for_host must be https://host[:port] that "
+                 "resolves FROM the target machine (or set "
+                 "VESMARO_PUBLIC_BOARD_URL)")
 
     name = (body.name.strip() or host)
+    if not _PROVISION_NAME_RE.match(name):
+        # the host-fallback name is charset-covered by the host pattern;
+        # this guard keeps an owner-supplied name honest at the boundary
+        raise HTTPException(
+            422, "name must start with an alphanumeric and contain only "
+                 "letters, digits, '.', '_' and '-'")
     # A live enrollment may be reused; otherwise the route mints one
     # ATOMICALLY with the job (the token goes to the worker's transit
     # context, never into the response or the DB).
@@ -3917,7 +3951,7 @@ async def provision_executor(body: ProvisionBody,
     else:
         try:
             row, mne_token = store.create_enrollment(
-                label=f"provision:{host}", harness_hint=body.harness_hint,
+                label=f"provision:{host}", harness_hint=harness_hint,
                 name_hint=name)
         except EnrollmentQuotaError as exc:
             raise HTTPException(409, str(exc)) from exc
@@ -3930,7 +3964,7 @@ async def provision_executor(body: ProvisionBody,
                     _key_fingerprint_of(body.auth.secret)))
     job = store.create_provision_job(
         host=host, port=body.port, auth_kind=body.auth.kind,
-        key_fingerprint=key_fp, harness_hint=body.harness_hint,
+        key_fingerprint=key_fp, harness_hint=harness_hint,
         board_url_for_host=board_url, enrollment_id=enrollment_id,
         expected_host_key_fingerprint=body.expected_host_key_fingerprint.strip())
     provisioning.remember(job["id"], enrollment_id, mne_token)
@@ -3939,7 +3973,7 @@ async def provision_executor(body: ProvisionBody,
         secret=provisioner_mod.Redacted(body.auth.secret) if body.auth.secret else None,
         passphrase=(provisioner_mod.Redacted(body.auth.passphrase)
                     if body.auth.passphrase else None),
-        username="", harness_hint=body.harness_hint,
+        username="", harness_hint=harness_hint,
         enrollment_id=enrollment_id, executor_name=name, board_url=board_url,
         bootstrap_token=provisioner_mod.Redacted(mne_token),
         expected_host_key_fingerprint=body.expected_host_key_fingerprint.strip()))
