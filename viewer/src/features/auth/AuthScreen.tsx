@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { KeyRound, LogIn, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useT } from "@/i18n";
 import { useAuth } from "./AuthContext";
 
@@ -40,26 +41,16 @@ export function AuthScreen() {
     return () => previouslyFocused?.focus();
   }, [inChallenge]);
 
-  // Minimal focus trap: cycle Tab within the overlay surface.
+  // Modal keyboard containment (shared with the Sidebar overlay): the
+  // hand-rolled per-surface Tab cycle moved into useFocusTrap, which also
+  // re-pulls focus inside if it ever escapes the surface.
+  useFocusTrap(surfaceRef, true);
+
+  // Escape dismisses (overlay only — never forced); Tab is the trap's job.
   function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.stopPropagation();
       closeOverlay();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusables = surfaceRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-    );
-    if (!focusables || focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
     }
   }
 

@@ -10,18 +10,27 @@ import { categoryUrl, docProjectsSorted, hubUrl } from "./projects";
  * groups, each a link to its hub, with the active project's categories
  * nested as text rows (no icons — hierarchy reads from indent, not glyphs).
  * Everything derives from the pathname: exactly ONE group is expanded (the
- * active project), no JS state. Icon-rail degradation (spec §3.2): the
- * groups stay as three icon rows (aria-label carries the project name),
- * categories disappear — the rail never pulls a second icon column.
+ * active project), no JS state.
+ *
+ * Geometry and category visibility derive from the PANEL expansion state —
+ * never from breakpoints (the Sidebar owns the viewport seam, UI-22): the
+ * expanded panel — the desktop inline panel OR the mobile OVERLAY — shows
+ * the deeper indented group rail with the hairline border and the active
+ * project's category rows (the overlay is a real panel: the phone gets the
+ * full three-layer nav). Icon-rail degradation (spec §3.2): the groups stay
+ * as three icon rows (aria-label carries the project name), categories
+ * disappear — the rail never pulls a second icon column.
  */
 
 const FOCUS_RING =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright";
 
 export interface DocsSidebarGroupsProps {
-  /** Icon-rail mode (manual collapse): groups stay, categories vanish. */
+  /** Icon-rail mode (no panel expansion): groups stay, categories vanish.
+   * Passed as `!expanded` from Sidebar — false for BOTH the desktop inline
+   * panel and the mobile overlay. */
   collapsed: boolean;
-  /** Visibility classes for label spans — derived from `collapsed` upstream. */
+  /** Visibility classes for label spans — derived from the panel mode. */
   hideLabels: string;
 }
 
@@ -33,9 +42,11 @@ export function DocsSidebarGroups({ collapsed, hideLabels }: DocsSidebarGroupsPr
     <ul
       className={cn(
         "mt-1 space-y-1",
-        // Icon rail (manual collapse or < md): shallow indent, no border —
-        // same geometry as the other domains' section lists.
-        "ml-4 md:ml-7 md:border-l md:border-border-subtle md:pl-2",
+        // Icon rail: shallow indent, no border — the second icon column must
+        // fit w-14. Expanded (inline OR overlay): the deeper indented rail
+        // with the hairline border — same state-driven geometry as the other
+        // domains' section lists in Sidebar.tsx.
+        collapsed ? "ml-4" : "ml-7 border-l border-border-subtle pl-2",
       )}
     >
       {docProjectsSorted().map((project) => {
@@ -68,10 +79,12 @@ export function DocsSidebarGroups({ collapsed, hideLabels }: DocsSidebarGroupsPr
               <span className={hideLabels}>{project.name}</span>
             </Link>
             {!collapsed && location.project === project.slug ? (
-              // Rail degradation (spec §3.2): manual collapse drops the
-              // category rows entirely; the forced < md rail hides them via
-              // CSS (hidden md:block) — no second icon column either way.
-              <ul className="mt-1 hidden space-y-1 border-l border-border-subtle pl-2 md:block">
+              // Rail degradation (spec §3.2): without a panel expansion the
+              // category rows do not render at all — the rail never pulls a
+              // second icon column. The rows render wherever the gate lets
+              // them (no CSS display toggling): the expanded mobile overlay
+              // shows them too, the phone gets the full three-layer nav.
+              <ul className="mt-1 space-y-1 border-l border-border-subtle pl-2">
                 {docCategoriesForProject(project.slug).map((category) => {
                   const label = t(category.titleKey);
                   const to = categoryUrl(project.slug, category.slug);

@@ -17,6 +17,7 @@ import {
 } from "@/features/ui-token/useSessionControl";
 import { useBoardHealth } from "@/hooks/usePulse";
 import { DocsSidebarGroups } from "@/features/docs/DocsSidebarGroups";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
 import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
@@ -62,7 +63,9 @@ function useIsDesktop(): boolean {
  * - < md (mobile): the toggle is VISIBLE on the rail header; expanding opens
  *   an OVERLAY — the panel floats fixed over the content with a translucent
  *   backdrop (click / Esc closes), focus moves into the panel and returns to
- *   the toggle on close, the body scroll locks while it is open. The mobile
+ *   the toggle on close, the body scroll locks while it is open, and Tab
+ *   cycles inside the panel (useFocusTrap — a modal dialog must not leak
+ *   keyboard focus into the covered page). The mobile
  *   overlay state is SESSION-ONLY: every entry/reload starts collapsed
  *   regardless of the stored flag, and a mobile toggle click never touches
  *   the persisted desktop intent.
@@ -138,6 +141,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       document.body.style.overflow = previousOverflow;
     };
   }, [overlay, closeOverlay]);
+
+  // Modal keyboard containment (a dialog without a trap leaks Tab into the
+  // covered page): cycles only while the OVERLAY is the active panel. The
+  // desktop inline panel and the icon rail stay untrapped — they are page
+  // chrome, not a dialog.
+  useFocusTrap(panelRef, overlay);
 
   // Label visibility (UI-19 root cause): derived from the expansion mode in
   // one place and passed down — the icon rail hides them, the expanded panel
