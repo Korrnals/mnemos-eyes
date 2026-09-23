@@ -999,7 +999,119 @@ export const ru = {
 
   "agents.enrollment.oneLinerHint": "Внешний -k безопасен: текст установщика публичен и без секретов — всё внутри ездит на запинненном CA. --url должен быть адресом, который резолвится С ЭТОЙ машины (адрес VPN-оверлея может отличаться от LAN).",
   "agents.enrollment.tokenInCopyNote": "При копировании полный токен попадает в буфер обмена.",
+  "agents.enrollment.quotaCount": "Живых токенов: {{count}} из 3",
+  "agents.enrollment.quotaFull":
+    "Достигнут лимит живых токенов (3) — отзовите лишний или дождитесь TTL.",
   "agents.enrollment.manualToggle": "Ручной путь — диагностика / изолированные (air-gapped) установки",
+
+  // --- AGW-11: the connect card (SSH provisioner, wave 4) -------------------
+
+  "agents.provision.title": "Подключение по SSH",
+  "agents.provision.subtitle":
+    "борд сам зайдёт на машину, поставит агента и доведёт его до одобрения",
+  "agents.provision.host": "Адрес машины (IP или домен)",
+  "agents.provision.hostError":
+    "строчные латиница/цифры/дефисы и точки — IP или FQDN без слэшей",
+  "agents.provision.port": "SSH-порт",
+  "agents.provision.portError": "порт — число от 1 до 65535",
+  "agents.provision.name": "Имя исполнителя (необязательно)",
+  "agents.provision.nameError":
+    "начинается с буквы/цифры; буквы, цифры, точка, «_», «-» до 120 знаков",
+  "agents.provision.authLegend": "Способ входа",
+  "agents.provision.authKey": "SSH-ключ",
+  "agents.provision.authAlias": "Алиас из ssh-config борда",
+  "agents.provision.authPassword": "Пароль",
+  "agents.provision.authPasswordNote":
+    "Вход по паролю по умолчанию ВЫКЛЮЧЕН на борде: включается флагом развёртывания provisioner.passwordAuth. Пока он не включён, сервер честно откажет (422).",
+  "agents.provision.authAliasNote":
+    "Борд войдёт по алиасу из своего ssh-config: пользователь, ключ и порт определяет конфиг. Имя пользователя отдельным полем сервер пока не принимает — используйте алиас.",
+  "agents.provision.keySecret": "Приватный ключ (вставьте целиком)",
+  "agents.provision.passwordSecret": "Пароль",
+  "agents.provision.secretShow": "Показать ключ",
+  "agents.provision.secretHide": "Скрыть ключ",
+  "agents.provision.secretNote":
+    "Секрет живёт только в памяти страницы до отправки: не пишется в базу, логи и события. Маскируется от посторонних глаз.",
+  "agents.provision.secretError": "Для этого способа входа нужен секрет.",
+  "agents.provision.passphrase": "Кодовая фраза ключа (если есть)",
+  "agents.provision.harness": "Харнес (подсказка для команд)",
+  "agents.provision.boardUrl": "Адрес борда для машины",
+  "agents.provision.boardUrlNote":
+    "https://хост[:порт], который резолвится С подключаемой машины (адрес оверлея может отличаться от браузерного).",
+  "agents.provision.boardUrlError":
+    "нужен строгий https://хост[:порт] без пути и параметров",
+  "agents.provision.submit": "Подключить",
+  "agents.provision.submitting": "Запускаем…",
+  "agents.provision.submitFailed": "Не удалось запустить подключение",
+  "agents.provision.queued": "Подключение {{host}} запущено",
+  "agents.provision.reuseNote":
+    "Повтор использует живой токен подключения из прошлой попытки",
+  "agents.provision.feedTitle": "Подключение {{host}}",
+  "agents.provision.close": "Скрыть",
+  "agents.provision.closeAria": "Скрыть карточку подключения",
+  "agents.provision.feedLoading": "Читаем состояние задания…",
+  "agents.provision.feedError": "Задание недоступно: {{message}}",
+  "agents.provision.feedLive": "Задание выполняется — лента обновляется сама",
+  "agents.provision.funnelAria": "Шаги установки",
+  "agents.provision.state.live": "выполняется",
+  "agents.provision.state.done": "агент зарегистрирован",
+  "agents.provision.state.failed": "ошибка",
+  "agents.provision.stage.bootstrapStarted": "SSH-подключение к машине",
+  "agents.provision.stage.caPinned": "Ключ доверия машины закреплён",
+  "agents.provision.stage.pollerInstalled": "Агент установлен",
+  "agents.provision.stage.firstHeartbeat": "Первый отклик агента",
+  "agents.provision.stage.wgHandshake": "Mesh-туннель",
+  "agents.provision.stage.reserved": "позже",
+  "agents.provision.connectivityTitle": "Транспорт связи",
+  "agents.provision.connectivityManual": "временно: ручной туннель",
+  "agents.provision.connectivityMesh": "mesh",
+  "agents.provision.connectivityProfile": "Профиль связности:",
+  "agents.provision.connectivityLater": "позже",
+  "agents.provision.logTitle": "Лента шагов",
+  "agents.provision.updatedAt": "обновлено {{time}}",
+  "agents.provision.errorCode": "Код: {{code}}",
+  "agents.provision.expectedFingerprint": "Ожидаемый отпечаток ключа машины:",
+  "agents.provision.knownHostsHint":
+    "Ключ машины не совпал с закреплённым. Если машину ПЕРЕУСТАНАВЛИВАЛИ намеренно — на борде выполняется отдельная процедура re-pin (POST /api/executors/provision/host/{host}/repin). Вслепую повторять не надо: несовпадение может означать подмену (MITM).",
+  "agents.provision.retry": "Повторить",
+  "agents.provision.doneTitle":
+    "Исполнитель «{{name}}» ждёт вашего одобрения",
+  "agents.provision.doneLoadingRow": "Ждём появления строки в реестре…",
+  "agents.provision.approvedAlready":
+    "«{{name}}» уже одобрен — включите маршрутизацию в реестре",
+  "agents.provision.approveIntro":
+    "Проверьте ключ машины и подтвердите подключение.",
+  "agents.provision.pasteBackLabel":
+    "Последние 8 hex-символов отпечатка С САМОЙ машины",
+  "agents.provision.pasteBackHint":
+    "Выполните на машине: awk '{print $2}' /etc/ssh/ssh_host_ed25519_key.pub | base64 -d | sha256sum — введите последние 8 символов вывода. Кнопка разблокируется только при совпадении.",
+  "agents.provision.pasteBackSkipped":
+    "Ключ этой машины уже был закреплён и проверен ранее — сверка не нужна.",
+  "agents.provision.hint.sshUnreachable":
+    "Машина недоступна: проверьте адрес, порт и файрвол.",
+  "agents.provision.hint.sshAuthFailed": "Не подошёл ключ или пароль.",
+  "agents.provision.hint.sshSudoRequired":
+    "Дайте пользователю passwordless sudo (NOPASSWD) или запускайте установку от root.",
+  "agents.provision.hint.caUnavailable":
+    "Борд не отдал свой CA — проблема на сервере борда, посмотрите его журналы.",
+  "agents.provision.hint.hostKeyMismatch":
+    "Ключ машины не совпал с ожидаемым — установка остановлена из соображений безопасности.",
+  "agents.provision.hint.wgKeyDelivery":
+    "Не удалось доставить ключи туннеля (транспорт будущего mesh-слоя — заглушка).",
+  "agents.provision.hint.wgHandshake":
+    "Туннель не поднялся вовремя (транспорт будущего mesh-слоя — заглушка).",
+  "agents.provision.hint.bootstrapTimeout":
+    "Установка затянулась и была остановлена по таймауту.",
+  "agents.provision.hint.bootstrapExit":
+    "Установщик завершился с ошибкой — техническая деталь ниже.",
+  "agents.provision.hint.registerTimeout":
+    "Агент поставился, но не зарегистрировался вовремя — проверьте его журнал на машине.",
+  "agents.provision.hint.restarted":
+    "Борд перезапустился во время установки — секреты живут только в памяти задания. Запустите подключение заново.",
+  "agents.provision.hint.pinInvalidated":
+    "Закреплённый ключ машины изменили (re-pin) — задание остановлено.",
+  "agents.provision.hint.generic":
+    "Установка не удалась — техническая деталь ниже.",
+
   "agents.enrollment.listTitle": "Токены подключения",
   "agents.enrollment.listHint": "живые + история",
   "agents.enrollment.listLoading": "Загружаем токены",

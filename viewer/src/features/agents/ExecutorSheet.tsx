@@ -14,6 +14,9 @@ import {
   addCapability,
   executorPatchDiff,
 } from "./executorForm";
+import { PasteBackApprove } from "./ProvisionApprove";
+import { peekProvisionApprove } from "./provisionContext";
+import type { ProvisionApproveContext } from "./provisionContext";
 import { useExecutors } from "./useAgents";
 import { useExecutorMutations } from "./useExecutorMutations";
 
@@ -127,6 +130,15 @@ function ExecutorSheetForm({
 
   const revoked = executor.state === "revoked";
   const pending = executor.state === "pending";
+
+  // AGW-11 paste-back: when THIS browser session ran the provision job
+  // that minted the pending row, the card carries the pinned fingerprint
+  // (provisionContext.ts) — the approve goes through the verify. Rows
+  // without context (the manual mint path, another device) keep the
+  // plain approve. Read ONCE per row (lazy state — no re-read churn).
+  const [approveContext] = useState<ProvisionApproveContext | null>(() =>
+    executor.state === "pending" ? peekProvisionApprove(executor.id) : null,
+  );
 
   // Form state seeds from the loaded row; the diff (name + capabilities
   // only — enabled/approve/revoke/delete are immediate single PATCHes).
@@ -295,12 +307,19 @@ function ExecutorSheetForm({
           <Badge variant="outline" className="font-normal">
             {t(stateBadge().key)}
           </Badge>
-          {pending ? (
+          {pending && approveContext === null ? (
             <Button size="sm" className="h-7 px-2 text-xs" onClick={() => mutations.approveExecutor(executor)}>
               {t("agents.registry.approve")}
             </Button>
           ) : null}
         </div>
+        {pending && approveContext !== null ? (
+          <PasteBackApprove
+            executor={executor}
+            fingerprint={approveContext.fingerprint}
+            tofu={approveContext.tofu}
+          />
+        ) : null}
         {executor.state === "approved" ? (
           <label className="flex cursor-pointer items-start gap-2 text-sm">
             <input
