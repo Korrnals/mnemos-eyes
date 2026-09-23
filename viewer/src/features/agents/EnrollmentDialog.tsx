@@ -192,6 +192,16 @@ function EnrollmentForm({
   );
 }
 
+/**
+ * PR #99 review P3-3: the CA fingerprint rides a COPY-PASTE shell command,
+ * so its shape is validated client-side before insertion — canonical
+ * ssh-keygen base64 (43 unpadded chars) or a hex64 digest, mirroring the
+ * board's normalize_fingerprint accept-list. Anything else omits the
+ * flag: the command degrades loudly-shorter, never injects a foreign
+ * string into the owner's shell.
+ */
+const CA_FINGERPRINT_RE = /^SHA256:(?:[A-Za-z0-9+/]{43}|[a-fA-F0-9]{64})$/;
+
 /** Phase 2 — the once-only token, the live TTL and the VPS bootstrap block. */
 function TokenScreen({
   created,
@@ -229,10 +239,12 @@ function TokenScreen({
   const bootstrapName = row.name_hint || row.label || "vps-1";
   const bootstrapHarness = row.harness_hint || defaultHarness;
   // AGW-11: the CA fingerprint from the mint answer turns the installer
-  // into a strict-CA run (--expect-fp). OPTIONAL until the AGW-9 board
-  // slice lands — absent field = the command without the flag (задел по
-  // брифу, не тихая деградация: хвост команды просто короче).
-  const expectFp = created.ca_fingerprint?.trim() ?? "";
+  // into a strict-CA run (--expect-fp). OPTIONAL until every deployed
+  // board carries the AGW-9 field — absent OR malformed = the command
+  // without the flag (no silent degradation, no unvalidated string in
+  // a paste-ready shell line; PR #99 review P3-3).
+  const expectFpRaw = created.ca_fingerprint?.trim() ?? "";
+  const expectFp = CA_FINGERPRINT_RE.test(expectFpRaw) ? expectFpRaw : "";
   const expectFpArg = expectFp ? ` --expect-fp ${expectFp}` : "";
   const oneLinerArgs =
     `--url ${origin} --token ${created.token}` +

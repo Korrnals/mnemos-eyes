@@ -174,6 +174,7 @@ function ProvisionForm({
             job_id: created.job_id,
             host: hostClean,
             port: portClean === "" ? 22 : portNum,
+            name: nameClean,
           }),
         onSettled: () => setSubmitting(false),
       },
@@ -499,15 +500,18 @@ function ProvisionFeed({
       : null;
 
   const retry = (): void => {
+    // P3-2 (PR #99 review): the name the owner typed rides the active-job
+    // record — the wire job row never echoes it (the server's fallback is
+    // the host), so the retry form re-seeds from what was submitted.
     if (!status) {
-      onRetry({ key: `${job.job_id}-retry`, host: job.host, port: String(job.port), name: "", harness: "", boardUrl: "", reuseEnrollmentId: null });
+      onRetry({ key: `${job.job_id}-retry`, host: job.host, port: String(job.port), name: job.name, harness: "", boardUrl: "", reuseEnrollmentId: null });
       return;
     }
     onRetry({
       key: `${job.job_id}-retry`,
       host: status.job.host,
       port: String(status.job.port),
-      name: "",
+      name: job.name,
       harness: status.job.harness_hint,
       boardUrl: status.job.board_url_for_host,
       // Design §A: reuse the token only while it is GENUINELY live — the

@@ -229,6 +229,9 @@ describe("EnrollmentDialog — token screen", () => {
   });
   it("AGW-11: the one-command grows --expect-fp when the mint carries the CA fingerprint", async () => {
     const { root, container, gateway } = await mount();
+    // Canonical ssh-keygen shape (43 unpadded base64 chars) — P3-3
+    // validates the form before the flag may ride the command.
+    const validFp = `SHA256:${"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"}`;
     const spy = vi
       .spyOn(gateway, "createEnrollment")
       .mockImplementation(async (payload) => {
@@ -236,7 +239,7 @@ describe("EnrollmentDialog — token screen", () => {
           gateway,
           payload,
         );
-        return { ...real, ca_fingerprint: "SHA256:expect-this" };
+        return { ...real, ca_fingerprint: validFp };
       });
     await submitForm(container);
     await vi.waitFor(() => {
@@ -244,7 +247,7 @@ describe("EnrollmentDialog — token screen", () => {
     });
     // The masked one-liner carries the flag with the PUBLIC fingerprint.
     const onScreen = document.querySelectorAll("pre")[0].textContent ?? "";
-    expect(onScreen).toContain("--expect-fp SHA256:expect-this");
+    expect(onScreen).toContain(`--expect-fp ${validFp}`);
     // And the deliberate copy carries it too.
     const oneLinerBlock = document.querySelectorAll("pre")[0].closest("div")!;
     const copyButton = [...oneLinerBlock.querySelectorAll("button")].find((b) =>
@@ -255,9 +258,30 @@ describe("EnrollmentDialog — token screen", () => {
       const last = (
         navigator.clipboard.writeText as ReturnType<typeof vi.fn>
       ).mock.calls.at(-1)?.[0] as string;
-      expect(last).toContain("--expect-fp SHA256:expect-this");
+      expect(last).toContain(`--expect-fp ${validFp}`);
     });
     expect(spy).toHaveBeenCalled();
+    root.unmount();
+  });
+
+  it("PR #99 P3-3: a MALFORMED ca_fingerprint never rides the command (no flag)", async () => {
+    const { root, container, gateway } = await mount();
+    vi.spyOn(gateway, "createEnrollment").mockImplementation(async (payload) => {
+      const real = await MockAdapter.prototype.createEnrollment.call(
+        gateway,
+        payload,
+      );
+      // Hostile shapes — the field feeds a paste-ready shell line, so
+      // anything off the canonical forms is dropped, not interpolated.
+      return { ...real, ca_fingerprint: 'SHA256:oops; rm -rf / #' };
+    });
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("expires in");
+    });
+    const onScreen = document.querySelectorAll("pre")[0].textContent ?? "";
+    expect(onScreen).not.toContain("--expect-fp");
+    expect(onScreen).not.toContain("rm -rf");
     root.unmount();
   });
 

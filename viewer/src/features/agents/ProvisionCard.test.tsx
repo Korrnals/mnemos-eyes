@@ -237,10 +237,18 @@ describe("ProvisionCard — the feed", () => {
     root.unmount();
   });
 
-  it("retry returns to the form (a failed job is final — a new one starts)", async () => {
+  it("retry returns to the form and KEEPS the executor name (PR #99 P3-2)", async () => {
     const { root, gateway, queryClient } = await mountCard();
     gateway.setProvisionOutcome({ failCode: "ssh.auth_failed" });
-    await submitHappyForm();
+    await type(inputByLabel("Machine address"), "vps-1");
+    await type(inputByLabel("Private key"), "-----BEGIN OPENSSH-----");
+    await type(inputByLabel("Board address"), "https://b.example");
+    // The owner named the machine — the retry must not lose it (the wire
+    // job row never echoes the name; it rides the active-job record).
+    await type(inputByLabel("Executor name"), "gpu-box");
+    await act(async () => {
+      button("Connect").click();
+    });
     await advance(queryClient, 6);
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("key or password did not fit");
@@ -253,6 +261,10 @@ describe("ProvisionCard — the feed", () => {
     });
     // The active job detached — the feed is gone.
     expect(sessionStorage.getItem("vesmaro.provision.active")).toBeNull();
+    // P3-2: the re-seeded form carries the submitted executor name.
+    expect((inputByLabel("Executor name") as HTMLInputElement).value).toBe(
+      "gpu-box",
+    );
     root.unmount();
   });
 });

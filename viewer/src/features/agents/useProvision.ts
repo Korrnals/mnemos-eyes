@@ -41,6 +41,12 @@ export interface ActiveProvisionJob {
   readonly job_id: string;
   readonly host: string;
   readonly port: number;
+  /**
+   * PR #99 review P3-2: the executor name the OWNER typed at submit —
+   * the retry form re-seeds from here (the wire job row never echoes
+   * it: the server falls back to the host when empty).
+   */
+  readonly name: string;
 }
 
 function readActiveJob(): ActiveProvisionJob | null {
@@ -55,7 +61,16 @@ function readActiveJob(): ActiveProvisionJob | null {
     ) {
       return null;
     }
-    return parsed as ActiveProvisionJob;
+    // Normalize defensively: an older session's payload may predate the
+    // name field (a tab that survived a deploy) — missing pieces degrade
+    // to the server defaults, never to a broken card.
+    const candidate = parsed as Partial<ActiveProvisionJob>;
+    return {
+      job_id: candidate.job_id ?? "",
+      host: typeof candidate.host === "string" ? candidate.host : "",
+      port: typeof candidate.port === "number" ? candidate.port : 22,
+      name: typeof candidate.name === "string" ? candidate.name : "",
+    };
   } catch {
     return null;
   }
