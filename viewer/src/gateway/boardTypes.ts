@@ -85,9 +85,10 @@ export interface TagDrillStoreError {
 
 /**
  * `GET /api/tags/{tag}/drill` — everything tied to one tag (UI-17 §5).
- * BE-13 honesty: memories ride the search ranker, so `memories` is a
- * SUBSET — the UI states it (`tags.drill.subsetNote`), the header count
- * stays sourced from the full `/api/tags` aggregate.
+ * BE-13 (viewer closed): memories here still ride the search ranker (a
+ * SUBSET — keep the wire type honest), but the drill VIEW no longer renders
+ * them — it lists through `listMemories({ tags })` instead. The header
+ * count stays sourced from the full `/api/tags` aggregate.
  */
 export interface TagDrill {
   readonly ok: boolean;

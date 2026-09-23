@@ -204,7 +204,7 @@ describe("TagsPage — матрёшка-дрилл deep-links (§5)", () => {
     expect(html).toContain("bare-tag-1");
   });
 
-  it("opens the server drill for ?tag= with siblings, groups and the BE-13 note", async () => {
+  it("opens the server drill for ?tag= with siblings and the honest listing (BE-13)", async () => {
     const gateway = new MockAdapter({ latency: false });
     const html = await renderTags(gateway, {
       path: "/memory/tags?tag=project:gcw",
@@ -221,9 +221,11 @@ describe("TagsPage — матрёшка-дрилл deep-links (§5)", () => {
     // Board tasks section + honest empty copy (no project:gcw task in fixtures).
     expect(html).toContain("Tasks carrying this tag");
     expect(html).toContain("No tasks carry this tag");
-    // Memories from the server drill + the subset honesty note (BE-13).
+    // BE-13 closed (viewer): the memories section is the honest LISTING —
+    // the stale «search ranker subset» note must be GONE, and the full
+    // listing (pagination) stays one click away.
     expect(html).toContain("Memories");
-    expect(html).toContain("Showing a subset");
+    expect(html).not.toContain("Showing a subset");
     expect(html).toContain("Open in Memories");
   });
 
