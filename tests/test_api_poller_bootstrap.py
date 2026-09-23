@@ -105,6 +105,18 @@ class TestCaArtifact:
         assert r.status_code == 503
         assert "fail-closed" in r.json()["detail"]
 
+    def test_non_pem_file_is_refused_not_leaked(self, client, monkeypatch,
+                                                tmp_path):
+        """A mispointed env must not leak an arbitrary file (e.g. a secret
+        key) to anonymous readers: only PEM certificates are servable."""
+        secret_like = tmp_path / "not-a-cert"
+        secret_like.write_bytes(b"VESMARO_BOARD_TOKEN=totally-not-a-cert\n")
+        monkeypatch.setenv("VESMARO_TLS_CA_FILE", str(secret_like))
+        r = client.get("/api/poller/artifacts/ca.crt")
+        assert r.status_code == 503
+        assert "PEM" in r.json()["detail"]
+        assert b"totally-not-a-cert" not in r.content
+
     def test_mounted_ca_serves_bytes(self, client, monkeypatch, tmp_path):
         ca = tmp_path / "ca.crt"
         ca.write_bytes(b"-----BEGIN CERTIFICATE-----\nLAB\n-----END CERTIFICATE-----\n")

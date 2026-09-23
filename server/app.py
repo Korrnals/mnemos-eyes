@@ -3782,7 +3782,17 @@ async def poller_artifact_ca() -> Response:
             f"{_TLS_CA_FILE_ENV}={ca_file} does not exist — fix the mount "
             f"or unset the variable (fail-closed: no CA, no download)",
         )
-    return Response(content=path.read_bytes(), media_type="application/x-x509-ca-cert")
+    data = path.read_bytes()
+    # A mispointed variable must not leak an arbitrary file to anonymous
+    # readers: only a PEM certificate is servable here.
+    if not data.lstrip().startswith(b"-----BEGIN CERTIFICATE-----"):
+        raise HTTPException(
+            503,
+            f"{_TLS_CA_FILE_ENV}={ca_file} is not a PEM certificate — "
+            f"refusing to serve it (fail-closed: this route serves "
+            f"certificates only)",
+        )
+    return Response(content=data, media_type="application/x-x509-ca-cert")
 
 
 # ------------------------------------- execution settings (ARCH-9, Amd 2 §5)

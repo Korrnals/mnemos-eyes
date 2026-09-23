@@ -147,6 +147,10 @@ spec:
         - name: tls-ca
           secret:
             secretName: {{ default .Values.ingress.tls.secretName .Values.pollerBootstrap.caFile.existingSecret }}
+            # optional: an install without the TLS secret must NOT hang on
+            # FailedMount — the empty mount means no file, which the route
+            # answers with its honest fail-closed 503 (the values comment).
+            optional: true
             items:
               # PUBLIC material only — the private key never leaves the secret.
               - key: tls.crt

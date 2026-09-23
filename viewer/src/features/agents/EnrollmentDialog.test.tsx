@@ -161,6 +161,7 @@ describe("EnrollmentDialog — token screen", () => {
     // Wave 3D: the one-liner leads, the manual four steps live in the
     // <details> spoiler (diagnostics / air-gapped path).
     const pres = document.querySelectorAll("pre");
+    expect(pres[0].textContent).toContain("curl -kfsSL");
     expect(pres[0].textContent).toContain("/api/poller/bootstrap.sh");
     expect(pres[0].textContent).toContain("| sudo bash -s --");
     expect(pres[0].textContent).toContain("--url http://localhost:3000");

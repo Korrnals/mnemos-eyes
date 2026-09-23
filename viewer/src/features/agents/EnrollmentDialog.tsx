@@ -202,9 +202,13 @@ function TokenScreen({
   const oneLinerArgs =
     `--url ${origin} --token ${created.token}` +
     ` --name ${bootstrapName} --harness ${bootstrapHarness}`;
-  const oneLiner = `curl -fsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ${oneLinerArgs}`;
+  // The outer -k is honest and bounded: the installer TEXT is public and
+  // secret-free, the lab TLS is self-signed (the chicken-and-egg this
+  // script breaks); everything inside rides the PINNED CA + fingerprint
+  // check. See REMOTE-EXECUTOR.md Путь 1.
+  const oneLiner = `curl -kfsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ${oneLinerArgs}`;
   const oneLinerMasked =
-    `curl -fsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ` +
+    `curl -kfsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ` +
     `--url ${origin} --token ${created.token.slice(0, 4)}${"•".repeat(12)}` +
     ` --name ${bootstrapName} --harness ${bootstrapHarness}`;
   // A used token links to the row it minted (enrollment.used carries the
