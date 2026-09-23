@@ -16,12 +16,18 @@
 #   5. values gate    — helm get values (live) vs deploy/chart/.../values.yaml
 #                       (git) on NON-SECRET keys: a hand-edited live release
 #                       (stale --set, a diagnostics window left on) refuses
-#                       the deploy. Secret-class keys are compared by KEY
-#                       PRESENCE only — values never printed. A non-secret
-#                       drift can be waived ONLY by an explicit audited
-#                       escape: `deploy --allow-drift "<reason>"` (secret-
-#                       class drift is NEVER waivable — see P2-A deadlock
-#                       note below);
+#                       the deploy. RELEASE-BUMP FORGIVENESS (1.33.0 battle):
+#                       on ANY release bump the live release by definition
+#                       still runs the PREVIOUS tag, so an image.tag-only
+#                       drift is waived automatically when the live tag
+#                       equals the appVersion of the currently deployed
+#                       helm revision (helm history) — "previous release,
+#                       not manual drift"; a foreign tag (manual --set)
+#                       refuses as before. Any other non-secret drift can
+#                       be waived ONLY by an explicit audited escape:
+#                       `deploy --allow-drift "<reason>"` (secret-class
+#                       drift is NEVER waivable — see P2-A deadlock note
+#                       below);
 #   6. build + push   — distrobox-host-exec podman (tag resolved from the
 #                       chart values / appVersion);
 #   7. helm upgrade   — -f values.yaml --set image.tag --set rootApp=app
@@ -32,17 +38,19 @@
 #
 # Subcommands:
 #   deploy [--allow-drift "<reason>"]
-#                              build + upgrade (default). --allow-drift is
-#                              the POST-ROLLBACK ESCAPE: after `rollback
-#                              <rev>` the live release legitimately carries
-#                              the OLD revision's values (image.tag,
-#                              rootApp), so the next deploy would deadlock
-#                              on the values gate (repair cannot build the
-#                              image, committing the stale values would
-#                              defeat the gate). The flag waives ONLY the
-#                              non-secret drift refusal; every other gate
-#                              still runs; the reason is MANDATORY and
-#                              lands in the JOURNAL line;
+#                              build + upgrade (default). A release-bump
+#                              image.tag drift (live == previous release
+#                              appVersion per helm history) is waived
+#                              AUTOMATICALLY with an audit note — no flag
+#                              needed. --allow-drift is the escape for
+#                              every OTHER non-secret drift: the
+#                              POST-ROLLBACK case (after `rollback <rev>`
+#                              the live release legitimately carries the
+#                              OLD revision's rootApp etc.), a manual tag
+#                              pin, a diagnostics window. The flag waives
+#                              ONLY the non-secret drift refusal; every
+#                              other gate still runs; the reason is
+#                              MANDATORY and lands in the JOURNAL line;
 #   verify                     dry run of gates 1-5, no deploy, no journal
 #   rollback <rev> [--skip-history-gate]
 #                              same gates, helm rollback instead of
@@ -79,7 +87,10 @@ PODMAN_HOST="${VESMARO_DEPLOY_PODMAN_HOST:-distrobox-host-exec podman}"
 # container vs host) each see their OWN /run and the flock does NOT
 # serialize deploys between them. Run every deploy from the SAME
 # container (or point LOCK at a shared path) — the gate only holds
-# within one PID/mount namespace.
+# within one PID/mount namespace. /run is typically NOT user-writable:
+# either pre-create the file once (see the runbook: sudo install -m 0666
+# /dev/null /run/vesmaro-deploy.lock) or let acquire_lock fall back to
+# $XDG_RUNTIME_DIR with a WARNING.
 LOCK_PATH="${VESMARO_DEPLOY_LOCK:-/run/vesmaro-deploy.lock}"
 
 # python for yaml/json parsing: the repo venv when present, else python3
@@ -100,9 +111,12 @@ usage() {
 Usage: scripts/deploy.sh [deploy|verify|rollback <rev>|repair] [flags]
 
   deploy    build + push the image, helm upgrade --atomic, JOURNAL entry
-            --allow-drift "<reason>"  waive a NON-SECRET values drift
-            (post-rollback realign; reason is mandatory, lands in JOURNAL;
-            secret-class drift and every other gate still refuse)
+            (a release-bump image.tag drift — live equals the previous
+            release appVersion — is waived automatically, no flag needed)
+            --allow-drift "<reason>"  waive any OTHER NON-SECRET values
+            drift (manual tag pin, post-rollback rootApp; reason is
+            mandatory, lands in JOURNAL; secret-class drift and every
+            other gate still refuse)
   verify    gates 1-5 only (preflight, version, lock, history, values)
   rollback  helm rollback <rev> through the same gates + JOURNAL entry
             --skip-history-gate allowed (recover from failed/pending)
@@ -141,6 +155,10 @@ ROLLBACK_REV=""
 SKIP_HISTORY=0
 ALLOW_DRIFT=0
 DRIFT_REASON=""
+# set by gate_values_drift when the image.tag drift was auto-waived as
+# the previous release — do_deploy folds it into the JOURNAL note so the
+# waiver stays auditable even without --allow-drift
+DRIFT_AUTO_WAIVED=0
 
 
 # ------------------------------------------------------------------ gates
@@ -167,6 +185,16 @@ gate_version_drift() {
 }
 
 acquire_lock() {
+  # The DEFAULT lock path lives in /run, which needs a one-time sudo
+  # setup on hosts where /run is not user-writable. Refusing the deploy
+  # over that is operationally hostile (the 1.33.0 first run hit it):
+  # when the default path cannot be created/written we fall back to the
+  # user runtime dir with a WARNING (serialization stays best-effort).
+  # An EXPLICIT VESMARO_DEPLOY_LOCK knob is never second-guessed.
+  if [[ -z "${VESMARO_DEPLOY_LOCK:-}" ]] && ! touch "$LOCK_PATH" 2>/dev/null; then
+    LOCK_PATH="${XDG_RUNTIME_DIR:-/tmp}/vesmaro-deploy.lock"
+    echo "deploy: WARNING — default lock path (/run/vesmaro-deploy.lock) not writable; falling back to $LOCK_PATH (best-effort serialization; pre-create the /run file or set VESMARO_DEPLOY_LOCK for strict locking)" >&2
+  fi
   log "gate 3/5 lock: $LOCK_PATH"
   exec 9>"$LOCK_PATH" || die "cannot open $LOCK_PATH for locking" 1
   if ! flock -n 9; then
@@ -255,6 +283,26 @@ print(last.get("revision", "?"), last.get("status", "?"))
 '
 }
 
+# appVersion of the CURRENTLY DEPLOYED revision (helm history) — i.e.
+# the tag the previous release legitimately runs. Empty when no
+# deployed revision exists or the history is unreadable; callers treat
+# empty as "cannot confirm" and do NOT auto-waive.
+deployed_app_version() {
+  "$HELM_BIN" history "$RELEASE" -n "$NAMESPACE" --output json 2>/dev/null \
+    | "${PY[@]}" -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+deployed = [r for r in rows if r.get("status") == "deployed"]
+if not deployed:
+    sys.exit(1)
+last = max(deployed, key=lambda r: int(r.get("revision", 0)))
+print(last.get("app_version") or "")
+'
+}
+
 gate_helm_history() {
   log "gate 4/5 helm history: latest revision must be deployed"
   local last
@@ -272,16 +320,23 @@ gate_helm_history() {
 # Non-secret keys the live release must agree on with git (values.yaml +
 # the deploy intent: rootApp=app and image.tag=<resolved tag> per RUNBOOK
 # §11 — the wrapper always passes both explicitly). Drift on ANY of them
-# = refuse — waivable ONLY by `deploy --allow-drift "<reason>"` (the
-# post-rollback escape: the live release then legitimately carries the
-# old revision's values). Secret-class keys: KEY PRESENCE only, values
-# never compared and never printed — NEVER waivable (exit 3).
+# = refuse — EXCEPT the release-bump shape: an image.tag-ONLY drift where
+# the live tag equals the appVersion of the currently deployed helm
+# revision is auto-waived (the 1.33.0 battle: on every release bump live
+# by definition still runs the previous tag — that is not manual drift).
+# Any other non-secret drift is waivable ONLY by `deploy --allow-drift
+# "<reason>"` (the post-rollback escape: the live release then
+# legitimately carries the old revision's values). Secret-class keys:
+# KEY PRESENCE only, values never compared and never printed — NEVER
+# waivable (exit 3).
 # Exit codes of the python half: 0 = match, 1 = non-secret drift
-# (waivable), 3 = secret-class drift (never), 4 = unexpected error
-# (never — a parse crash must not be mistakable for waivable drift).
+# (multi-key or non-tag — waivable only via --allow-drift), 2 = image.tag
+# ONLY drift (bash then decides: previous release → auto-waive, else
+# refuse/--allow-drift), 3 = secret-class drift (never), 4 = unexpected
+# error (never — a parse crash must not be mistakable for waivable drift).
 gate_values_drift() {
   log "gate 5/5 values drift: live release vs git (non-secret keys)"
-  local live_yaml tag repo rc
+  local live_yaml tag repo rc out
   live_yaml="$(mktemp)"
   # removed on EVERY exit path (die included) by the global cleanup()
   # trap — a RETURN trap does not fire on the die/exit paths.
@@ -292,7 +347,7 @@ gate_values_drift() {
   tag="$(resolve_image_tag)"
   repo="$(image_repository)"
   rc=0
-  "${PY[@]}" - "$live_yaml" "$VALUES_FILE" "$tag" "$repo" <<'PYDRIFT' || rc=$?
+  out="$("${PY[@]}" - "$live_yaml" "$VALUES_FILE" "$tag" "$repo" <<'PYDRIFT'
 import sys, yaml
 
 live_path, file_path, image_tag, image_repo = sys.argv[1:5]
@@ -355,12 +410,15 @@ secret_class = [
 ]
 
 drift = []
+drifted_paths = []
 for path, expected in non_secret_expected.items():
     got, present = dig(live, path)
     if not present:
         drift.append(f"{path}: absent in live release (expected {expected!r})")
+        drifted_paths.append(path)
     elif got != expected:
         drift.append(f"{path}: live={got!r} git={expected!r}")
+        drifted_paths.append(path)
 
 secret_drift = []
 for path in secret_class:
@@ -379,12 +437,39 @@ if secret_drift:
         print(f"  - {line}", file=sys.stderr)
 if secret_drift:
     sys.exit(3)
+if drifted_paths == ["image.tag"]:
+    # the release-bump shape: the ONLY drift is image.tag — bash decides
+    # via helm history whether live runs the previous release (auto-waive)
+    # or a foreign manually-pinned tag (refuse / --allow-drift)
+    live_tag = dig(live, "image.tag")[0]
+    print(f"TAG-ONLY-DRIFT {live_tag}")
+    sys.exit(2)
 if drift:
     sys.exit(1)
 print("   live values match git + deploy intent (non-secret keys)")
 PYDRIFT
+)" || rc=$?
+  if [[ "$rc" -eq 0 && -n "$out" ]]; then
+    printf '%s\n' "$out"
+  fi
   case "$rc" in
     0) ;;
+    2)
+      # image.tag-only drift: if the live tag IS the appVersion of the
+      # currently deployed revision, live is simply the previous release
+      # (every release bump looks like this) — waived, no flag needed.
+      local live_tag prev_app
+      live_tag="$(printf '%s\n' "$out" | sed -n 's/^TAG-ONLY-DRIFT //p' | head -1)"
+      prev_app="$(deployed_app_version)" || prev_app=""
+      if [[ -n "$live_tag" && -n "$prev_app" && "$live_tag" == "$prev_app" ]]; then
+        DRIFT_AUTO_WAIVED=1
+        log "gate 5/5 values drift: WAIVED — image.tag $live_tag is the appVersion of the deployed revision (previous release, not manual drift)"
+      elif [[ "$ALLOW_DRIFT" -eq 1 ]]; then
+        log "gate 5/5 values drift: image.tag '$live_tag' is NOT the deployed revision's appVersion ('${prev_app:-unknown}') — previous-release auto-waive does not apply"
+        log "gate 5/5 values drift: WAIVED (--allow-drift) — non-secret keys only, reason recorded in JOURNAL"
+      else
+        die "image.tag drift is NOT the previous release (live=$live_tag, deployed-revision appVersion=${prev_app:-unknown}) — realign the live release (scripts/deploy.sh repair), commit the intended values, or waive explicitly: scripts/deploy.sh deploy --allow-drift \"<reason>\"" 1
+      fi ;;
     1)
       if [[ "$ALLOW_DRIFT" -eq 1 ]]; then
         log "gate 5/5 values drift: WAIVED (--allow-drift) — non-secret keys only, reason recorded in JOURNAL"
@@ -435,7 +520,11 @@ journal_append() {  # $1 action, $2 rev_before, $3 rev_after, $4 image_tag, [$5 
       "$GIT_BIN" add "$JOURNAL" \
         && "$GIT_BIN" commit -q -m "chore(deploy): journal — $action rev $rev_before>$rev_after image ${image_tag:-none}" \
         || echo "deploy: WARNING — could not commit $JOURNAL (deploy already done; commit it manually)" >&2
-      "$GIT_BIN" push -q origin main 2>/dev/null \
+      # push HEAD, not the local main branch: deploys often run from a
+      # worktree / detached HEAD that does NOT own main (gate 1 only
+      # needs HEAD == origin/main) — `push origin main` would then push
+      # the STALE local main and silently strand the journal commit.
+      "$GIT_BIN" push -q origin HEAD:main 2>/dev/null \
         || echo "deploy: WARNING — could not push the journal commit (push it manually)" >&2
       ;;
     *) ;;
@@ -484,10 +573,13 @@ do_deploy() {
   rev_after="$(rev_now)"
   log "deployed: rev $rev_before>$rev_after"
   # drift waiver note: the audit trail must show WHY the values gate
-  # was skipped, in the JOURNAL line itself
+  # was skipped, in the JOURNAL line itself — for BOTH waiver kinds
+  # (explicit --allow-drift and the automatic previous-release one)
   local note=""
   if [[ "$ALLOW_DRIFT" -eq 1 ]]; then
     note="allow-drift: $DRIFT_REASON"
+  elif [[ "$DRIFT_AUTO_WAIVED" -eq 1 ]]; then
+    note="auto-waived: image.tag drift = previous release (deployed-revision appVersion)"
   fi
   journal_append deploy "$rev_before" "$rev_after" "$(resolve_image_tag)" "$note"
 }
