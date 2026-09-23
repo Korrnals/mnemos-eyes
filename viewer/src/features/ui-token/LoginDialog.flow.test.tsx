@@ -17,6 +17,7 @@ import { Sidebar } from "@/layout/Sidebar";
 import { I18nProvider } from "@/i18n";
 import { keys } from "@/lib/queryKeys";
 import { clearUiToken, hasUiToken } from "@/gateway/uiToken";
+import { DEVICE_TOKEN_STORAGE_KEY } from "@/gateway/deviceToken";
 import type * as useTasksModule from "@/features/tasks/useTasks";
 
 // Test-env seam (documented, not a product change): useReportCounts subscribes
@@ -126,8 +127,27 @@ function createTaskButton(scope: ParentNode): HTMLButtonElement | undefined {
  * portals (document.body) never leak into the next test. */
 const mountedRoots: Root[] = [];
 
+/**
+ * Viewport stub (UI-22 test-env seam): the sidebar expansion is state-driven
+ * through matchMedia, and happy-dom answers "no match" by default — which
+ * renders the mobile icon rail and HIDES the footer mode line these flow
+ * tests assert on. These tests run on a desktop viewport.
+ */
+function stubMatchMedia(matches: boolean): void {
+  const stub = (query: string) => ({
+    matches,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  });
+  (globalThis as { matchMedia: unknown }).matchMedia = stub;
+  (window as { matchMedia: unknown }).matchMedia = stub;
+}
+
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", new MemoryStorage());
+  stubMatchMedia(true);
+  localStorage.clear();
   clearUiToken();
 });
 
@@ -499,6 +519,103 @@ describe("login flow regression (owner repro)", () => {
       "kubectl get secret vesmaro-eyes-ui-token",
     );
     expect(document.body.textContent).not.toContain("mnk_"); // no value examples
+  });
+});
+
+/**
+ * UI-22 device beat (ADR 0012 §5): a PAIRED device (localStorage
+ * `vesmaro.deviceToken`) has identity but v0 read-only scope — the server
+ * would answer 403 to its mutations. The mutation attempt must surface the
+ * HONEST refusal toast, never the login window (the 401 affordance, which
+ * would promise a continuation the device can never run) and never a
+ * mutation POST.
+ */
+describe("paired device (UI-22): mutation attempt → honest toast, no login window", () => {
+  beforeEach(() => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
+
+  it("create on a device-bound browser: deviceForbidden toast, window stays closed, zero mutation POSTs", { timeout: 20000 }, async () => {
+    localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, "mnd_paired-device");
+    // No owner session: the boot probe (GET /api/auth/ui-token) refuses.
+    // The mutation POST route would 403 — if it is EVER called the test
+    // fails on the POST assertion below, which is the point.
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/ui-token")) {
+        return new Response(null, { status: (init?.method ?? "GET") === "GET" ? 401 : 204 });
+      }
+      if (url.endsWith("/api/tasks") && (init?.method ?? "GET") === "POST") {
+        return jsonResponse({ error: "device scope is read-only" }, 403);
+      }
+      return jsonResponse(boardPayload);
+    });
+    const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await queryClient.prefetchQuery({
+      queryKey: keys.tasks.board(),
+      queryFn: () => gateway.board(),
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <I18nProvider initialLang="en">
+          <GatewayContext.Provider value={gateway}>
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <UiTokenProvider>
+                  <MemoryRouter initialEntries={["/tasks"]}>
+                    <TaskListPage />
+                    <ToastViewport />
+                  </MemoryRouter>
+                </UiTokenProvider>
+              </ToastProvider>
+            </QueryClientProvider>
+          </GatewayContext.Provider>
+        </I18nProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    // Create without a ui token on a paired device…
+    const createButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Task",
+    );
+    await act(async () => {
+      createButton?.click();
+    });
+    const textarea = document.querySelector("textarea");
+    await act(async () => {
+      setInputValue(textarea as HTMLTextAreaElement, "Device task");
+    });
+    await act(async () => {
+      buttonByText(document.body, "Create task")?.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+
+    // …the LOGIN WINDOW never opens (the 403 is not a 401)…
+    expect(document.getElementById("login-token-value")).toBeNull();
+    expect(document.querySelector('[data-testid="login-dialog"]')).toBeNull();
+    // …the honest refusal toast lands instead…
+    expect(container.textContent).toContain("Actions from this device are closed");
+    expect(container.textContent).toContain("v0 — read-only");
+    // …and the request never left the browser: the 403 is announced up
+    // front, not fetched.
+    const mutationPosts = fetchImpl.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/api/tasks") && (init?.method ?? "GET") === "POST",
+    );
+    expect(mutationPosts).toHaveLength(0);
   });
 });
 

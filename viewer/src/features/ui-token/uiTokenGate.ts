@@ -52,7 +52,12 @@ export type UiTokenRejectKind = "verify" | "session";
  */
 export type UiTokenGateEvent =
   | { type: "loginStored"; tokenClass: "ui" | "legacy" }
-  | { type: "tokenRejected" };
+  | { type: "tokenRejected" }
+  /** UI-22: a token-less mutation on a DEVICE-bound browser (ADR 0012 §5).
+   * The server's verdict for such mutations is 403 (device scope v0 is
+   * read-only) — the login window is the 401 affordance and would lie about
+   * the verdict; the provider turns this event into the honest toast. */
+  | { type: "deviceForbidden" };
 
 export interface UiTokenGateState {
   /** Login-window visibility. */
@@ -93,12 +98,19 @@ export interface UiTokenGateOptions {
    * 401 mid-flight, before the window may open. Absent → the window
    * opens immediately (the historical behavior). */
   probe?: () => Promise<boolean>;
+  /** UI-22: "is this browser a PAIRED DEVICE?" (ADR 0012 §5 — the
+   * `vesmaro.deviceToken` identity). When true, a token-less mutation must
+   * NOT open the login window: the server would answer 403 (device scope v0
+   * read-only), so the honest refusal toast fires instead. Absent → the
+   * historical login-window path (mock/SSR harnesses, older tests). */
+  hasDeviceIdentity?: () => boolean;
 }
 
 export class UiTokenGate {
   private readonly hasToken: () => boolean;
   private readonly verifyToken?: (value: string) => Promise<UiTokenVerifyResult>;
   private readonly probe?: () => Promise<boolean>;
+  private readonly hasDeviceIdentity?: () => boolean;
   private readonly listeners = new Set<Listener>();
   private readonly eventListeners = new Set<EventListener>();
   private state: UiTokenGateState;
@@ -108,6 +120,7 @@ export class UiTokenGate {
     this.hasToken = options.hasToken;
     this.verifyToken = options.verifyToken;
     this.probe = options.probe;
+    this.hasDeviceIdentity = options.hasDeviceIdentity;
     this.state = {
       open: false,
       reason: "manual",
@@ -242,6 +255,16 @@ export class UiTokenGate {
     isReplay = false,
   ): Promise<void> {
     if (!this.hasToken()) {
+      // UI-22 device beat: a paired device has IDENTITY but no write scope —
+      // the server answers 403 to its mutations (ADR 0012 §5). Opening the
+      // login window here would promise «sign in and your action continues»
+      // for an action the device can NEVER run. Announce the honest refusal
+      // (the provider toasts it), reset the spinner owner, drop the run.
+      if (this.hasDeviceIdentity?.()) {
+        this.emit({ type: "deviceForbidden" });
+        onDeferred?.();
+        return;
+      }
       this.pending = onDeferred ? { run, onDeferred } : { run };
       this.setState({ open: true, reason: "required", tokenPresent: false });
       onDeferred?.();

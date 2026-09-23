@@ -3,6 +3,7 @@ import {
   isTaskMutationSource,
   isUiTokenSessionSource,
 } from "@/gateway/capabilities";
+import { hasDeviceToken } from "@/gateway/deviceToken";
 import { useGateway } from "@/gateway/GatewayContext";
 import { useToast } from "@/components/Toast/toastContext";
 import { useT } from "@/i18n";
@@ -47,6 +48,13 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
     () =>
       new UiTokenGate({
         hasToken: () => (isTaskMutationSource(gateway) ? gateway.hasUiToken() : false),
+        // UI-22: only a mutation-capable gateway has the device beat — the
+        // device identity (ADR 0012 §5) lives in localStorage and the fail-soft
+        // read answers "no identity" outside a browser. The mock has no auth
+        // wall (hasToken → true), so the branch stays unreachable there.
+        ...(isTaskMutationSource(gateway)
+          ? { hasDeviceIdentity: () => hasDeviceToken() }
+          : {}),
         ...(isUiTokenSessionSource(gateway)
           ? {
               verifyToken: (value: string) => gateway.verifyUiToken(value),
@@ -87,6 +95,16 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
           ...(event.tokenClass === "legacy"
             ? { detail: t("login.toastLegacy") }
             : {}),
+        });
+        return;
+      }
+      if (event.type === "deviceForbidden") {
+        // UI-22: the honest device refusal — the login window never opens
+        // for a paired device (the server's 403 verdict, ADR 0012 §5).
+        toast.push({
+          kind: "error",
+          title: t("login.deviceForbidden"),
+          detail: t("login.deviceForbiddenDetail"),
         });
         return;
       }

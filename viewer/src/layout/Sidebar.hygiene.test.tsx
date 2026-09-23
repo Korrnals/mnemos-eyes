@@ -48,7 +48,9 @@ describe("Sidebar overflow hygiene (UI-19)", () => {
     expect(html.match(/<span class="[^"]*whitespace-nowrap/g)).toBeNull();
     expect(html).toContain("overflow-x-hidden");
     // The widened expanded slot (w-56 → w-64 for the long RU docs labels).
-    expect(html).toContain("md:w-64");
+    // UI-22: the slot width is state-driven now (viewport via matchMedia),
+    // so the SSR string carries the plain w-64.
+    expect(html).toContain("w-64");
   });
 
   it("every long label row keeps its FULL name as title AND aria-label", () => {

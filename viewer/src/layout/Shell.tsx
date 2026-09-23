@@ -27,10 +27,14 @@ import { useT } from "@/i18n";
  * Collapse state lives here so it survives route changes, and persists under
  * "vesmaro.sidebarCollapsed" (UI-19 owner feedback: the collapsed rail must
  * survive F5; the `vesmaro.*` namespace, guarded read/write exactly like
- * executionPrefs.ts — the node test environment has no DOM).
+ * executionPrefs.ts — the node test environment has no DOM). UI-22: the flag
+ * is the DESKTOP intent only — the Sidebar's mobile (<md) overlay state is
+ * session-only and its toggle never reaches this setter, so a phone can
+ * never corrupt the desktop's remembered panel width.
  */
 
-/** localStorage key for the sidebar collapsed rail (UI-19 owner feedback). */
+/** localStorage key for the sidebar collapsed rail — the DESKTOP intent
+ * (UI-19 persist, UI-22 scope: mobile overlay never reads or writes it). */
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = "vesmaro.sidebarCollapsed";
 
 /** Guarded localStorage handle — undefined outside a browser/test stub. */
@@ -42,7 +46,8 @@ function safeStorage(): Storage | undefined {
   }
 }
 
-/** Read the persisted collapse flag; absent/corrupt data falls back to open. */
+/** Read the persisted DESKTOP collapse flag; absent/corrupt data falls back
+ * to open. (The mobile panel ignores it entirely — UI-22.) */
 function loadSidebarCollapsed(storage: Storage | undefined = safeStorage()): boolean {
   if (!storage) return false;
   try {
