@@ -946,6 +946,9 @@ export const en: Record<TranslationKey, string> = {
   "agents.harness.invalid":
     "Lowercase latin/digits first, then dots, dashes, underscores (≤60 chars).",
 
+  "agents.enrollment.oneLinerHint": "The outer -k is safe: the installer text is public and secret-free — everything inside rides the pinned CA. The --url must be the address THIS machine resolves (the VPN overlay address may differ from the LAN one).",
+  "agents.enrollment.tokenInCopyNote": "Copying puts the FULL token on the clipboard.",
+  "agents.enrollment.manualToggle": "Manual path — diagnostics / air-gapped installs",
   "agents.enrollment.listTitle": "Enrollment tokens",
   "agents.enrollment.listHint": "live + history",
   "agents.enrollment.listLoading": "Loading tokens",
