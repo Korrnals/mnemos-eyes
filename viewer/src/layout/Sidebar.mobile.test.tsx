@@ -2,12 +2,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, createMemoryRouter, RouterProvider } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Sidebar } from "./Sidebar";
+import { buildRoutes } from "@/app/routes";
 import { BoardAdapter } from "@/gateway/BoardAdapter";
+import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
+import { ThemeProvider } from "@/components/theme-provider";
+import { AuthProvider } from "@/features/auth/AuthProvider";
+import { DensityProvider } from "@/components/density-provider";
+import { HotkeysProvider } from "@/layout/Hotkeys";
 import { I18nProvider } from "@/i18n";
 
 /**
@@ -352,3 +358,99 @@ describe("sidebar focus trap (overlay only)", () => {
     expect(document.activeElement).toBe(outside); // nothing moved
   });
 });
+
+/**
+ * ME-002 (background inert): the trap keeps TAB inside the dialog, but the
+ * covered page also has to leave the ACCESSIBILITY tree (SR / virtual
+ * cursor) — `inert` on everything except the dialog subtree. That wiring
+ * lives in the Shell (skip link + content column) and the chrome surfaces,
+ * so these tests mount the real Shell via buildRoutes — the Sidebar-only
+ * harness above has no background to inert.
+ */
+async function mountShell(path = "/memory") {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  mountedRoots.push(root);
+  await act(async () => {
+    root.render(
+      <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
+        <QueryClientProvider
+          client={
+            new QueryClient({
+              defaultOptions: { queries: { enabled: false, retry: false } },
+            })
+          }
+        >
+          <ThemeProvider>
+            <AuthProvider adapterMode="mock" endpoint="/api">
+              <I18nProvider initialLang="ru">
+                <DensityProvider initialDensity="comfortable">
+                  <HotkeysProvider>
+                    <RouterProvider
+                      router={createMemoryRouter(buildRoutes(), {
+                        initialEntries: [path],
+                      })}
+                    />
+                  </HotkeysProvider>
+                </DensityProvider>
+              </I18nProvider>
+            </AuthProvider>
+          </ThemeProvider>
+        </QueryClientProvider>
+      </GatewayContext.Provider>,
+    );
+  });
+  return { container };
+}
+
+function skipLink(container: HTMLElement): HTMLAnchorElement | null {
+  return container.querySelector<HTMLAnchorElement>("a[href='#main']");
+}
+
+describe("sidebar overlay inerts the background (ME-002, full Shell)", () => {
+  beforeEach(() => {
+    stubMatchMedia(false); // the phone viewport
+    localStorage.clear();
+  });
+
+  it("while the overlay is open the covered page is inert; closed — nothing is", async () => {
+    const { container } = await mountShell();
+    await vi.waitFor(() => {
+      expect(container.querySelector("aside")).not.toBeNull();
+    });
+    const main = container.querySelector("main");
+    expect(main).not.toBeNull();
+    // Closed rail: page chrome is fully live — no stray inert anywhere.
+    expect(main!.closest("[inert]")).toBeNull();
+    expect(skipLink(container)?.hasAttribute("inert")).toBe(false);
+
+    click(toggleButton(container));
+    const aside = container.querySelector("aside");
+    expect(aside?.getAttribute("role")).toBe("dialog");
+    // Everything the dialog covers leaves the a11y tree (and the pointer):
+    // main, the skip link, the whole content column.
+    expect(main!.closest("[inert]")).not.toBeNull();
+    expect(skipLink(container)?.hasAttribute("inert")).toBe(true);
+    expect(main!.parentElement?.hasAttribute("inert")).toBe(true);
+    // …while the DIALOG subtree — the panel and the toggle that owns the
+    // focus return — stays live (programmatic focus cannot enter an inert
+    // ancestor, so inerting them would break the close path).
+    expect(aside?.closest("[inert]")).toBeNull();
+    expect(toggleButton(container).closest("[inert]")).toBeNull();
+
+    // Esc closes: the background comes back to the tree and focus lands on
+    // the toggle that opened the overlay.
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(aside?.getAttribute("role")).toBeNull();
+    expect(main!.closest("[inert]")).toBeNull();
+    expect(skipLink(container)?.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(toggleButton(container));
+    expect(document.body.style.overflow).toBe("");
+  });
+});
+

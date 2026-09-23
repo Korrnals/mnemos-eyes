@@ -11,6 +11,7 @@ import {
   toggleSidebarCollapsed,
   useSidebarCollapsed,
 } from "@/lib/sidebarState";
+import { useSidebarOverlayOpen } from "@/lib/sidebarOverlayState";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
@@ -44,6 +45,16 @@ export { SIDEBAR_COLLAPSED_STORAGE_KEY };
 export function Shell() {
   const collapsed = useSidebarCollapsed();
   const toggle = toggleSidebarCollapsed;
+  // ME-002: while the Sidebar's mobile overlay dialog covers the viewport,
+  // everything EXCEPT the dialog subtree leaves the accessibility tree —
+  // `inert` blocks pointer + focus + SR reach natively (baseline 102/15.5;
+  // older engines just ignore the attribute = the pre-ME-002 behaviour).
+  // The toggle that owns focus return lives INSIDE the dialog (sidebar
+  // header), so nothing here blocks the close path. The skip link and the
+  // content column inert here; the toast region and the update banner inert
+  // their own roots off the same store.
+  const sidebarOverlayOpen = useSidebarOverlayOpen();
+  const backgroundInert = sidebarOverlayOpen ? ("" as const) : undefined;
   // Persist on every change (SSR-safe: effects never run on the server; the
   // initial render also re-affirms the stored value — a no-op write).
   useEffect(() => saveSidebarCollapsed(collapsed), [collapsed]);
@@ -65,15 +76,17 @@ export function Shell() {
 
   return (
     <div className="flex min-h-dvh bg-background text-foreground">
-      {/* Bypass the repeated nav (WCAG 2.4.1): visible only on keyboard focus. */}
+      {/* Bypass the repeated nav (WCAG 2.4.1): visible only on keyboard focus.
+       * Inert while the mobile sidebar dialog is open (ME-002). */}
       <a
         href="#main"
+        inert={backgroundInert}
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-well focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-float"
       >
         {t("shell.skipToContent")}
       </a>
       <Sidebar collapsed={collapsed} onToggle={toggle} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col" inert={backgroundInert}>
         <TopBar title={title} />
         {/* Breadcrumb row: sticky under the top bar so the trail stays put
          * while the document scrolls (concept §2.2). */}
