@@ -257,7 +257,10 @@ describe("Empty registry and the connect guide", () => {
       toggle.click();
     });
     expect(container.querySelectorAll("ol li")).toHaveLength(5);
-    expect(container.textContent).toContain("machine-class API");
+    // Connect hotfix: the guide teaches the ONE-command flow, not the old
+    // manual runbook.
+    expect(container.textContent).toContain("ONE command");
+    expect(container.textContent).toContain("deploy/poller/REMOTE-EXECUTOR.md");
     root.unmount();
   });
 });

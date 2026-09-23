@@ -799,17 +799,19 @@ export const en: Record<TranslationKey, string> = {
   "agents.registry.revokedHint": "trust is not restorable — re-register the executor",
   "agents.connect.label": "How to connect an external agent",
   "agents.connect.step1":
-    "On the external machine, install the poller: dependencies and scripts live in deploy/poller/README.md (python ≥ 3.10, httpx + pyyaml).",
+    "Press «Add executor», fill in the name and the harness — you can add your own harness right in the list.",
   "agents.connect.step2":
-    "Copy poller.example.yaml to ~/.config/mnemos-eyes/poller.yaml (chmod 0600) and fill in board_url, executor_name and the allowlist.",
+    "Create a token and copy the ONE command from the screen.",
   "agents.connect.step3":
-    "The machine token lives only in the environment: VESMARO_BOARD_TOKEN in /etc/vesmaro/poller.env (systemd /opt unit) or ~/.config/mnemos-eyes/poller.env (laptop user unit), 0600 permissions — never in the config or in prompts; see deploy/poller/README.md.",
+    "Run it on the external machine (VPS) — it installs the dependencies, the agent and the service on its own.",
   "agents.connect.step4":
-    "Run the poller as a service (the systemd unit from the README) or once with --once for a dry-run check.",
+    "The agent appears here in «Awaiting approval» — approve and enable it.",
   "agents.connect.step5":
-    "The executor appears above in «Awaiting approval» — approve it here, then enable it for routing.",
+    "Give the task with the button on the task card — execution happens on the external machine.",
   "agents.connect.note":
-    "Executor registration is a machine-class API (POST /api/executors with the board token): there is no registration button in the UI — this screen runs the approval queue.",
+    "The command downloads the installer from the board (the installer text is public); everything after rides a secured channel with certificate verification. The token is one-time and lives for 15 minutes.",
+  "agents.connect.manual":
+    "The manual path — deploy/poller/REMOTE-EXECUTOR.md («Путь 2 — руками», for diagnostics and isolated networks).",
   "agents.executors.actionFailed": "Failed to update the executor",
   "agents.executors.approved": "{{name}}: approved",
   "agents.executors.approvedDetail":
@@ -913,7 +915,7 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.description":
     "Minting a one-time connection token for a remote executor",
   "agents.enrollment.formHint":
-    "A one-time token (15 min TTL) for registering a remote machine; whoever registers with it appears here awaiting approval.",
+    "Fill in the card — you get ONE command for the external machine. The agent installs itself and appears here for approval.",
   "agents.enrollment.label": "Label (for you)",
   "agents.enrollment.labelPlaceholder": "e.g. vps-1",
   "agents.enrollment.harness": "Harness (hint for the commands)",
