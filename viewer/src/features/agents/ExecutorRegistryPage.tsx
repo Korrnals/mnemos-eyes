@@ -207,7 +207,8 @@ export function ExecutorRegistryPage() {
         error={enrollments.isError}
       />
 
-      {/* The connect path: five poller steps + the honest machine-class note.
+      {/* The connect path: the one-command flow in five steps + the honest
+       * installer note + the manual-path pointer (REMOTE-EXECUTOR.md).
        * Always available — it is the page's second answer. */}
       <ConnectGuide />
 

@@ -93,6 +93,10 @@ afterEach(() => {
 describe("EnrollmentDialog — form phase", () => {
   it("creates a token and lands on the masked token screen", async () => {
     const { root, container, gateway } = await mount();
+    // Connect hotfix: the subtitle explains the FLOW (card → ONE command →
+    // self-install → approval), not the token mechanics.
+    expect(document.body.textContent).toContain("you get ONE command");
+    expect(document.body.textContent).toContain("installs itself");
     await submitForm(container);
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("shown ONCE");
