@@ -50,6 +50,7 @@ function click(element: HTMLElement) {
 async function mountSidebar(options: {
   collapsed?: boolean;
   onToggle?: () => void;
+  path?: string;
 } = {}) {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -66,7 +67,7 @@ async function mountSidebar(options: {
           }
         >
           <I18nProvider initialLang="ru">
-            <MemoryRouter initialEntries={["/memory"]}>
+            <MemoryRouter initialEntries={[options.path ?? "/memory"]}>
               <Sidebar
                 collapsed={options.collapsed ?? false}
                 onToggle={options.onToggle ?? (() => undefined)}
@@ -90,6 +91,50 @@ function toggleButton(container: HTMLElement): HTMLButtonElement {
 
 function backdrop(container: HTMLElement): HTMLElement | null {
   return container.querySelector<HTMLElement>("div[aria-hidden='true']");
+}
+
+/** The docs third-layer list (project groups): the ul that OWNS the
+ * vesmaro-eyes group row (the outer DocsSidebarGroups list). */
+function docsGroupsList(container: HTMLElement): HTMLUListElement {
+  const link = container.querySelector<HTMLAnchorElement>(
+    'a[aria-label="vesmaro-eyes"]',
+  );
+  if (!link) throw new Error("docs project group not found");
+  const list = link.closest("ul");
+  if (!list) throw new Error("docs groups ul not found");
+  return list;
+}
+
+/** The active project's category rows list: the ul nested in the group's li
+ * (null in the rail — the rows do not render there at all). */
+function docsCategoriesList(container: HTMLElement): HTMLUListElement | null {
+  const link = container.querySelector<HTMLAnchorElement>(
+    'a[aria-label="Устройства и подключение"]',
+  );
+  return link?.closest("ul") ?? null;
+}
+
+/** Focusables inside the sidebar panel (same attribute discipline as the
+ * trap: no layout checks — happy-dom has none). */
+function panelFocusables(panel: HTMLElement): HTMLElement[] {
+  return Array.from(
+    panel.querySelectorAll<HTMLElement>(
+      "a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    ),
+  ).filter((el) => el.closest("[hidden], [aria-hidden='true']") === null);
+}
+
+function pressTab(shift = false): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "Tab",
+    bubbles: true,
+    cancelable: true,
+    shiftKey: shift,
+  });
+  act(() => {
+    document.dispatchEvent(event);
+  });
+  return event;
 }
 
 beforeEach(() => {
@@ -206,5 +251,104 @@ describe("Sidebar on desktop (>=md, unchanged contract)", () => {
     expect(toggleButton(rail).getAttribute("aria-label")).toBe(
       "Развернуть панель",
     );
+  });
+});
+
+describe("docs categories across the sidebar states (third layer × UI-22)", () => {
+  beforeEach(() => stubMatchMedia(false));
+
+  it("the phone rail shows the three groups WITHOUT category rows, ml-4 geometry", async () => {
+    const { container } = await mountSidebar({
+      collapsed: false,
+      path: "/docs/c/devices",
+    });
+    // Groups are reachable by name…
+    expect(container.querySelector('a[aria-label="vesmaro-eyes"]')).not.toBeNull();
+    expect(container.querySelector('a[aria-label="Mnemos"]')).not.toBeNull();
+    // …categories are NOT (the rail never pulls a second icon column).
+    expect(
+      container.querySelector('a[aria-label="Устройства и подключение"]'),
+    ).toBeNull();
+    // State-driven rail geometry: shallow indent, no border, no md: classes.
+    const groups = docsGroupsList(container);
+    expect(groups.className).toContain("ml-4");
+    expect(groups.className).not.toContain("ml-7");
+    expect(groups.className).not.toContain("md:");
+    expect(groups.className).not.toContain("border-l");
+  });
+
+  it("the expanded mobile OVERLAY renders the active project's category rows (ml-7 bordered rail)", async () => {
+    const { container } = await mountSidebar({
+      collapsed: false,
+      path: "/docs/c/devices",
+    });
+    click(toggleButton(container));
+    // The active project's categories are visible to keyboard/SR users.
+    const devices = container.querySelector(
+      'a[aria-label="Устройства и подключение"]',
+    );
+    expect(devices).not.toBeNull();
+    expect(devices?.getAttribute("title")).toBe("Устройства и подключение");
+    // Group rail switched to the expanded geometry — from STATE, not md:.
+    const groups = docsGroupsList(container);
+    expect(groups.className).toContain("ml-7");
+    expect(groups.className).toContain("border-l");
+    expect(groups.className).not.toContain("md:");
+    // The category list itself carries no CSS display toggling either.
+    const categories = docsCategoriesList(container);
+    expect(categories).not.toBeNull();
+    expect(categories!.className).not.toContain("hidden");
+    expect(categories!.className).not.toContain("md:");
+  });
+});
+
+describe("sidebar focus trap (overlay only)", () => {
+  it("on mobile, Tab cycles INSIDE the overlay panel and never reaches the page behind", async () => {
+    stubMatchMedia(false);
+    const { container } = await mountSidebar({ collapsed: false });
+    click(toggleButton(container));
+    const aside = container.querySelector("aside") as HTMLElement;
+    const focusables = panelFocusables(aside);
+    expect(focusables.length).toBeGreaterThan(1);
+
+    // Focus opens on the panel itself; the first Tab hands it to the first
+    // focusable (the header toggle).
+    expect(document.activeElement).toBe(aside);
+    pressTab();
+    expect(document.activeElement).toBe(focusables[0]);
+
+    // Forward cycle: from the LAST focusable, Tab wraps to the first —
+    // the outside button stays untouched.
+    const outside = document.createElement("button");
+    outside.id = "outside-content";
+    document.body.appendChild(outside);
+    focusables[focusables.length - 1].focus();
+    const wrapped = pressTab();
+    expect(wrapped.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(focusables[0]);
+    expect(document.activeElement).not.toBe(outside);
+
+    // Backward cycle: Shift+Tab from the first lands on the last.
+    pressTab(true);
+    expect(document.activeElement).toBe(focusables[focusables.length - 1]);
+    expect(document.activeElement).not.toBe(outside);
+
+    // Leaked focus (programmatic or browser quirk) is pulled back inside.
+    outside.focus();
+    pressTab();
+    expect(aside.contains(document.activeElement)).toBe(true);
+  });
+
+  it("on desktop, the inline panel does NOT trap: Tab is left to the browser", async () => {
+    stubMatchMedia(true);
+    const { container } = await mountSidebar({ collapsed: false });
+    const aside = container.querySelector("aside");
+    expect(aside?.getAttribute("role")).toBeNull(); // page chrome, not dialog
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+    const event = pressTab();
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(outside); // nothing moved
   });
 });
