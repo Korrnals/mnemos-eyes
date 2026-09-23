@@ -182,9 +182,12 @@ def content_fragment(content: Any,
     At most ``limit`` chars, cut at a whitespace boundary (never mid-word).
     Absent/blank content maps to None — the wire field stays present as
     null so both pulse paths (GET /memories and the /search fallback) keep
-    one shape.
+    one shape. Non-string bodies (dict/list records) count as absent too:
+    a repr'd ``{'a': 1}`` must never surface as a pulse preview.
     """
-    text = str(content or "").strip()
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
     if not text:
         return None
     if len(text) <= limit:

@@ -9,10 +9,13 @@ import { useFocusTrap } from "./useFocusTrap";
 /**
  * useFocusTrap contract (the shared trap behind the Sidebar mobile overlay
  * and AuthScreen): Tab/Shift+Tab cycle within the container, first↔last,
- * skipping disabled and [hidden] content; focus that leaks outside is pulled
- * back on the next Tab; INACTIVE the hook is a no-op. The list is
- * attribute-driven, not layout-driven — jsdom/happy-dom have no layout
- * engine, so geometry checks would silently empty it under test.
+ * skipping disabled content and everything hidden from the tab order —
+ * `[hidden]`, `aria-hidden="true"`, and the Tailwind `hidden` class;
+ * focus that leaks outside is pulled back on the next Tab; Ctrl/Alt/Meta+Tab
+ * pass through untouched (browser/OS keep them); INACTIVE the hook is a
+ * no-op. The list is attribute-driven, not layout-driven — jsdom/happy-dom
+ * have no layout engine, so geometry checks would silently empty it under
+ * test.
  */
 
 function TrapHarness({ active }: { active: boolean }) {
@@ -31,6 +34,14 @@ function TrapHarness({ active }: { active: boolean }) {
           hidden
         </button>
       </span>
+      <div className="hidden">
+        <button type="button" id="css-hidden-nested">
+          css-hidden via ancestor
+        </button>
+      </div>
+      <button type="button" id="css-hidden-self" className="hidden">
+        css-hidden itself
+      </button>
       <a href="#somewhere" id="last">
         last
       </a>
@@ -51,12 +62,18 @@ async function mountTrap(active: boolean) {
   return container;
 }
 
-function pressTab(shift = false): KeyboardEvent {
+function pressTab(
+  shift = false,
+  modifiers: { ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } = {},
+): KeyboardEvent {
   const event = new KeyboardEvent("keydown", {
     key: "Tab",
     bubbles: true,
     cancelable: true,
     shiftKey: shift,
+    ctrlKey: modifiers.ctrlKey ?? false,
+    altKey: modifiers.altKey ?? false,
+    metaKey: modifiers.metaKey ?? false,
   });
   act(() => {
     document.dispatchEvent(event);
@@ -116,6 +133,46 @@ describe("useFocusTrap (active)", () => {
     expect(document.activeElement).toBe(last);
     expect(document.activeElement!.id).not.toBe("disabled-mid");
     expect(document.activeElement!.id).not.toBe("hidden-btn");
+  });
+
+  it("skips content hidden by the Tailwind hidden class (self and ancestor)", async () => {
+    const container = await mountTrap(true);
+    const trap = container.querySelector<HTMLDivElement>("#trap");
+    const first = container.querySelector<HTMLButtonElement>("#first");
+    const last = container.querySelector<HTMLAnchorElement>("#last");
+    trap!.focus();
+    pressTab();
+    expect(document.activeElement).toBe(first);
+    // The backward edge from #first must land on #last — the `.hidden`
+    // buttons sitting before it in DOM order never join the cycle.
+    pressTab(true);
+    expect(document.activeElement).toBe(last);
+    // Forward edge from #last wraps to #first, never into a `.hidden` button.
+    pressTab();
+    expect(document.activeElement).toBe(first);
+    expect(document.activeElement!.id).not.toBe("css-hidden-nested");
+    expect(document.activeElement!.id).not.toBe("css-hidden-self");
+  });
+
+  it("passes Ctrl/Alt/Meta+Tab through: no interception, no focus moves", async () => {
+    const container = await mountTrap(true);
+    const trap = container.querySelector<HTMLDivElement>("#trap");
+    const last = container.querySelector<HTMLAnchorElement>("#last");
+    trap!.focus();
+    for (const modifiers of [
+      { ctrlKey: true },
+      { altKey: true },
+      { metaKey: true },
+    ]) {
+      const event = pressTab(false, modifiers);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(trap);
+    }
+    // Even from a cycle edge the modifier Tab is left to the browser/OS.
+    last!.focus();
+    const edgeEvent = pressTab(false, { ctrlKey: true });
+    expect(edgeEvent.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(last);
   });
 
   it("pulls leaked focus back inside on the next Tab", async () => {

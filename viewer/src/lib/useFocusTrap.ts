@@ -5,9 +5,9 @@ import { useEffect, type RefObject } from "react";
  * NO layout checks (getClientRects/offsetParent): the test environments
  * (jsdom, happy-dom) have no layout engine, so a geometry-based filter
  * would silently empty the list under test and the trap would "pass" while
- * being unable to cycle. The DOM-attribute checks below cover the states
- * this app actually hides: `[hidden]` label spans (icon rail) and
- * `aria-hidden="true"` decoration.
+ * being unable to cycle. The DOM checks below cover the states this app
+ * actually hides: `[hidden]` label spans (icon rail), `aria-hidden="true"`
+ * decoration, and Tailwind `hidden` class subtrees.
  */
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -20,18 +20,22 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"]):not([disabled])',
 ].join(", ");
 
-/** A focusable element: not disabled, not inside a `[hidden]` or
- * `aria-hidden="true"]` subtree (the DOM states that remove an element from
- * the tab order / accessibility tree). */
+/** A focusable element: not disabled, not inside a subtree hidden by any of
+ * the DOM states that remove an element from the tab order / accessibility
+ * tree — `[hidden]`, `aria-hidden="true"`, or the Tailwind `hidden` class
+ * (the class alone leaves no attribute trace; without the check a `.hidden`
+ * button would still receive Tab focus inside the trap). */
 function isTrappable(element: HTMLElement): boolean {
-  return element.closest('[hidden], [aria-hidden="true"]') === null;
+  return element.closest('[hidden], [aria-hidden="true"], .hidden') === null;
 }
 
 /**
  * Keyboard focus trap for hand-rolled overlays (WCAG 2.2 AA, dialogs):
  * while `active`, Tab and Shift+Tab CYCLE within the container — from the
  * last focusable to the first and back; if focus somehow lands outside the
- * container, the next Tab pulls it back inside. Nothing is trap-shaped when
+ * container, the next Tab pulls it back inside. Tab presses carrying
+ * Ctrl/Alt/Meta are passed through untouched (browser/OS tab switching).
+ * Nothing is trap-shaped when
  * `active` is false and no `window`/`document` access happens outside the
  * effect — SSR/node paths (renderToString harnesses) are untouched and the
  * stderr stays clean.
@@ -52,6 +56,9 @@ export function useFocusTrap(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
+      // Ctrl/Alt/Meta+Tab belong to the browser/OS (tab and window
+      // switching) — the trap never intercepts them at its cycle edges.
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
       // Re-read per keypress: the DOM inside an open dialog can change.
       const focusables = Array.from(
         container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
