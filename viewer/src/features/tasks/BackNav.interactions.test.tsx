@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createMemoryRouter, RouterProvider } from "react-router";
@@ -24,8 +24,8 @@ import { AuthProvider } from "@/features/auth/AuthProvider";
  *      /memory/tags?tag=… with the drill restored from the URL;
  *   2. a task TAB click preserves ?return= (spec §2.2 rule 4);
  *   3. the archive pair — an archive row leads to /tasks/:id (the archived
- *      row renders through the archive-probe fallback) and «‹ Archive»
- *      restores the filter URL;
+ *      row renders through the direct detail-GET fallback, BE-16) and
+ *      «‹ Archive» restores the filter URL;
  *   4. (W2 pair 6 / §4.12) agents execution → task (?tab=execution) →
  *      «‹ Execution» restores the feed page;
  *   5. (W2 pair 7) automation → task → «‹ Automation» restores the rules;
@@ -206,13 +206,15 @@ describe("UI-18 back-nav interactions", () => {
     expect(backControl()!.getAttribute("href")).toBe("/tasks?status=open");
   });
 
-  it("archive pair: row → /tasks/:id (archived fallback) → «‹ Archive» restores filters", async () => {
+  it("archive pair: row → /tasks/:id (detail-GET fallback) → «‹ Archive» restores filters", async () => {
+    let gatewayRef: MockAdapter | null = null;
     await mount("/tasks/archive?q=регистрац", async (client, gateway) => {
       const params = { q: ARCHIVE_Q, limit: 50, offset: 0 };
       await client.prefetchQuery({
         queryKey: keys.tasks.archive(params),
         queryFn: () => gateway.archive(params),
       });
+      gatewayRef = gateway;
     });
     await waitFor("archive row link", () => Boolean(anchorByHref("/tasks/RB-1?return=")));
 
@@ -220,14 +222,23 @@ describe("UI-18 back-nav interactions", () => {
     const rowLink = anchorByHref("/tasks/RB-1?return=")!;
     expect(rowLink.getAttribute("href")).toBe(ARCHIVE_RETURN);
 
+    // ME-003 fold-in gate: the detail-open path must ride the DIRECT
+    // single-task GET (BE-16) — the archive LIST probe stays dead.
+    const archiveSpy = vi.spyOn(gatewayRef!, "archive");
+    const taskByIdSpy = vi.spyOn(gatewayRef!, "taskById");
+
     // The archived row renders on the detail page (board misses it; the
-    // archive probe supplies the row).
+    // detail GET supplies the row).
     await click(rowLink);
     await waitFor("archived task rendered", () => {
       const text = container!.textContent ?? "";
       return text.includes("RB-1") && !text.includes("No such task");
     });
     expect(location()).toBe(ARCHIVE_RETURN);
+    expect(taskByIdSpy.mock.calls).toHaveLength(1);
+    expect(archiveSpy.mock.calls).toHaveLength(0);
+    taskByIdSpy.mockRestore();
+    archiveSpy.mockRestore();
 
     // «‹ Archive» restores the filtered archive URL.
     const control = backControl();
@@ -235,6 +246,11 @@ describe("UI-18 back-nav interactions", () => {
     await click(control);
     await waitFor("archive restored", () => location().startsWith("/tasks/archive"));
     expect(location()).toBe("/tasks/archive?q=регистрац");
+    // Full restoration in the DOM, not just the URL (spec criterion 3):
+    // the query input holds the filter and the row is on the page again.
+    const input = container!.querySelector<HTMLInputElement>("#archive-q");
+    expect(input?.value).toBe("регистрац");
+    expect(anchorByHref("/tasks/RB-1?return=")).toBeDefined();
   });
 
   it("agents execution → task → «‹ Execution» restores the feed page (§4.12)", async () => {

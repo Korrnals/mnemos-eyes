@@ -6,7 +6,7 @@ import {
   type QueryClient,
   type QueryFunctionContext,
 } from "@tanstack/react-query";
-import type { ArchivePage, ArchiveParams, BoardSummary } from "@/gateway/boardTypes";
+import type { ArchiveParams, BoardSummary } from "@/gateway/boardTypes";
 import type { InboxParams } from "@/gateway/BoardAdapter";
 import { isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
@@ -19,10 +19,14 @@ import { GC_TIMES, STALE_TIMES } from "@/lib/queryClient";
  * stay idle and the pages render their honest unsupported states.
  *
  * Caching decision (instruction: "кешируй через TanStack query key
- * tasks.board"): the board API has NO single-task GET, so `useTask(id)`
- * reads the SHARED `tasks.board` projection through a `select` — the list
- * page, the mini-stats and every detail page share one wire call, and SSE
- * patches to `tasks.board` reach all of them at once.
+ * tasks.board"): `useTask(id)` reads the SHARED `tasks.board` projection
+ * through a `select` — the list page, the mini-stats and every detail page
+ * share one wire call, and SSE patches to `tasks.board` reach all of them
+ * at once. The wire DOES have a single-task GET since BE-16 (one TaskOut
+ * for active and archived rows); it serves only the FALLBACK path
+ * (`useTaskDetail`) for ids the projection misses — switching the primary
+ * read to it would cost an extra call per detail open and cut the detail
+ * page off the SSE patch flow.
  *
  * BE-15 (freeze lesson 1.11.4, hard measurement): in TanStack v5 every
  * `useQuery` re-render runs `observer.setOptions`, which shallow-compares
@@ -201,46 +205,34 @@ export function useTaskArchive(params: ArchiveParams) {
 }
 
 /**
- * One ARCHIVED task by exact id (UI-18 pair 4 fallback). Archived rows never
- * travel with /api/board, so /tasks/:id cannot see them through `useTask` —
- * the archive page is their only projection. This hook fires ONLY once the
- * board query settled empty (`enabled`), pulls one bounded archive page and
- * finds the exact id client-side: the wire `q` is a title/summary LIKE with
- * no id semantics, so an id probe would be dishonest. The 200 cap mirrors
- * the server clamp; a hit beyond it degrades to the page's not-found state
- * (the «Открыть архив» escape stays).
+ * One task by id via the DIRECT single-task GET (BE-16, ME-003 fold-in):
+ * `GET /api/tasks/{task_id}` resolves BOTH active and archived tasks in one
+ * TaskOut shape, so the old bounded archive-list probe (200 rows + client
+ * search) is gone — an archived row beyond any page cap no longer degrades
+ * to not-found. UI-18 pair 4 fallback: fires ONLY once the board projection
+ * settled empty (`enabled`) — no extra wire call on the happy path, and the
+ * archive PAGE keeps its own list endpoint.
  */
-const ARCHIVED_TASK_PROBE_LIMIT = 200;
-
-export function useArchivedTask(taskId: string | undefined, enabled: boolean) {
+export function useTaskDetail(taskId: string | undefined, enabled: boolean) {
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
-  const params = useMemo<ArchiveParams>(
-    () => ({ limit: ARCHIVED_TASK_PROBE_LIMIT, offset: 0 }),
-    [],
-  );
-  const queryKey = useMemo(() => keys.tasks.archive(params), [params]);
-  // Stable select identity (same discipline as useTask): find the EXACT id.
-  const select = useCallback(
-    (page: ArchivePage) => page.items.find((task) => task.id === taskId),
-    [taskId],
-  );
+  const id = taskId ?? "";
+  const queryKey = useMemo(() => keys.tasks.detail(id), [id]);
   const queryFn = useCallback(
     ({ signal }: QueryFunctionContext) => {
-      if (!isTaskSource(gateway)) {
-        throw new Error("useArchivedTask: gateway has no task capability.");
+      if (!isTaskSource(gateway) || id === "") {
+        throw new Error("useTaskDetail: gateway has no task capability.");
       }
-      return gateway.archive(params, signal);
+      return gateway.taskById(id, signal);
     },
-    [gateway, params],
+    [gateway, id],
   );
   return useQuery({
     queryKey,
     queryFn,
-    enabled: capable && enabled,
-    staleTime: STALE_TIMES.taskArchive,
-    gcTime: GC_TIMES.taskArchive,
-    select,
+    enabled: capable && enabled && id !== "",
+    staleTime: STALE_TIMES.taskDetail,
+    gcTime: GC_TIMES.taskDetail,
   });
 }
 

@@ -195,9 +195,10 @@ describe("TaskDetailPage (mock adapter)", () => {
   });
 
   it("not on the board (unknown id) → not-found with the archive escape", async () => {
-    // UI-18: the seed settles the archived-row probe too (in a live DOM it
-    // fetches — the page shows its skeleton while probing, then lands here).
-    const probe = { limit: 200, offset: 0 };
+    // In a live DOM the detail GET fires after the board settles empty and
+    // 404s (BE-16 resolves every EXISTING row) — the page shows its skeleton
+    // while fetching, then lands here. The seed settles that 404 so SSR
+    // renders the end state.
     const html = await renderTask(
       new MockAdapter({ latency: false }),
       "/tasks/NOPE-404",
@@ -205,8 +206,13 @@ describe("TaskDetailPage (mock adapter)", () => {
         await seedAll(client, gw);
         if (gw instanceof MockAdapter) {
           await client.prefetchQuery({
-            queryKey: keys.tasks.archive(probe),
-            queryFn: () => gw.archive(probe),
+            queryKey: keys.tasks.detail("NOPE-404"),
+            queryFn: () => gw.taskById("NOPE-404"),
+          });
+          // The 404 settled, but useQuery retries errored queries on mount —
+          // pin it off so SSR renders the settled not-found, not the skeleton.
+          client.setQueryDefaults(keys.tasks.detail("NOPE-404"), {
+            retryOnMount: false,
           });
         }
       },
@@ -267,23 +273,24 @@ describe("TaskDetailPage (mock adapter)", () => {
     );
   });
 
-  it("UI-18 pair 4: an archived id renders from the archive probe fallback", async () => {
+  it("UI-18 pair 4: an archived id renders via the direct detail-GET fallback (BE-16)", async () => {
     const gateway = new MockAdapter({ latency: false });
-    const probe = { limit: 200, offset: 0 };
     const html = await renderTask(gateway, "/tasks/RB-1", async (client, gw) => {
       if (gw instanceof MockAdapter) {
         await client.prefetchQuery({
           queryKey: keys.tasks.board(),
           queryFn: () => gw.board(),
         });
+        // The board projection misses RB-1 (archived) — the fallback is the
+        // SINGLE-task GET (keys.tasks.detail), which the mock resolves for
+        // archived rows too (BE-16 mirror). The archive LIST endpoint is
+        // the archive page's business, not this path's.
         await client.prefetchQuery({
-          queryKey: keys.tasks.archive(probe),
-          queryFn: () => gw.archive(probe),
+          queryKey: keys.tasks.detail("RB-1"),
+          queryFn: () => gw.taskById("RB-1"),
         });
       }
     });
-    // The board projection misses RB-1 (archived) — the archive probe row
-    // renders the honest detail instead of the not-found escape.
     expect(html).toContain("RB-1");
     expect(html).toContain("регистрац");
     expect(html).not.toContain("No such task");
