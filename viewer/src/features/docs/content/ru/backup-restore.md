@@ -3,7 +3,7 @@ title: Бэкап и восстановление
 slug: backup-restore
 category: maintenance
 order: 1
-last_verified: "1.13.0"
+last_verified: "1.19.0"
 ---
 
 # Бэкап и восстановление
@@ -122,6 +122,9 @@ scripts/backup-all.sh 2026-09-22       # копия с явной датой
 - Ноутбучный: остановить локальный mnemos, вернуть файлы в
   `~/.mnemos/data`, запустить.
 
+Глубже про сами базы mnemos — в импортированном ранбуке апстрима:
+[бэкап и восстановление mnemos](/docs/mnemos/admin/runbooks/backup-restore).
+
 ## Учения восстановления
 
 Бэкап, который ни разу не восстанавливали, — гипотеза. Раз в пару месяцев
@@ -134,3 +137,4 @@ scripts/backup-all.sh 2026-09-22       # копия с явной датой
 - [Обновление борда](upgrade.md)
 - [Устранение неполадок](troubleshooting.md)
 - [Развёртывание и первый запуск](deploy.md)
+- [Бэкап и восстановление mnemos — ранбук апстрима](/docs/mnemos/admin/runbooks/backup-restore)

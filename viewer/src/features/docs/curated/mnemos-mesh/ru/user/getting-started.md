@@ -1,0 +1,239 @@
+---
+title: Первый запуск mnemos-mesh
+---
+
+# Первый запуск mnemos-mesh
+
+Соберите бинарник, настройте федерацию из двух узлов, запустите её и
+проверьте канал. Гайд проводит один узел от начала до конца; шаги со
+стороны пира повторите на удалённом узле.
+
+> **Аудитория:** операторы, поднимающие пир федерации. Предполагаются
+> работающий инстанс mnemos и установленный Go 1.25+.
+
+---
+
+## Предпосылки
+
+| Инструмент | Версия | Зачем |
+|---|---|---|
+| **Go** | 1.25+ | Сборка бинарника; версия зафиксирована в `go.mod` |
+| **mnemos** | v2.x | Локальный сервер памяти; меш подключается к нему через Unix-сокет |
+| **buf** | 1.72+ | Перегенерация proto-заглушек (только при правках `.proto`) |
+| **openssl** | любой | Генерация приватного CA и сертификатов узлов для mTLS |
+| **golangci-lint** | v2.1+ | Линт-гейт в CI (`make lint`) |
+
+Все Go-инструменты кладутся в `~/go/bin/` — проверьте, что каталог есть
+в `$PATH`:
+
+```bash
+export PATH="$HOME/go/bin:$PATH"
+```
+
+Команды установки `buf` и protoc-генераторов — в
+[CONTRIBUTING.md](https://github.com/Korrnals/mnemos-mesh/blob/331ef3a785c1a74fb9f8972ff93cd6db5a8fc174/CONTRIBUTING.md).
+
+---
+
+## 1 · Сборка
+
+```bash
+git clone https://github.com/Korrnals/mnemos-mesh.git
+cd mnemos-mesh
+make build
+./bin/mnemos-mesh version
+```
+
+Бинарник статический (`-trimpath -ldflags "-s -w"`), около 12 МБ.
+Кросс-компиляция под другие платформы — командами из CI, см.
+[`.github/workflows/ci.yml`](https://github.com/Korrnals/mnemos-mesh/blob/331ef3a785c1a74fb9f8972ff93cd6db5a8fc174/.github/workflows/ci.yml).
+
+---
+
+## 2 · Материал mTLS
+
+mnemos-mesh работает на **приватном CA** со взаимной аутентификацией и
+зафиксированными отпечатками (критерий 3). CA генерируется один раз на
+федерацию, сертификат узла — на каждый пир.
+
+### Приватный CA (один раз, вне канала)
+
+```bash
+openssl genrsa -out ca.key 4096
+openssl req -x509 -new -key ca.key -sha256 -days 3650 \
+  -subj "/CN=mnemos-mesh-ca" -out ca.pem
+```
+
+`ca.key` держите офлайн. Раздайте `ca.pem` всем узлам.
+
+### Сертификат узла (на каждый узел, CN = `node_id`)
+
+```bash
+# На узле A
+openssl genrsa -out node.key 2048
+openssl req -new -key node.key -subj "/CN=mnemos-A" -out node.csr
+openssl x509 -req -in node.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -days 365 -sha256 -out node.pem
+```
+
+Повторите на узле B с `CN=mnemos-B`. CN **обязан** совпадать с
+`node_id` в `mesh.yaml` — меш привязывает TLS-личность к id пира,
+которым пользуется проверка ACL и `federation_access_log` (архитектура
+§7).
+
+### Вычислить зафиксированный отпечаток
+
+```bash
+openssl x509 -in node.pem -noout -fingerprint -sha256
+# sha256 Fingerprint=AB:CD:EF:...
+```
+
+Перед вводом в `mesh.yaml` уберите префикс `sha256 Fingerprint=` и
+двоеточия; загрузчик принимает форму `sha256:<hex>`.
+
+---
+
+## 3 · Конфигурация
+
+Создайте `~/.mnemos/mesh.yaml`. Каждое поле описано в
+[справочнике конфигурации](mnemos-mesh/user/configuration), настройка
+mTLS — в [модели безопасности](mnemos-mesh/admin/security).
+
+```yaml
+node_id: mnemos-A
+listen: 0.0.0.0:8443
+unix_socket: /run/mnemos/core.sock
+
+mtls:
+  ca_cert: /etc/mnemos-mesh/ca.pem
+  node_cert: /etc/mnemos-mesh/node.pem
+  node_key: /etc/mnemos-mesh/node.key
+  peer_fingerprints:
+    mnemos-B: sha256:abcdef0123456789...
+  rotation_days: 90
+
+peers:
+  - id: mnemos-B
+    address: b.example.invalid:8443
+    fingerprint: sha256:abcdef0123456789...
+    projects: ["project-mnemos"]
+
+mnemos:
+  dial_timeout: 2s
+  heartbeat_interval: 30s
+
+logging:
+  level: info
+  format: json
+
+metrics:
+  listen: 127.0.0.1:9100
+```
+
+---
+
+## 4 · Запуск
+
+```bash
+mnemos-mesh serve --config ~/.mnemos/mesh.yaml
+```
+
+Меш открывает mTLS-слушатель для пиров (`listen`) и подключается к
+mnemos через Unix-сокет (`unix_socket`). На M2 обе половины — заглушки:
+любой RPC отвечает `codes.Unimplemented`. Логика появляется в M3
+(Python-клиент) и дальше.
+
+Для продакшена запускайте под systemd. Шаблон юнита запланирован на M5
+(production hardening); до тех пор — `mnemos-mesh serve` под любым
+супервизором процессов (systemd, supervisord или init-скрипт).
+
+---
+
+## 5 · Подключение mnemos (M3)
+
+На стороне mnemos включите MeshClient, чтобы mnemos подключался к
+`/run/mnemos/core.sock`. Клиент живёт в репозитории mnemos
+(`mnemos/src/mnemos/mesh_client.py`) и поставляется в M3. Пока M3 не
+вышел, меш держит слушатель для пиров, но mnemos с ним ещё не говорит.
+
+---
+
+<a id="verify"></a>
+
+Когда M3 выйдет, проверьте канал ответом heartbeat:
+
+```bash
+# На узле A, с запущенными mnemos и мешем
+mnemos mesh heartbeat --peer mnemos-B
+# Ожидание: непустое поле версии от бинарника M2
+```
+
+На M2 (заглушка) инструмент проверки — `mnemos-mesh doctor`: он
+проверяет путь Unix-сокета, валидность сертификатов и досягаемость
+пиров (заглушка). Запустите после `serve`:
+
+```bash
+mnemos-mesh doctor --config ~/.mnemos/mesh.yaml
+```
+
+---
+
+## Устранение неполадок
+
+### Unix-сокет не найден
+
+```text
+config: read /run/mnemos/core.sock: no such file or directory
+```
+
+Сокет создаёт меш, mnemos к нему подключается. Убедитесь, что каталог
+существует и процесс mnemos не занял другой путь. Сверьте
+`unix_socket` в обоих конфигах.
+
+### Отказ mTLS — неизвестный пир
+
+```text
+mtls: peer fingerprint not in pinned set
+```
+
+Отпечаток сертификата подключающегося пира отсутствует в
+`mtls.peer_fingerprints`. Добавьте его (вычислен на шаге 2) или
+проверьте, что пир предъявляет ожидаемый сертификат. Пир, чей CN не
+совпадает с зафиксированным id, отклоняется до любого RPC.
+
+### Отказ mTLS — не прошла проверка CA
+
+```text
+tls: failed to verify certificate: x509: certificate signed by unknown authority
+```
+
+Сертификат пира не цепляется к настроенному `ca_cert`. Убедитесь, что
+все узлы используют сертификаты одного приватного CA, а `ca_cert`
+указывает на правильный `ca.pem`.
+
+### Ошибка разбора конфига
+
+```text
+config: parse ~/.mnemos/mesh.yaml: yaml: ...
+```
+
+Синтаксическая ошибка YAML. Проверьте файл через `yq` или
+`python -c "import yaml; yaml.safe_load(open('mesh.yaml'))"`. Частые
+причины: отпечаток с двоеточиями (уберите их или используйте форму
+`sha256:<hex>`) и пропущенный `node_id` (обязателен — привязан к CN
+mTLS-сертификата).
+
+### `node_id must not be empty`
+
+`node_id` обязателен. Он привязывается к CN mTLS-сертификата (критерий
+3, архитектура §7) и служит id пира в проверке ACL и
+`federation_access_log`. Укажите его равным CN сертификата.
+
+---
+
+## Дальше
+
+- [Справочник конфигурации](mnemos-mesh/user/configuration) — каждое поле `mesh.yaml`
+- [Модель безопасности](mnemos-mesh/admin/security) — граница доверия, mTLS, ACL, ключи
+- [Архитектура](https://github.com/Korrnals/mnemos-mesh/blob/331ef3a785c1a74fb9f8972ff93cd6db5a8fc174/docs/architecture.md) — полный дизайн системы
+- [PLAN.md](https://github.com/Korrnals/mnemos-mesh/blob/331ef3a785c1a74fb9f8972ff93cd6db5a8fc174/PLAN.md) — дорожная карта M1–M6

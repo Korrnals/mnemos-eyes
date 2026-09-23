@@ -20,7 +20,9 @@
     "codegen": "bash scripts/codegen.sh",
     "codegen:offline": "bash scripts/codegen.sh --from-snapshot",
     "codegen:board": "bash scripts/codegen-board.sh",
-    "codegen:board:offline": "bash scripts/codegen-board.sh --from-snapshot"
+    "codegen:board:offline": "bash scripts/codegen-board.sh --from-snapshot",
+    "sync-docs": "python3 ../scripts/sync_docs.py sync",
+    "docs:drift": "python3 ../scripts/sync_docs.py --check-drift"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

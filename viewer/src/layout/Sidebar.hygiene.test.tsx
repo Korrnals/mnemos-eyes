@@ -53,9 +53,12 @@ describe("Sidebar overflow hygiene (UI-19)", () => {
 
   it("every long label row keeps its FULL name as title AND aria-label", () => {
     const html = renderSidebar("/docs/c/devices", false);
+    // The docs domain renders PROJECT GROUPS now (ADR 0016): its category
+    // rows keep the same title/aria-label discipline as before.
     expect(html).toContain('title="Устройства и подключение"');
     expect(html).toContain('aria-label="Устройства и подключение"');
     expect(html).toContain('title="Безопасность и токены"');
+    expect(html).toContain('title="vesmaro-eyes"'); // project group row
   });
 
   it("the same holds for the EN dictionary", () => {
@@ -65,14 +68,16 @@ describe("Sidebar overflow hygiene (UI-19)", () => {
     expect(html).toContain('aria-label="Security &amp; tokens"');
   });
 
-  it("icon-only (collapsed): rows keep accessible names when labels hide", () => {
+  it("icon-rail (collapsed): project groups keep their names, categories hide (spec §3.2)", () => {
     const html = renderSidebar("/docs/c/devices", true);
-    expect(html).toContain('aria-label="Устройства и подключение"');
+    // The domain and the three PROJECT rows stay accessible by name.
     expect(html).toContain('aria-label="Документация"');
-    // Labels leave the layout in icon-only mode (visibility driven by the
-    // collapsed prop — the pre-UI-19 code hardcoded md:inline and kept
-    // squeezing the labels into the w-14 rail).
-    expect(html).toContain('<span class="hidden">Устройства и подключение</span>');
+    expect(html).toContain('aria-label="vesmaro-eyes"');
+    expect(html).toContain('aria-label="Mnemos"');
+    expect(html).toContain('aria-label="mnemos-mesh"');
+    // Categories never render in the rail — no second icon column (UI-19).
+    expect(html).not.toContain("Устройства и подключение");
+    expect(html).toContain('<span class="hidden">vesmaro-eyes</span>');
     expect(html).toContain('<span class="hidden">Документация</span>');
   });
 });

@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useI18n, useT } from "@/i18n";
-import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { docCategory } from "./categories";
+import { docCategory, docCategoriesForProject } from "./categories";
 import {
   firstParagraph,
   getManifest,
@@ -14,12 +12,14 @@ import {
   titleFor,
 } from "./manifest";
 import { loadMarkdown } from "./markdownModules";
+import { DEFAULT_PROJECT, docProject, docUrl } from "./projects";
+import { DocsNotFound } from "./DocsRedirects";
 import { DocsSearch } from "./DocsSearch";
 
 /**
- * `/docs/c/:category` (design spec §4): the category header, then a LIST of
- * page rows (never a second card grid — анти-слоп §14.5). Each row: page
- * title, first-paragraph description, `last_verified` on the right.
+ * `/docs/:project/c/:category` (design spec §4): the category header, then a
+ * LIST of page rows (never a second card grid — анти-слоп §14.5). The
+ * category must belong to the URL's project — a cross-project URL is a miss.
  */
 
 const FOCUS_RING =
@@ -30,6 +30,7 @@ interface RowInfo {
   title: string;
   description: string;
   lastVerified: string;
+  project: string;
 }
 
 /** Rows of one category: manifest order + descriptions from the bodies. */
@@ -46,6 +47,7 @@ async function rowInfos(categorySlug: string, lang: "ru" | "en"): Promise<RowInf
           title: titleFor(page, lang),
           description: parsed ? firstParagraph(parsed.body) : "",
           lastVerified: page.lastVerified,
+          project: page.project,
         };
       }),
   );
@@ -92,7 +94,7 @@ function CategoryRows({ categorySlug }: { categorySlug: string }) {
       {rows.map((row) => (
         <Link
           key={row.slug}
-          to={`/docs/${row.slug}`}
+          to={docUrl(row.slug)}
           className={cn(
             "group flex min-h-14 items-start justify-between gap-4 border-b border-border-subtle px-4 py-4",
             "transition-colors duration-instant last:border-b-0 hover:bg-elevated",
@@ -110,7 +112,7 @@ function CategoryRows({ categorySlug }: { categorySlug: string }) {
             ) : null}
           </span>
           <span className="shrink-0 pt-0.5 text-xs text-foreground-muted">
-            v{row.lastVerified}
+            {row.project === DEFAULT_PROJECT ? `v${row.lastVerified}` : row.lastVerified}
           </span>
         </Link>
       ))}
@@ -119,44 +121,42 @@ function CategoryRows({ categorySlug }: { categorySlug: string }) {
 }
 
 export function DocsCategoryPage() {
-  const { category: categorySlug } = useParams();
+  const { project = "", category: categorySlug } = useParams();
   const t = useT();
+  const projectMeta = docProject(project);
   const category = docCategory(categorySlug);
+  // The category must live in THIS project's hub — cross-project URLs miss.
+  const owned =
+    projectMeta !== null &&
+    category !== null &&
+    docCategoriesForProject(projectMeta.slug).some((entry) => entry.slug === category.slug);
+  if (!owned || !category) {
+    return (
+      <div className="mx-auto max-w-5xl">
+        <DocsNotFound />
+      </div>
+    );
+  }
   return (
     <div className="mx-auto max-w-5xl">
-      {category ? (
-        <>
-          <div className="mb-4 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="flex min-w-0 items-start gap-3">
-              <category.icon
-                className="mt-1 size-5 shrink-0 text-foreground-secondary"
-                aria-hidden="true"
-              />
-              <div className="min-w-0">
-                <h1 className="text-xl font-semibold text-foreground">
-                  {t(category.titleKey)}
-                </h1>
-                <p className="mt-1 text-sm text-foreground-secondary">
-                  {t(category.descriptionKey)}
-                </p>
-              </div>
-            </div>
-            <DocsSearch className="w-full md:max-w-xs" />
+      <div className="mb-4 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <category.icon
+            className="mt-1 size-5 shrink-0 text-foreground-secondary"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold text-foreground">
+              {t(category.titleKey)}
+            </h1>
+            <p className="mt-1 text-sm text-foreground-secondary">
+              {t(category.descriptionKey)}
+            </p>
           </div>
-          <CategoryRows categorySlug={category.slug} />
-        </>
-      ) : (
-        <EmptyState
-          variant="not-found"
-          title={t("docs.notFound.title")}
-          message={t("docs.notFound.message")}
-          action={
-            <Button variant="outline" asChild>
-              <Link to="/docs">{t("docs.notFound.cta")}</Link>
-            </Button>
-          }
-        />
-      )}
+        </div>
+        <DocsSearch className="w-full md:max-w-xs" />
+      </div>
+      <CategoryRows categorySlug={category.slug} />
     </div>
   );
 }

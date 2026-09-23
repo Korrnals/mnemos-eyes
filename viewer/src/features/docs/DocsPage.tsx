@@ -1,6 +1,6 @@
 import { Component, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import { ArrowLeft, ArrowRight, ChevronDown, Languages } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, GitCommitHorizontal, Languages } from "lucide-react";
 import { useI18n, useT } from "@/i18n";
 import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,15 +9,32 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { docCategory } from "./categories";
 import { extractHeadings, type TocItem } from "./headingSlug";
-import { loadDocBody, titleFor, useDocsManifest, type DocPage } from "./manifest";
+import {
+  loadDocBody,
+  localeForPage,
+  titleFor,
+  useDocsManifest,
+  type DocPage,
+  type DocProvenance,
+} from "./manifest";
 import { Markdown } from "./Markdown";
 import { DocsSearch } from "./DocsSearch";
+import { DocsNotFound } from "./DocsRedirects";
+import { formatSyncDate } from "./sidecar";
+import { docSlugForPath } from "./docsNav";
+import {
+  DEFAULT_PROJECT,
+  docUrl,
+  projectOfDocSlug,
+  categoryUrl,
+} from "./projects";
 
 /**
- * `/docs/:slug` (design spec §5): category chip → version badge → (locale
- * badge) → h1 → article at the 72ch reading measure, TOC rail (sticky,
- * scroll-spy) on the right from lg up, native <details> TOC above the h1 on
- * narrow screens, prev/next at the end in manifest order.
+ * `/docs/:project/*` (design spec §5/§6/§7/§9): category chip → version
+ * badge → provenance badge (imported pages) → locale badge → h1 → article
+ * at the 72ch reading measure, TOC rail (sticky, scroll-spy) on the right
+ * from lg up, native <details> TOC above the h1 on narrow screens, prev/next
+ * at the end confined to the page's OWN project (spec §9.7).
  */
 
 const FOCUS_RING =
@@ -222,16 +239,45 @@ function RenderFallback({
   );
 }
 
+/**
+ * Provenance badge (design spec §6.2): «из mnemos@abc1234 · синхр. 23.09» —
+ * a passport, not an alarm: outline variant, muted GitCommitHorizontal,
+ * static (local clones — no upstream URL is guaranteed). The title and
+ * aria-label carry the FULL form (whole SHA + dd.mm.yyyy date).
+ */
+function ProvenanceBadge({ provenance }: { provenance: DocProvenance }) {
+  const t = useT();
+  const full = t("docs.provenance.full", {
+    repo: provenance.repo,
+    sha: provenance.sha,
+    date: formatSyncDate(provenance.syncedAt, true),
+  });
+  return (
+    <Badge variant="outline" title={full} aria-label={full}>
+      <GitCommitHorizontal className="mr-1 size-3.5 text-foreground-muted" aria-hidden="true" />
+      {t("docs.provenance.badge", {
+        repo: provenance.repo,
+        sha: provenance.sha.slice(0, 7),
+        date: formatSyncDate(provenance.syncedAt),
+      })}
+    </Badge>
+  );
+}
+
 function PrevNext({ slug }: { slug: string }) {
   const t = useT();
   const { lang } = useI18n();
   const manifest = useDocsManifest();
   if (!manifest) return null;
-  const slugs = manifest.pages.map((page) => page.slug);
+  // Reading never crosses a project boundary (design spec §9.7): prev/next
+  // walk THIS project's manifest slice; the last page draws no empty slot.
+  const project = projectOfDocSlug(slug);
+  const pages = manifest.pages.filter((page) => page.project === project);
+  const slugs = pages.map((page) => page.slug);
   const index = slugs.indexOf(slug);
   if (index === -1) return null;
-  const prev = index > 0 ? manifest.pages[index - 1] : null;
-  const next = index < slugs.length - 1 ? manifest.pages[index + 1] : null;
+  const prev = index > 0 ? pages[index - 1] : null;
+  const next = index < slugs.length - 1 ? pages[index + 1] : null;
   if (!prev && !next) return null;
   return (
     <nav
@@ -240,7 +286,7 @@ function PrevNext({ slug }: { slug: string }) {
     >
       {prev ? (
         <Link
-          to={`/docs/${prev.slug}`}
+          to={docUrl(prev.slug)}
           className={cn(
             "rounded-md border border-border-subtle p-4 transition-colors duration-instant",
             "hover:border-border hover:bg-elevated",
@@ -258,7 +304,7 @@ function PrevNext({ slug }: { slug: string }) {
       ) : null}
       {next ? (
         <Link
-          to={`/docs/${next.slug}`}
+          to={docUrl(next.slug)}
           className={cn(
             "rounded-md border border-border-subtle p-4 transition-colors duration-instant",
             "hover:border-border hover:bg-elevated",
@@ -279,29 +325,25 @@ function PrevNext({ slug }: { slug: string }) {
 }
 
 export function DocsPage() {
-  const { slug = "" } = useParams();
-  const t = useT();
+  const { project = "", "*": splat = "" } = useParams();
   const { lang } = useI18n();
   const manifest = useDocsManifest();
+  const slug = useMemo(() => docSlugForPath(project, splat), [project, splat]);
   const page = useMemo(
-    () => manifest?.pages.find((candidate) => candidate.slug === slug) ?? null,
+    () =>
+      slug !== null
+        ? (manifest?.pages.find((candidate) => candidate.slug === slug) ?? null)
+        : null,
     [manifest, slug],
   );
 
-  if (page === null) {
+  if (slug === null || page === null) {
+    // A project namespace miss IS the redirect-map miss (design spec §8):
+    // honest not-found with the CTA into the section root.
     return (
       <div className="mx-auto max-w-5xl">
         {manifest ? (
-          <EmptyState
-            variant="not-found"
-            title={t("docs.notFound.title")}
-            message={t("docs.notFound.message")}
-            action={
-              <Button variant="outline" asChild>
-                <Link to="/docs">{t("docs.notFound.cta")}</Link>
-              </Button>
-            }
-          />
+          <DocsNotFound />
         ) : (
           <PageSkeleton />
         )}
@@ -312,6 +354,12 @@ export function DocsPage() {
   // forbidden synchronous effect-reset (react-hooks/set-state-in-effect).
   return <ArticleView key={`${slug}:${lang}`} slug={slug} page={page} />;
 }
+
+/** Language self-names for the «на языке оригинала» badge (spec §7.2). */
+const LANG_NAME_KEY = {
+  ru: "docs.lang.ru",
+  en: "docs.lang.en",
+} as const;
 
 function ArticleView({ slug, page }: { slug: string; page: DocPage }) {
   const t = useT();
@@ -335,19 +383,23 @@ function ArticleView({ slug, page }: { slug: string; page: DocPage }) {
   const toc = useMemo(() => (body === null ? [] : extractHeadings(body)), [body]);
   const activeId = useScrollSpy(toc.map((item) => item.id));
   const category = docCategory(page.category);
-  // Locale policy (contract §6): UI=en + no en file → ru body + badge.
-  const localeFallback = lang === "en" && !page.locales.includes("en");
+  // Locale policy (contract §6, spec §7.1): the page renders in its
+  // EFFECTIVE locale; a missing UI locale shows the original + badge —
+  // in BOTH directions (ru UI on an en page, en UI on a ru page).
+  const effectiveLocale = localeForPage(page, lang);
+  const localeOriginal = lang !== effectiveLocale;
 
   return (
     <div className="mx-auto max-w-5xl">
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_16rem]">
         <article className="min-w-0 max-w-scroll">
-          {/* Meta row: category chip → version badge → (locale badge), search right. */}
+          {/* Meta row: category chip → version badge → provenance badge →
+              locale badge, search right (design spec §6.1). */}
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex flex-wrap items-center gap-2">
               {category ? (
                 <Link
-                  to={`/docs/c/${category.slug}`}
+                  to={categoryUrl(page.project, category.slug)}
                   aria-label={t(category.titleKey)}
                   className={cn(
                     badgeVariants({ variant: "default" }),
@@ -358,13 +410,18 @@ function ArticleView({ slug, page }: { slug: string; page: DocPage }) {
                   {t(category.titleKey)}
                 </Link>
               ) : null}
-              <Badge variant="outline">
-                {t("docs.badge.verified", { version: page.lastVerified })}
-              </Badge>
-              {localeFallback ? (
+              {page.project === DEFAULT_PROJECT ? (
+                // The release badge is OUR versioning; imported pages carry
+                // their freshness in the provenance badge instead (spec §6).
+                <Badge variant="outline">
+                  {t("docs.badge.verified", { version: page.lastVerified })}
+                </Badge>
+              ) : null}
+              {page.provenance ? <ProvenanceBadge provenance={page.provenance} /> : null}
+              {localeOriginal ? (
                 <Badge variant="outline">
                   <Languages className="mr-1 size-3.5" aria-hidden="true" />
-                  {t("docs.localeFallback")}
+                  {t("docs.localeOriginal", { lang: t(LANG_NAME_KEY[effectiveLocale]) })}
                 </Badge>
               ) : null}
             </div>
@@ -383,11 +440,13 @@ function ArticleView({ slug, page }: { slug: string; page: DocPage }) {
           ) : (
             <>
               <TocDetails items={toc} activeId={activeId} />
+              {/* h1 rides the page's effective locale — the title language
+                  always matches the body language (spec §7.1). */}
               <h1 className="mt-4 text-xl font-semibold leading-tight text-foreground">
-                {titleFor(page, lang)}
+                {titleFor(page, effectiveLocale)}
               </h1>
               <RenderBoundary>
-                <Markdown source={body} />
+                <Markdown source={body} pageSlug={slug} />
               </RenderBoundary>
             </>
           )}

@@ -100,10 +100,8 @@ const DevicesPage = lazy(() =>
 const PairPage = lazy(() =>
   import("@/features/pairing/PairPage").then((m) => ({ default: m.PairPage })),
 );
-const DocsIndexPage = lazy(() =>
-  import("@/features/docs/DocsIndexPage").then((m) => ({
-    default: m.DocsIndexPage,
-  })),
+const DocsHubPage = lazy(() =>
+  import("@/features/docs/DocsHubPage").then((m) => ({ default: m.DocsHubPage })),
 );
 const DocsCategoryPage = lazy(() =>
   import("@/features/docs/DocsCategoryPage").then((m) => ({
@@ -112,6 +110,11 @@ const DocsCategoryPage = lazy(() =>
 );
 const DocsPage = lazy(() =>
   import("@/features/docs/DocsPage").then((m) => ({ default: m.DocsPage })),
+);
+const DocsCategoryLegacyRedirect = lazy(() =>
+  import("@/features/docs/DocsRedirects").then((m) => ({
+    default: m.DocsCategoryLegacyRedirect,
+  })),
 );
 
 /**
@@ -239,14 +242,18 @@ export function buildRoutes(): RouteObject[] {
           ],
         },
 
-        // Документация domain (ADR 0015): pure-frontend md section — index,
-        // category lists, article pages. Static siblings (`/docs/c/…`) rank
-        // above the `:slug` route by react-router ranking.
+        // Документация domain (ADR 0015 + ADR 0016): three project hubs.
+        // /docs answers with an instant replace-redirect into the default
+        // hub (design spec §2/§8 — the section root is /docs/vesmaro-eyes);
+        // legacy single-segment URLs resolve through the redirect map in
+        // DocsHubPage (hit → replace, miss → not-found). Static segments
+        // (`c`) outrank the dynamic ones, so /docs/:project/c/:category and
+        // the splat article route rank correctly against each other.
         {
           path: "/docs",
           element: (
             <Page>
-              <DocsIndexPage />
+              <Navigate to="/docs/vesmaro-eyes" replace />
             </Page>
           ),
         },
@@ -254,12 +261,28 @@ export function buildRoutes(): RouteObject[] {
           path: "/docs/c/:category",
           element: (
             <Page>
+              <DocsCategoryLegacyRedirect />
+            </Page>
+          ),
+        },
+        {
+          path: "/docs/:project",
+          element: (
+            <Page>
+              <DocsHubPage />
+            </Page>
+          ),
+        },
+        {
+          path: "/docs/:project/c/:category",
+          element: (
+            <Page>
               <DocsCategoryPage />
             </Page>
           ),
         },
         {
-          path: "/docs/:slug",
+          path: "/docs/:project/*",
           element: (
             <Page>
               <DocsPage />

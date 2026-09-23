@@ -58,14 +58,18 @@ describe("docs asset integrity (wave 2)", () => {
     expect(missing, "refs with no asset behind them").toEqual([]);
   });
 
-  it("keeps every SVG asset two-theme and free of external resources", async () => {
+  it("keeps every OUR SVG asset two-theme and free of external resources", async () => {
     // Test-only ?raw glob: reads the SVG SOURCE (never shipped to the bundle).
     const svgSources = import.meta.glob<string>("./assets/**/*.svg", {
       query: "?raw",
       import: "default",
       eager: true,
     }) as Record<string, string>;
-    const entries = Object.entries(svgSources);
+    // The two-theme rule covers CURATED diagrams only (contract §4): vendored
+    // upstream SVGs render as-is (design spec §9.6).
+    const entries = Object.entries(svgSources).filter(
+      ([path]) => !path.includes("/upstream/"),
+    );
     expect(entries.length, "sanity: svg assets exist").toBeGreaterThan(0);
     for (const [path, source] of entries) {
       expect(

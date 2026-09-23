@@ -1085,16 +1085,16 @@ export const en: Record<TranslationKey, string> = {
   "overview.agentsAll": "Execution",
   "overview.autoLaunchesToday": "auto-launches today: {{count}}",
 
-  // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
+  // --- docs section (ADR 0015/0016, contract 2026-09-23 §§4–6) ---------------------
   "nav.docs": "Documentation",
-  "docs.index.lede": "Board reference: from the first launch to upgrades.",
   "docs.cat.product": "About the product",
   "docs.catDesc.product": "What mnemos and vesmaro-eyes are: concepts and glossary.",
   "docs.cat.gettingStarted": "Getting started",
   "docs.catDesc.gettingStarted":
     "Deploy the board and sign in — from zero to a workspace.",
   "docs.cat.board": "Board & groups",
-  "docs.catDesc.board": "Memory groups and the kanban board: structure and daily work.",
+  "docs.catDesc.board":
+    "Project groups and the kanban board: structure and everyday work with tasks.",
   "docs.cat.agents": "Agents & assignments",
   "docs.catDesc.agents": "Assignments, executors and completion reports.",
   "docs.cat.automation": "Automation",
@@ -1108,23 +1108,56 @@ export const en: Record<TranslationKey, string> = {
     "Backup, upgrade and troubleshooting — what to do when something breaks.",
   "docs.cat.faq": "FAQ",
   "docs.catDesc.faq": "Short answers to frequent questions.",
+  // Imported hubs (contract §4 — mirroring the hub design spec §2).
+  "docs.cat.mnemosUser": "For users",
+  "docs.catDesc.mnemosUser":
+    "Install, first run, sync and references — everyday work with the memory server.",
+  "docs.cat.mnemosAdmin": "For administrators",
+  "docs.catDesc.mnemosAdmin":
+    "Security, federation and operational runbooks for the mnemos administrator.",
+  "docs.cat.mnemosArchitecture": "Architecture",
+  "docs.catDesc.mnemosArchitecture":
+    "How mnemos is built: hybrid memory and its control surfaces.",
+  "docs.cat.meshUser": "For users",
+  "docs.catDesc.meshUser": "Run a mnemos-mesh node and configure the federation.",
+  "docs.cat.meshAdmin": "For administrators",
+  "docs.catDesc.meshAdmin": "Day-2 operations and security for a mnemos-mesh node.",
   "docs.search.placeholder": "Search the docs",
   "docs.search.ariaLabel": "Search the docs",
   "docs.search.resultsLabel": "Search results",
   "docs.search.indexing": "Indexing…",
   "docs.search.noResults": "Nothing found for “{{query}}”",
   "docs.search.noResultsHint": "Try a single word: “token” instead of “token rotation”",
+  "docs.search.localeHint":
+    "Some pages are available in one language only — switch the interface language (RU|EN in the header).",
   "docs.toc.title": "On this page",
   "docs.prev": "Previous",
   "docs.next": "Next",
   "docs.prevNextNav": "Page navigation",
   "docs.badge.verified": "current as of v{{version}}",
-  "docs.localeFallback": "Available in Russian only",
+  "docs.localeOriginal": "In the original language ({{lang}})",
+  "docs.lang.ru": "Russian",
+  "docs.lang.en": "English",
+  "docs.provenance.badge": "from {{repo}}@{{sha}} · synced {{date}}",
+  "docs.provenance.full":
+    "Imported from the {{repo}} repository, commit {{sha}}, synced {{date}}",
+  "docs.hub.start": "Start here",
+  "docs.hub.categories": "Categories",
+  "docs.hub.vesmaroEyes.lede":
+    "The board reference: from the first launch to upgrades — panels, agents, tokens and maintenance.",
+  "docs.hub.mnemos.lede":
+    "A memory server for AI agents: a well of entries, semantic search and storage governed by the tag contract. This hub carries the user and administrator guides plus the architecture overview.",
+  "docs.hub.mnemosMesh.lede":
+    "Federated storage: bring up a mnemos-mesh node, configure the channel and run two-instance operations.",
+  "docs.hub.coverage.both": "Available in Russian and English",
+  "docs.hub.coverage.ru": "Available in Russian only",
+  "docs.hub.coverage.en": "Available in English only",
+  "docs.hub.coverage.mixed": "Partially translated (ru+en)",
   "docs.copy.code": "Copy code",
   "docs.copy.done": "Code copied",
   "docs.notFound.title": "No such page",
   "docs.notFound.message": "Check the address or go back to the category list.",
-  "docs.notFound.cta": "All categories",
+  "docs.notFound.cta": "Open the docs",
   "docs.error.title": "The page could not be shown",
   "docs.loading": "Loading…",
   "docs.pages.one": "{{count}} page",
