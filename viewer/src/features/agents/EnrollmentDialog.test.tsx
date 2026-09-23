@@ -41,7 +41,11 @@ async function mount(executors: ExecutorItem[] = []): Promise<{
           <ToastProvider>
             <UiTokenProvider>
               <I18nProvider initialLang="en">
-                <EnrollmentDialog open onOpenChange={onOpenChange} executors={executors} />
+                <EnrollmentDialog
+                  open
+                  onOpenChange={onOpenChange}
+                  executors={executors}
+                />
                 <ToastViewport />
               </I18nProvider>
             </UiTokenProvider>
@@ -147,22 +151,56 @@ describe("EnrollmentDialog — form phase", () => {
 });
 
 describe("EnrollmentDialog — token screen", () => {
-  it("shows the live TTL countdown and the four bootstrap steps", async () => {
+  it("shows the live TTL countdown, the ONE-LINER and the manual steps", async () => {
     const { root, container } = await mount();
     await submitForm(container);
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("expires in");
     });
     expect(document.body.textContent ?? "").toMatch(/expires in \d{2}:\d{2}/);
-    // The bootstrap block: REMOTE-EXECUTOR.md wording, four steps.
-    const steps = document.querySelectorAll("pre");
-    expect(steps).toHaveLength(4);
-    expect(steps[0].textContent).toContain("api/executors");
-    expect(steps[1].textContent).toContain("0600");
-    expect(steps[3].textContent).toContain("--once");
+    // Wave 3D: the one-liner leads, the manual four steps live in the
+    // <details> spoiler (diagnostics / air-gapped path).
+    const pres = document.querySelectorAll("pre");
+    expect(pres[0].textContent).toContain("/api/poller/bootstrap.sh");
+    expect(pres[0].textContent).toContain("| sudo bash -s --");
+    expect(pres[0].textContent).toContain("--url http://localhost:3000");
+    expect(pres[0].textContent).toContain("--token mne_");
+    const manual = [...document.querySelectorAll("details pre")];
+    expect(manual).toHaveLength(4);
+    expect(manual[0].textContent).toContain("api/executors");
+    expect(manual[1].textContent).toContain("0600");
+    expect(manual[3].textContent).toContain("--once");
     root.unmount();
   });
 
+  it("the one-liner masks the token ON SCREEN; copying carries the FULL token", async () => {
+    const { root, container, gateway } = await mount();
+    const spy = vi.spyOn(gateway, "createEnrollment");
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("expires in");
+    });
+    const createdToken = (await spy.mock.results[0]!.value).token;
+    const onScreen = document.querySelectorAll("pre")[0].textContent ?? "";
+    // Masked on screen (shoulder-surfing discipline, same as the token row).
+    expect(onScreen).toContain("mne_\u2022\u2022\u2022\u2022");
+    expect(onScreen).not.toContain(createdToken);
+    // The deliberate copy act carries the real token for the VPS shell.
+    const oneLinerBlock = document.querySelectorAll("pre")[0].closest("div")!;
+    const copyButton = [...oneLinerBlock.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Copy"),
+    )!;
+    await copyButton.click();
+    await vi.waitFor(() => {
+      const last = (
+        navigator.clipboard.writeText as ReturnType<typeof vi.fn>
+      ).mock.calls.at(-1)?.[0] as string;
+      expect(last).toContain(createdToken);
+      expect(last).toContain("/api/poller/bootstrap.sh");
+      expect(last).toContain("| sudo bash -s --");
+    });
+    root.unmount();
+  });
   it("copy buttons hand the token and the whole script to the clipboard", async () => {
     const { root, container } = await mount();
     await submitForm(container);
@@ -185,7 +223,6 @@ describe("EnrollmentDialog — token screen", () => {
     expect(allText).toContain("--once");
     root.unmount();
   });
-
 });
 
 describe("EnrollmentDialog — honest copy (review P2-2)", () => {
@@ -203,7 +240,9 @@ describe("EnrollmentDialog — honest copy (review P2-2)", () => {
       button(container, "Copy").click();
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(document.body.textContent).toContain("Copy failed — the token stays visible");
+    expect(document.body.textContent).toContain(
+      "Copy failed — the token stays visible",
+    );
     expect(document.body.textContent).not.toContain("Copied");
     // The token is still on screen (masked) — recoverable by hand.
     expect(document.querySelector("code")!.textContent).toMatch(/^mne_•+$/);
@@ -223,7 +262,9 @@ describe("EnrollmentDialog — honest copy (review P2-2)", () => {
     await act(async () => {
       button(container, "Copy").click();
     });
-    expect(document.body.textContent).toContain("Copy failed — the token stays visible");
+    expect(document.body.textContent).toContain(
+      "Copy failed — the token stays visible",
+    );
     root.unmount();
   });
 });

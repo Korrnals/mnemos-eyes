@@ -960,6 +960,9 @@ export const ru = {
   "agents.harness.invalid":
     "Строчные латиница/цифры, затем точки, дефисы, подчёркивания (до 60 знаков).",
 
+  "agents.enrollment.oneLinerHint": "--url должен быть адресом, который резолвится С ЭТОЙ машины — адрес VPN-оверлея может отличаться от LAN.",
+  "agents.enrollment.tokenInCopyNote": "При копировании полный токен попадает в буфер обмена.",
+  "agents.enrollment.manualToggle": "Ручной путь — диагностика / воздушные зазоры",
   "agents.enrollment.listTitle": "Токены подключения",
   "agents.enrollment.listHint": "живые + история",
   "agents.enrollment.listLoading": "Загружаем токены",
