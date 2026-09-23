@@ -7,6 +7,7 @@ import type {
   ExecutionSettings,
   ExecutorItem,
   ExecutorsPage,
+  HarnessItem,
   HookRule,
   LaunchRow,
   ScheduleRule,
@@ -741,6 +742,33 @@ export const MOCK_EXECUTORS_PAGE: ExecutorsPage = {
 };
 
 /**
+ * Harness dictionary corpus (wave 3C, design 2026-09-22 §C) — the
+ * playground's START state: exactly the server's boot seed (10 rows,
+ * added_via 'seed'). This is FIXTURE data for the mock adapter, not a
+ * mirror of a UI constant: the live dictionary is `MockAdapter` state
+ * mutated through createHarness/deleteHarness, and the real UI reads
+ * GET /api/harnesses. The former closed-set mirror module is DELETED
+ * (the drift class died with the dictionary).
+ */
+export const MOCK_HARNESSES: HarnessItem[] = [
+  "aider",
+  "claude-code",
+  "cline",
+  "continue",
+  "copilot",
+  "cursor",
+  "hermes",
+  "pi",
+  "windsurf",
+  "zcode",
+].map((name) => ({
+  name,
+  added_at: "2026-09-22T00:00:00+00:00",
+  added_via: "seed",
+  note: "",
+}));
+
+/**
  * Assignment queue corpus — all 7 lifecycle states, plus queued rows
  * covering the distinct routing outcomes (specialist / explicit pin /
  * unmatched wait / global default; claimed/running add the auto tier).
@@ -1095,8 +1123,10 @@ export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
   // condition_meta mirrors the SERVER dictionaries VERBATIM
   // (store.RULE_CONDITION_FIELD_ENUMS / HOOK_EVENT_WHITELIST): fields with
   // closed enums get values_hint; project/specialist/executor_id are
-  // free-form (null); harness joins through KNOWN_HARNESSES. The form is
-  // BUILT from it, never from UI constants (review SCHED-1-UI P2-1).
+  // free-form (null); harness joins through the harness DICTIONARY corpus
+  // (wave 3C — MockAdapter.automationStatus re-derives the live list from
+  // its dictionary state). The form is BUILT from it, never from UI
+  // constants (review SCHED-1-UI P2-1).
   condition_meta: {
     fields: [
       "col",
@@ -1112,21 +1142,18 @@ export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
     ],
     ops: ["eq", "ne"],
     values_hint: {
-      col: ["backlog", "validating", "open", "in-progress", "blocked", "resolved", "done"],
+      col: [
+        "backlog",
+        "validating",
+        "open",
+        "in-progress",
+        "blocked",
+        "resolved",
+        "done",
+      ],
       env: ["cluster", "laptop", "local", "cloud", "unknown"],
       executor_id: null,
-      harness: [
-        "zcode",
-        "hermes",
-        "pi",
-        "copilot",
-        "claude-code",
-        "cursor",
-        "aider",
-        "continue",
-        "cline",
-        "windsurf",
-      ],
+      harness: MOCK_HARNESSES.map((harness) => harness.name),
       priority: ["critical", "high", "normal", "low"],
       project: null,
       specialist: null,

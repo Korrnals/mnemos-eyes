@@ -1,4 +1,8 @@
-import type { ArchiveParams, AssignmentListParams, PulseParams } from "@/gateway/boardTypes";
+import type {
+  ArchiveParams,
+  AssignmentListParams,
+  PulseParams,
+} from "@/gateway/boardTypes";
 import type { InboxParams } from "@/gateway/BoardAdapter";
 import type { ListMemoriesParams, SearchParams } from "@/gateway/types";
 
@@ -95,6 +99,13 @@ export const keys = {
     enrollment: {
       all: ["agents", "enrollment"] as const,
       list: () => ["agents", "enrollment", "list"] as const,
+    },
+    // Wave 3C: the harness dictionary (open read) — the select options in
+    // the assign/enrollment/automation forms. SSE harness.added/removed
+    // invalidates this family.
+    harnesses: {
+      all: ["agents", "harnesses"] as const,
+      list: () => ["agents", "harnesses", "list"] as const,
     },
     settings: {
       execution: () => ["agents", "settings", "execution"] as const,

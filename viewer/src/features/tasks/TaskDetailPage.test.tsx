@@ -192,10 +192,21 @@ describe("TaskDetailPage (mock adapter)", () => {
   });
 
   it("not on the board (unknown id) → not-found with the archive escape", async () => {
+    // UI-18: the seed settles the archived-row probe too (in a live DOM it
+    // fetches — the page shows its skeleton while probing, then lands here).
+    const probe = { limit: 200, offset: 0 };
     const html = await renderTask(
       new MockAdapter({ latency: false }),
       "/tasks/NOPE-404",
-      seedAll,
+      async (client, gw) => {
+        await seedAll(client, gw);
+        if (gw instanceof MockAdapter) {
+          await client.prefetchQuery({
+            queryKey: keys.tasks.archive(probe),
+            queryFn: () => gw.archive(probe),
+          });
+        }
+      },
     );
     expect(html).toContain("No such task");
     expect(html).toContain("NOPE-404");
@@ -237,5 +248,41 @@ describe("TaskDetailPage (mock adapter)", () => {
   it("renders the honest unsupported state on a mnemos gateway", async () => {
     const html = await renderTask(new HttpAdapter("/api"), "/tasks/TB-1");
     expect(html).toContain("The Tasks domain is unavailable in mnemos mode");
+  });
+
+  it("UI-18: tab links preserve ?return= (spec §2.2 rule 4)", async () => {
+    const html = await renderTask(
+      new MockAdapter({ latency: false }),
+      "/tasks/TB-1?return=%2Ftasks%3Fstatus%3Dopen",
+      seedAll,
+    );
+    expect(html).toContain(
+      'href="/tasks/TB-1?return=%2Ftasks%3Fstatus%3Dopen&amp;tab=history"',
+    );
+    expect(html).toContain(
+      'href="/tasks/TB-1?return=%2Ftasks%3Fstatus%3Dopen&amp;tab=memory"',
+    );
+  });
+
+  it("UI-18 pair 4: an archived id renders from the archive probe fallback", async () => {
+    const gateway = new MockAdapter({ latency: false });
+    const probe = { limit: 200, offset: 0 };
+    const html = await renderTask(gateway, "/tasks/RB-1", async (client, gw) => {
+      if (gw instanceof MockAdapter) {
+        await client.prefetchQuery({
+          queryKey: keys.tasks.board(),
+          queryFn: () => gw.board(),
+        });
+        await client.prefetchQuery({
+          queryKey: keys.tasks.archive(probe),
+          queryFn: () => gw.archive(probe),
+        });
+      }
+    });
+    // The board projection misses RB-1 (archived) — the archive probe row
+    // renders the honest detail instead of the not-found escape.
+    expect(html).toContain("RB-1");
+    expect(html).toContain("регистрац");
+    expect(html).not.toContain("No such task");
   });
 });

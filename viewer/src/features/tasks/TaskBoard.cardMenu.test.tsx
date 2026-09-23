@@ -171,7 +171,7 @@ async function mountBoard(fetchImpl: typeof fetch): Promise<BoardAdapter> {
 
 /** The card <li> of a task by its title-link href. */
 function cardOf(taskId: string): HTMLLIElement {
-  const card = container!.querySelector(`a[href="/tasks/${taskId}"]`)?.closest("li");
+  const card = container!.querySelector(`a[href^="/tasks/${taskId}?"]`)?.closest("li");
   expect(card).toBeDefined();
   return card as HTMLLIElement;
 }

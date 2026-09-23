@@ -58,6 +58,10 @@ export const ru = {
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------
   "breadcrumbs.label": "Хлебные крошки",
+  // Back control of the sticky crumb row (UI-18 spec §3.4): the visible label
+  // is the bare place name; the accessible name carries the destination.
+  "nav.backTo": "Назад: {{place}}",
+  "nav.backFallback": "Назад",
 
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Переключить на светлую тему",
@@ -329,8 +333,7 @@ export const ru = {
   "login.continueQueued":
     "Войдите, чтобы продолжить — действие выполнится автоматически",
   // Отказ «у порога» (ADR 0014 Ф1): verify вернул отказ — ничего не сохранено.
-  "login.rejected":
-    "Сервер не принял токен — проверьте значение и попробуйте ещё раз.",
+  "login.rejected": "Сервер не принял токен — проверьте значение и попробуйте ещё раз.",
   // Отказ «в полёте» (ADR 0014 Ф2): сохранённый токен протух / сессия истекла
   // по idle-таймауту — отдельный текст, чтобы не читалось как «опечатка».
   "login.sessionExpired": "Сессия истекла — войдите ещё раз.",
@@ -950,6 +953,13 @@ export const ru = {
   "agents.enrollment.usedBy": "использован: {{name}}",
   "agents.enrollment.usedIp": "IP подключения: {{ip}}",
   "agents.enrollment.done": "Готово",
+  "agents.harness.addOption": "Добавить харнес…",
+  "agents.harness.add": "Добавить",
+  "agents.harness.adding": "Добавляем…",
+  "agents.harness.addFailed": "Не удалось добавить харнес",
+  "agents.harness.invalid":
+    "Строчные латиница/цифры, затем точки, дефисы, подчёркивания (до 60 знаков).",
+
   "agents.enrollment.listTitle": "Токены подключения",
   "agents.enrollment.listHint": "живые + история",
   "agents.enrollment.listLoading": "Загружаем токены",
@@ -962,7 +972,6 @@ export const ru = {
     "Отозвать токен {{label}}? Подключение по нему станет невозможно.",
   "agents.enrollment.revoked": "Токен отозван",
   "agents.enrollment.revokeFailed": "Не удалось отозвать токен",
-
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Автоматизация",
@@ -1215,11 +1224,15 @@ export const ru = {
     "Проверим ещё раз автоматически через минуту; кнопка работает и вручную.",
   "pair.checkNow": "Проверить",
   "pair.checking": "Проверяем…",
-  "pair.successTitle": "Устройство подключено",
+  "pair.linkedTitle": "Устройство подключено — привязано к этому браузеру",
+  "pair.boundNote":
+    "Токен сохранён на этом устройстве, копировать его никуда не нужно. Кнопка ниже — только для переноса в другое приложение.",
   "pair.tokenLabel": "Токен устройства",
-  "pair.tokenOnce":
-    "Токен показывается один раз — сохраните его сейчас. Страница не восстановит его.",
-  "pair.copyFailed": "Скопировать не удалось — токен в строке, выделите вручную.",
+  "pair.copyToken": "Скопировать токен",
+  "pair.copyFallback": "Скопировано резервным способом браузера.",
+  "pair.copyManual":
+    "Скопировать не удалось — токен выделен в строке, скопируйте вручную.",
+  "pair.startWork": "Начать работу",
   "pair.deviceId": "Идентификатор устройства",
   "pair.scope": "права",
   "pair.expires": "истекает",

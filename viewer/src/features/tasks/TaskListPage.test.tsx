@@ -74,7 +74,7 @@ describe("TaskListPage (mock adapter)", () => {
     expect(html).toContain("mnemos-eyes");
     // Dense table semantics + the row link (keyboard/SR path).
     expect(html).toContain("<table");
-    expect(html).toMatch(/href="\/tasks\/TB-1"/);
+    expect(html).toMatch(/href="\/tasks\/TB-1\?return=/);
     // Group toggles are disclosed via aria-expanded.
     expect(html).toContain('aria-expanded="true"');
     // Ф3: the create button and the per-row action menu render. SSR emits
@@ -91,6 +91,7 @@ describe("TaskListPage (mock adapter)", () => {
     );
     expect(html).toContain("RB-2");
     expect(html).toContain("TB-5");
+    // UI-18: detail links carry the filtered source URL as ?return=.
     expect(html).not.toContain('href="/tasks/TB-1"');
     // The pressed mini-stat reflects the URL filter.
     expect(html).toContain('aria-pressed="true"');
@@ -102,9 +103,9 @@ describe("TaskListPage (mock adapter)", () => {
       "/tasks?project=mnemos-eyes&priority=critical",
       seedBoard,
     );
-    expect(html).toContain('href="/tasks/TB-1"');
-    expect(html).toContain('href="/tasks/TB-5"');
-    expect(html).not.toContain('href="/tasks/TB-3"');
+    expect(html).toContain('href="/tasks/TB-1?return=');
+    expect(html).toContain('href="/tasks/TB-5?return=');
+    expect(html).not.toContain('href="/tasks/TB-3');
   });
 
   it("renders the filtered empty state when nothing matches the URL q", async () => {

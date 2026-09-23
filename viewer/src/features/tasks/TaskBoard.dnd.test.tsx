@@ -209,7 +209,7 @@ describe("kanban drag availability (CV-4 §3 — no token, no drag)", () => {
   it("renders cards locked: default cursor + «войдите для управления» tooltip", async () => {
     const gateway = new BoardAdapter({ fetchImpl: makeFetchStub(), baseUrl: "/api" });
     await mountTree(<TaskBoardPage />, gateway);
-    const card = container!.querySelector('a[href="/tasks/RB-2"]')?.closest("li");
+    const card = container!.querySelector('a[href^="/tasks/RB-2?"]')?.closest("li");
     expect(card).toBeDefined();
     expect(card!.className).toContain("cursor-default");
     expect(card!.className).not.toContain("cursor-grab");

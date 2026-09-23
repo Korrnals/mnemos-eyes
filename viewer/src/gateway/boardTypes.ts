@@ -175,7 +175,6 @@ export type TaskUnarchiveResult = Schemas["UnarchiveOut"];
  */
 export type InboxRefreshResult = Schemas["TaskInboxRefreshOut"];
 
-
 // --- AGW-1 agents-domain wire types (ARCH-9, ADR 0009 Amd 2; SCHED-1) ----------
 // Hand-written refinements over the generated schemas where the server
 // answers anonymous dicts (routing, executor-list meta) or enum-ish strings;
@@ -186,13 +185,7 @@ export type InboxRefreshResult = Schemas["TaskInboxRefreshOut"];
 
 /** Assignment lifecycle — the frozen 7-state dictionary (ADR 0009 §4). */
 export type AssignmentLifecycleState =
-  | "queued"
-  | "claimed"
-  | "running"
-  | "done"
-  | "failed"
-  | "cancelled"
-  | "expired";
+  "queued" | "claimed" | "running" | "done" | "failed" | "cancelled" | "expired";
 
 /**
  * Routing annotation `{resolved, reason}` — computed per GET over the
@@ -265,7 +258,7 @@ export interface AssignmentListParams {
 export interface AssignmentCreateInput {
   readonly task_id: string;
   readonly specialist: string;
-  /** Harness id (KNOWN_HARNESSES server-side; default "zcode"). */
+  /** Harness id (a value of the server harness dictionary, wave 3C; default "zcode"). */
   readonly harness: string;
   /** Explicit executor pin — omitted/empty means chain resolution. */
   readonly executor_id?: string;
@@ -417,6 +410,40 @@ export interface ExecutorStateChangeResult {
   readonly executor: ExecutorItem;
 }
 
+/**
+ * Harness dictionary row (wave 3C, design 2026-09-22 §C) — board
+ * `HarnessOut`. The dictionary is the owner-managed nomination registry
+ * that replaced the former closed-set UI mirror; `added_via` separates
+ * seed rows from owner-added ones.
+ */
+export interface HarnessItem {
+  readonly name: string;
+  readonly added_at: string;
+  readonly added_via: string;
+  readonly note: string;
+}
+
+/** Harness dictionary page — board `HarnessListOut`. `seed_min_count` is
+ * the guaranteed seed size; the UI never hardcodes the set. */
+export interface HarnessesPage {
+  readonly ok: boolean;
+  readonly count: number;
+  readonly items: readonly HarnessItem[];
+  readonly meta: { readonly seed_min_count: number };
+}
+
+/** Add request — board `HarnessCreateBody` (name server-sanitized too). */
+export interface HarnessCreateInput {
+  readonly name: string;
+  readonly note?: string;
+}
+
+/** Add answer — board `HarnessStateOut` (the fresh row echoes back). */
+export interface HarnessStateResult {
+  readonly ok: boolean;
+  readonly harness: HarnessItem;
+}
+
 /** Execution settings read — board `ExecutionSettingsOut`. */
 export type ExecutionSettings = Schemas["ExecutionSettingsOut"];
 
@@ -490,7 +517,6 @@ export interface LaunchesParams {
   /** Opaque cursor from a previous page's next_cursor. */
   readonly cursor?: string;
 }
-
 
 // --- Anonymous wire shapes (board answers `dict[str, Any]`) ------------------
 
@@ -669,9 +695,4 @@ export interface PairingExchangeInput {
 /** Effective pairing lifecycle (ADR 0012 §10.1), computed client-side:
  * the wire `state` narrowed + the TTL-passed → expired view rule. */
 export type PairingLifecycle =
-  | "created"
-  | "scanned"
-  | "confirmed"
-  | "issued"
-  | "expired"
-  | "revoked";
+  "created" | "scanned" | "confirmed" | "issued" | "expired" | "revoked";

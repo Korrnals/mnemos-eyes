@@ -26,6 +26,10 @@ import type { BoardTask } from "./boardTypes";
  * SCHED-1-UI addition (ADR 0013 §4): the automation-rule family
  * `automation.rule.created/updated/toggled/deleted` — one event per rule
  * mutation, a single list-sync signal for both rule families.
+ *
+ * Wave 3C addition: the harness-dictionary family
+ * `harness.added/removed` — one frame per dictionary mutation; `added`
+ * carries the full row, `removed` the deleted name.
  */
 export type EventSourceFactory = (url: string) => EventSource;
 
@@ -209,6 +213,12 @@ export interface BoardEventMap {
   };
   "enrollment.revoked": EnrollmentEvent & { readonly kind: "enrollment.revoked" };
   "enrollment.expired": EnrollmentEvent & { readonly kind: "enrollment.expired" };
+  // Harness-dictionary kinds (wave 3C, ui-contract §11 дополнение): one
+  // frame per dictionary mutation (add/remove). `added` carries the full
+  // row, `removed` only the name — consumers treat the pair as a single
+  // list-sync signal over the harnesses key.
+  "harness.added": HarnessEvent & { readonly kind: "harness.added" };
+  "harness.removed": HarnessEvent & { readonly kind: "harness.removed" };
   // Pairing kinds (CV-7, ADR 0012 §10.3 — ui-contract §11 дополнение):
   // requested (exchange created→scanned), confirmed (owner allow=true),
   // revoked (owner deny / cancel / device revoke — pairing_id XOR device_id
@@ -293,6 +303,19 @@ export interface EnrollmentEvent {
   readonly executor_id?: string;
   readonly executor_name?: string;
   readonly used_ip?: string;
+}
+
+/**
+ * Harness-dictionary event payload (wave 3C, ui-contract §11 дополнение):
+ * `{kind, harness|name}` — one frame per dictionary mutation. `added`
+ * carries the full row; `removed` only the name (the row is gone). A pure
+ * list-sync signal: consumers invalidate the harnesses key and refetch.
+ */
+export interface HarnessEvent {
+  /** added only: the full dictionary row. */
+  readonly harness?: Readonly<Record<string, unknown>>;
+  /** removed only: the deleted name. */
+  readonly name?: string;
 }
 
 /**
@@ -475,6 +498,25 @@ export function parseBoardEvent(raw: string): ParsedBoardEvent {
           used_ip: parsed.used_ip,
         },
       };
+    case "harness.added":
+      // The full row is the point of `added` — without it the frame is
+      // malformed (consumers could not render the new entry).
+      if (!isRecord(parsed.harness)) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: { kind, harness: parsed.harness },
+      };
+    case "harness.removed":
+      // Only the deleted name travels; it is mandatory.
+      if (typeof parsed.name !== "string") {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: { kind, name: parsed.name },
+      };
     case "pairing.requested":
     case "pairing.confirmed":
     case "pairing.expired":
@@ -526,8 +568,12 @@ function withOptionalNotification<T extends object>(
  */
 function parseExecutorEvent(
   parsed: Record<string, unknown>,
-  kind: "executor.online" | "executor.offline" | "executor.registered" |
-    "executor.updated" | "executor.deleted",
+  kind:
+    | "executor.online"
+    | "executor.offline"
+    | "executor.registered"
+    | "executor.updated"
+    | "executor.deleted",
 ): ParsedBoardEvent {
   if (!isRecord(parsed.executor) || typeof parsed.state !== "string") {
     return ignored("malformed-payload", kind);

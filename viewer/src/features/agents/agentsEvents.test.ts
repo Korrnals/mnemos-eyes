@@ -116,10 +116,7 @@ describe("applyAgentsEventToCache — invalidation-only mapping", () => {
         task: { id: "TB-1", col: "in-progress", status: "in-progress" },
       }),
     );
-    applyAgentsEventToCache(
-      client,
-      mustEvent({ kind: "hello", last_event_id: 7 }),
-    );
+    applyAgentsEventToCache(client, mustEvent({ kind: "hello", last_event_id: 7 }));
     expect(isKeyInvalidated(client, keys.agents.assignments.all)).toBe(false);
     expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(false);
   });
@@ -169,5 +166,38 @@ describe("applyAgentsEventToCache — enrollment family (AGW-5 phase 2)", () => 
     const client = seededClient();
     applyAgentsReconnectToCache(client);
     expect(isKeyInvalidated(client, keys.agents.enrollment.all)).toBe(true);
+  });
+});
+
+describe("harness.* — dictionary sync (wave 3C)", () => {
+  it("added/removed invalidate the harnesses key and nothing else", () => {
+    for (const [kind, payload] of [
+      ["harness.added", { harness: { name: "myagent", added_via: "owner" } }],
+      ["harness.removed", { name: "myagent" }],
+    ] as const) {
+      const client = seededClient();
+      client.setQueryData(keys.agents.harnesses.list(), {
+        ok: true,
+        count: 10,
+        items: [],
+        meta: { seed_min_count: 10 },
+      });
+      applyAgentsEventToCache(client, mustEvent({ kind, ...payload }));
+      expect(isKeyInvalidated(client, keys.agents.harnesses.all)).toBe(true);
+      expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(false);
+      expect(isKeyInvalidated(client, keys.agents.assignments.all)).toBe(false);
+    }
+  });
+
+  it("reconnect marks the harness dictionary stale too (at-most-once stream)", () => {
+    const client = seededClient();
+    client.setQueryData(keys.agents.harnesses.list(), {
+      ok: true,
+      count: 10,
+      items: [],
+      meta: { seed_min_count: 10 },
+    });
+    applyAgentsReconnectToCache(client);
+    expect(isKeyInvalidated(client, keys.agents.harnesses.all)).toBe(true);
   });
 });

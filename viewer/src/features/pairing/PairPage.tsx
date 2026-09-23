@@ -12,6 +12,7 @@ import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
 import { useGateway } from "@/gateway/GatewayContext";
 import { isPairingExchangeSource } from "@/gateway/capabilities";
+import { saveDeviceIdentity } from "@/gateway/deviceToken";
 import type {
   PairingExchangeAwaiting,
   PairingIssuedResult,
@@ -24,7 +25,7 @@ import {
   readPairingCodeFromHash,
   verifyDigits,
 } from "./pairingModel";
-import { useCopyFlash } from "./usePairing";
+import { useCopyWithFallback } from "./usePairing";
 
 /**
  * `/pair` — the DEVICE leg of the QR pairing (CV-7, ADR 0012 §2.3; a
@@ -41,9 +42,10 @@ import { useCopyFlash } from "./usePairing";
  * pairing): while awaiting_confirmation the page retries ONCE after 60 s
  * and otherwise waits for the manual «Проверить» — a device has no session
  * and no SSE, so burning attempts on a tight poll would only feed the rate
- * limiter. 200 = the one-shot mnd_ token, shown ONCE with an explicit
- * «сохраните — страница не восстановит»; 403/404/410/429/503 = honest
- * verdicts, never a silent hang.
+ * limiter. 200 = the one-shot mnd_ token, SAVED TO THIS DEVICE on the spot
+ * (ADR 0012 §5 — localStorage `vesmaro.deviceToken`; the owner never
+ * copies anything by hand) with «Начать работу» as the one way forward;
+ * 403/404/410/429/503 = honest verdicts, never a silent hang.
  */
 
 type PairPagePhase = "form" | "awaiting" | "issued" | "error";
@@ -121,6 +123,16 @@ export function PairPage() {
           if (isAwaiting(result)) {
             setState({ phase: "awaiting", verify: result.verify });
           } else {
+            // ADR 0012 §5: the token's home is THIS device — the identity is
+            // persisted the moment the exchange answers, so «Начать работу»
+            // lands on a working read-only board with zero copy/paste. The
+            // on-screen copy button stays as the explicit-transfer path
+            // (another app/PWA on the same device).
+            saveDeviceIdentity({
+              token: result.device_token,
+              deviceId: result.device_id,
+              deviceName: name.trim(),
+            });
             setState({ phase: "issued", issued: result });
           }
         })
@@ -196,7 +208,11 @@ export function PairPage() {
           onCheck={() => runExchange(code, deviceName)}
         />
       ) : state.issued ? (
-        <IssuedScreen issued={state.issued} lang={lang} />
+        <IssuedScreen
+          issued={state.issued}
+          lang={lang}
+          onStart={() => navigate("/")}
+        />
       ) : null}
     </PairShell>
   );
@@ -354,27 +370,39 @@ function AwaitingScreen({
   );
 }
 
-/** 200 — the one-shot mnd_ token, shown exactly once (it lives nowhere: no
- * storage, no refetch — the honest «сохраните сейчас» screen). */
+/** 200 — the pairing is DONE: the identity was saved to this device (§5),
+ * «Начать работу» is the forward path into the read-only board. The copy
+ * button demotes to the explicit-transfer affordance (move the token into
+ * another app/PWA on this device) with three honest copy verdicts. */
 function IssuedScreen({
   issued,
   lang,
+  onStart,
 }: {
   issued: PairingIssuedResult;
   lang: "ru" | "en";
+  onStart: () => void;
 }) {
   const t = useT();
-  const { copied, failed, copy } = useCopyFlash();
+  const { outcome, copy } = useCopyWithFallback();
+  const tokenRef = useRef<HTMLElement | null>(null);
+  const copied = outcome === "copied" || outcome === "copied-fallback";
   return (
     <div className="flex w-full flex-col items-center gap-3 text-center">
       <p role="status" className="text-base font-semibold">
-        {t("pair.successTitle")}
+        {t("pair.linkedTitle")}
+      </p>
+      <p className="max-w-prose text-sm text-foreground-secondary">
+        {t("pair.boundNote")}
       </p>
 
       <div className="w-full rounded-md border border-border-subtle bg-well px-2 py-1.5">
         <div className="flex items-center gap-2">
           <span className="sr-only">{t("pair.tokenLabel")}</span>
-          <code className="min-w-0 flex-1 truncate text-left font-mono text-sm">
+          <code
+            ref={tokenRef}
+            className="min-w-0 flex-1 truncate text-left font-mono text-sm"
+          >
             {issued.device_token}
           </code>
           <Button
@@ -382,25 +410,34 @@ function IssuedScreen({
             variant="ghost"
             size="sm"
             className="h-7 shrink-0 px-2 text-xs"
-            onClick={() => copy(issued.device_token)}
+            onClick={() => copy(issued.device_token, tokenRef.current)}
           >
             {copied ? (
               <Check className="size-3.5" aria-hidden="true" />
             ) : (
               <Copy className="size-3.5" aria-hidden="true" />
             )}
-            {copied ? t("pairing.copied") : t("pairing.copy")}
+            {copied ? t("pairing.copied") : t("pair.copyToken")}
           </Button>
         </div>
-        <p className="mt-1 text-left text-xs text-foreground-muted">
-          {t("pair.tokenOnce")}
-        </p>
-        {failed ? (
+        {outcome === "copied-fallback" ? (
+          <p
+            role="status"
+            className="mt-1 text-left text-xs text-foreground-secondary"
+          >
+            {t("pair.copyFallback")}
+          </p>
+        ) : null}
+        {outcome === "manual" ? (
           <p role="alert" className="mt-1 text-left text-xs text-error">
-            {t("pair.copyFailed")}
+            {t("pair.copyManual")}
           </p>
         ) : null}
       </div>
+
+      <Button type="button" size="sm" className="w-full" onClick={onStart}>
+        {t("pair.startWork")}
+      </Button>
 
       <p className="font-mono text-xs text-foreground-secondary">
         {t("pair.deviceId")}: {issued.device_id}

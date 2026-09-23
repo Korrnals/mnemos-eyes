@@ -1,9 +1,13 @@
 import { useMemo, useState } from "react";
 import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { BoardTask, ExecutorItem } from "@/gateway/boardTypes";
-import { KNOWN_HARNESSES } from "@/gateway/harnesses";
 import { resolveRoutingAnnotation } from "@/gateway/routing";
 import { useI18n, useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
@@ -13,6 +17,8 @@ import { useValidationNow } from "@/features/tasks/useValidationClock";
 import { formatAge } from "./assignmentStatus";
 import { useExecutors, useExecutionSettings } from "./useAgents";
 import { useAssignmentMutations } from "./useAssignmentMutations";
+import { HarnessSelect } from "./HarnessSelect";
+import { useDefaultHarness } from "./useHarnesses";
 
 /**
  * AssignExecutorSheet (ARCH-8, spec §2.3 — matrix A of concept §4.4 plus the
@@ -37,7 +43,9 @@ export interface AssignPrefill {
 
 /** Can this executor be an explicit target right now? (§2.3 picker rules) */
 function selectableExecutor(executor: ExecutorItem): boolean {
-  return executor.state === "approved" && executor.enabled && executor.presence !== "offline";
+  return (
+    executor.state === "approved" && executor.enabled && executor.presence !== "offline"
+  );
 }
 
 /**
@@ -131,7 +139,13 @@ function AssignExecutorForm({
   const [specialist, setSpecialist] = useState(
     prefill?.specialist ?? task.specialists[0] ?? "",
   );
-  const [harness, setHarness] = useState<string>(prefill?.harness ?? "zcode");
+  // Wave 3C review: no hardcoded harness default — the first entry of the
+  // LIVE dictionary resolves the initial selection (a retry prefill wins).
+  const defaultHarness = useDefaultHarness();
+  const [harnessChoice, setHarnessChoice] = useState<string>(
+    prefill?.harness ?? "",
+  );
+  const harness = harnessChoice || defaultHarness;
   const [executorChoice, setExecutorChoice] = useState<string>(
     pinnedExecutorId ?? "default",
   );
@@ -195,7 +209,8 @@ function AssignExecutorForm({
    * choice — a blocked pin never produces a lying «route: X» preview.
    */
   const preview = resolveRoutingAnnotation({
-    pin: effectiveChoice !== null && effectiveChoice !== "default" ? effectiveChoice : "",
+    pin:
+      effectiveChoice !== null && effectiveChoice !== "default" ? effectiveChoice : "",
     specialist,
     taskSpecialists: task.specialists,
     executors: executorRows,
@@ -205,12 +220,17 @@ function AssignExecutorForm({
     preview.resolved === null
       ? null
       : (executorRows.find((row) => row.id === preview.resolved) ?? null);
-  const previewWaits = previewExecutor !== null && previewExecutor.presence === "offline";
+  const previewWaits =
+    previewExecutor !== null && previewExecutor.presence === "offline";
 
   const submit = (): void => {
     const value = specialist.trim();
     // P2 second line: a blocked pin NEVER reaches the wire.
-    if (value.length === 0 || submitting || effectiveChoice === null) return;
+    // P2 second line: a blocked pin NEVER reaches the wire; an unloaded
+    // dictionary (empty harness) must not nominate a blank either.
+    if (value.length === 0 || !harness || submitting || effectiveChoice === null) {
+      return;
+    }
     setSubmitting(true);
     mutations.createAssignment(
       task,
@@ -238,167 +258,160 @@ function AssignExecutorForm({
         {t("agents.sheet.subtitle", { id: task.id })}
       </DialogDescription>
 
-        {/* Step 1: specialist (free entry + datalist of known roles — the
-         * API has no specialist directory, the board union IS the candidate
-         * list) and harness (server allowlist mirror). */}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label htmlFor="assign-specialist" className="mb-1 block text-sm font-medium">
-              {t("agents.sheet.specialistLabel")}
-            </label>
+      {/* Step 1: specialist (free entry + datalist of known roles — the
+       * API has no specialist directory, the board union IS the candidate
+       * list) and harness (LIVE dictionary + free entry, wave 3C). */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label htmlFor="assign-specialist" className="mb-1 block text-sm font-medium">
+            {t("agents.sheet.specialistLabel")}
+          </label>
+          <input
+            id="assign-specialist"
+            value={specialist}
+            onChange={(event) => setSpecialist(event.target.value)}
+            list="assign-specialist-choices"
+            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+          />
+          <datalist id="assign-specialist-choices">
+            {specialistChoices.own.map((name) => (
+              <option key={name} value={name} />
+            ))}
+            {specialistChoices.rest.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+        </div>
+        <div>
+          <label htmlFor="assign-harness" className="mb-1 block text-sm font-medium">
+            {t("agents.sheet.harnessLabel")}
+          </label>
+          <HarnessSelect id="assign-harness" value={harness} onChange={setHarnessChoice} />
+        </div>
+      </div>
+
+      {/* Step 2: executor — «По умолчанию» first, then the registry.
+       * Fieldset/radio semantics — keyboard and SR paths for free. */}
+      <fieldset className="rounded-md border border-border-subtle p-3">
+        <legend className="px-1 text-sm font-medium">
+          {t("agents.sheet.executorLabel")}
+        </legend>
+        <div className="max-h-56 space-y-1 overflow-y-auto">
+          <label className="flex cursor-pointer items-start gap-2 rounded-sm p-1.5 hover:bg-elevated">
             <input
-              id="assign-specialist"
-              value={specialist}
-              onChange={(event) => setSpecialist(event.target.value)}
-              list="assign-specialist-choices"
-              className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+              type="radio"
+              name="assign-executor"
+              /* The EFFECTIVE default: also lit when a deleted pin fell
+               * back silently — the owner always sees what will travel. */
+              checked={effectiveChoice === "default"}
+              onChange={() => setExecutorChoice("default")}
+              className="mt-1 accent-iris-bright"
             />
-            <datalist id="assign-specialist-choices">
-              {specialistChoices.own.map((name) => (
-                <option key={name} value={name} />
-              ))}
-              {specialistChoices.rest.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-          </div>
-          <div>
-            <label htmlFor="assign-harness" className="mb-1 block text-sm font-medium">
-              {t("agents.sheet.harnessLabel")}
-            </label>
-            <select
-              id="assign-harness"
-              value={harness}
-              onChange={(event) => setHarness(event.target.value)}
-              className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
-            >
-              {KNOWN_HARNESSES.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Step 2: executor — «По умолчанию» first, then the registry.
-         * Fieldset/radio semantics — keyboard and SR paths for free. */}
-        <fieldset className="rounded-md border border-border-subtle p-3">
-          <legend className="px-1 text-sm font-medium">
-            {t("agents.sheet.executorLabel")}
-          </legend>
-          <div className="max-h-56 space-y-1 overflow-y-auto">
-            <label className="flex cursor-pointer items-start gap-2 rounded-sm p-1.5 hover:bg-elevated">
-              <input
-                type="radio"
-                name="assign-executor"
-                /* The EFFECTIVE default: also lit when a deleted pin fell
-                 * back silently — the owner always sees what will travel. */
-                checked={effectiveChoice === "default"}
-                onChange={() => setExecutorChoice("default")}
-                className="mt-1 accent-iris-bright"
-              />
-              <span className="text-sm">
-                <span className="font-medium">{t("agents.sheet.defaultExecutor")}</span>
-                <span className="block text-xs text-foreground-secondary">
-                  {settings.data?.default_executor
-                    ? t("agents.sheet.defaultExecutorName", {
-                        name: executorName(settings.data.default_executor),
-                      })
-                    : t("agents.sheet.defaultExecutorNone")}
-                </span>
+            <span className="text-sm">
+              <span className="font-medium">{t("agents.sheet.defaultExecutor")}</span>
+              <span className="block text-xs text-foreground-secondary">
+                {settings.data?.default_executor
+                  ? t("agents.sheet.defaultExecutorName", {
+                      name: executorName(settings.data.default_executor),
+                    })
+                  : t("agents.sheet.defaultExecutorNone")}
               </span>
-            </label>
-            {executorRows.map((executor) => {
-              const isPin = executor.id === pinnedExecutorId;
-              const selectable = selectablePinnedExecutor(executor, isPin);
-              // A BLOCKED pin keeps its radio checked-but-disabled: the
-              // owner sees exactly what the deep-link named and why the
-              // submit is held (no silent substitution, no dead-looking UI).
-              const checked = executorChoice === executor.id || (isPin && executorChoice === pinnedExecutorId);
-              return (
-                <label
-                  key={executor.id}
-                  title={executorTooltip(executor, t, lang)}
-                  className={
-                    "flex items-start gap-2 rounded-sm p-1.5 " +
-                    (selectable
-                      ? "cursor-pointer hover:bg-elevated"
-                      : "cursor-not-allowed opacity-70")
-                  }
-                >
-                  <input
-                    type="radio"
-                    name="assign-executor"
-                    checked={checked}
-                    disabled={!selectable}
-                    onChange={() => setExecutorChoice(executor.id)}
-                    className="mt-1 accent-iris-bright"
-                  />
-                  <span className="min-w-0 text-sm">
-                    <span className="font-medium">{executor.name}</span>
-                    <span className="block text-xs text-foreground-secondary">
-                      {selectable
-                        ? executorMeta(executor, t)
-                        : executorDisabledReason(executor, t, now)}
-                    </span>
+            </span>
+          </label>
+          {executorRows.map((executor) => {
+            const isPin = executor.id === pinnedExecutorId;
+            const selectable = selectablePinnedExecutor(executor, isPin);
+            // A BLOCKED pin keeps its radio checked-but-disabled: the
+            // owner sees exactly what the deep-link named and why the
+            // submit is held (no silent substitution, no dead-looking UI).
+            const checked =
+              executorChoice === executor.id ||
+              (isPin && executorChoice === pinnedExecutorId);
+            return (
+              <label
+                key={executor.id}
+                title={executorTooltip(executor, t, lang)}
+                className={
+                  "flex items-start gap-2 rounded-sm p-1.5 " +
+                  (selectable
+                    ? "cursor-pointer hover:bg-elevated"
+                    : "cursor-not-allowed opacity-70")
+                }
+              >
+                <input
+                  type="radio"
+                  name="assign-executor"
+                  checked={checked}
+                  disabled={!selectable}
+                  onChange={() => setExecutorChoice(executor.id)}
+                  className="mt-1 accent-iris-bright"
+                />
+                <span className="min-w-0 text-sm">
+                  <span className="font-medium">{executor.name}</span>
+                  <span className="block text-xs text-foreground-secondary">
+                    {selectable
+                      ? executorMeta(executor, t)
+                      : executorDisabledReason(executor, t, now)}
                   </span>
-                </label>
-              );
-            })}
-          </div>
-          {/* Link-test pin: the honest wait spelled out at the pin itself —
-           * or, when the pin is unroutable, the way out named just as
-           * plainly (P2: the slot must not be held by a ghost). */}
-          {pinnedExecutorId !== null ? (
-            <p className="mt-1 border-t border-border-subtle pt-1 text-xs text-foreground-muted">
-              {pinBlocked ? t("agents.sheet.pinnedInvalidHint") : t("agents.sheet.pinnedHint")}
-            </p>
-          ) : null}
-        </fieldset>
-
-        {/* LIVE route preview (aria-live: the route changes with selections). */}
-        <div
-          aria-live="polite"
-          className="rounded-md border border-border-subtle bg-elevated p-3 text-sm"
-        >
-          <p className="flex items-center gap-1 text-xs font-medium text-foreground-secondary">
-            <Info className="size-3.5" aria-hidden="true" />
-            {t("agents.routing.previewLabel")}
-          </p>
-          {preview.resolved !== null ? (
-            <p className="mt-1">
-              {t("agents.routing.previewResolved", {
-                name: executorName(preview.resolved),
-                reason: t(routingReasonTextKey(preview.reason)),
-              })}
-              {previewWaits ? (
-                <span className="mt-0.5 block text-xs text-warning">
-                  {t("agents.routing.previewWaits")}
                 </span>
-              ) : null}
-            </p>
-          ) : (
-            <p className="mt-1">{t("agents.routing.previewUnmatched")}</p>
-          )}
-          <p className="mt-1 text-xs text-foreground-muted">
-            {t("agents.routing.previewNote")}
+              </label>
+            );
+          })}
+        </div>
+        {/* Link-test pin: the honest wait spelled out at the pin itself —
+         * or, when the pin is unroutable, the way out named just as
+         * plainly (P2: the slot must not be held by a ghost). */}
+        {pinnedExecutorId !== null ? (
+          <p className="mt-1 border-t border-border-subtle pt-1 text-xs text-foreground-muted">
+            {pinBlocked
+              ? t("agents.sheet.pinnedInvalidHint")
+              : t("agents.sheet.pinnedHint")}
           </p>
-        </div>
+        ) : null}
+      </fieldset>
 
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={onDone}>
-            {t("agents.sheet.cancel")}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={submit}
-            disabled={submitting || specialist.trim().length === 0 || pinBlocked}
-          >
-            {submitting ? t("agents.sheet.submitting") : t("agents.sheet.submit")}
-          </Button>
-        </div>
+      {/* LIVE route preview (aria-live: the route changes with selections). */}
+      <div
+        aria-live="polite"
+        className="rounded-md border border-border-subtle bg-elevated p-3 text-sm"
+      >
+        <p className="flex items-center gap-1 text-xs font-medium text-foreground-secondary">
+          <Info className="size-3.5" aria-hidden="true" />
+          {t("agents.routing.previewLabel")}
+        </p>
+        {preview.resolved !== null ? (
+          <p className="mt-1">
+            {t("agents.routing.previewResolved", {
+              name: executorName(preview.resolved),
+              reason: t(routingReasonTextKey(preview.reason)),
+            })}
+            {previewWaits ? (
+              <span className="mt-0.5 block text-xs text-warning">
+                {t("agents.routing.previewWaits")}
+              </span>
+            ) : null}
+          </p>
+        ) : (
+          <p className="mt-1">{t("agents.routing.previewUnmatched")}</p>
+        )}
+        <p className="mt-1 text-xs text-foreground-muted">
+          {t("agents.routing.previewNote")}
+        </p>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={onDone}>
+          {t("agents.sheet.cancel")}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={submit}
+          disabled={submitting || specialist.trim().length === 0 || pinBlocked}
+        >
+          {submitting ? t("agents.sheet.submitting") : t("agents.sheet.submit")}
+        </Button>
+      </div>
     </>
   );
 }

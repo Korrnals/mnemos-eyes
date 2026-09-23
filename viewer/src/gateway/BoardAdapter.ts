@@ -4,6 +4,7 @@ import type { RequestConfig } from "./http";
 import { EventStream } from "./events";
 import type { BoardEvent } from "./events";
 import { ApiError } from "@/lib/errors";
+import { getDeviceToken } from "./deviceToken";
 import { getUiToken } from "./uiToken";
 import type { UiTokenVerifyResult } from "./uiToken";
 import type {
@@ -31,6 +32,9 @@ import type {
   EnrollmentCreatedResult,
   EnrollmentRevokeResult,
   EnrollmentsPage,
+  HarnessCreateInput,
+  HarnessesPage,
+  HarnessStateResult,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -90,10 +94,11 @@ import type {
  * merge-API, not the mnemos wire contract. Lives alongside HttpAdapter /
  * MockAdapter — the mnemos path stays untouched until the Ф1 auth rewrite.
  *
- * Base URL is same-origin "/api" (`VITE_BOARD_API_URL` overrides); auth is
- * deliberately absent: reads are open through Ф0–Ф2 (ADR 0011 §7), so no
- * bearer token is attached, no `Authorization` header is ever sent, and the
- * 401/unauthorized flag is never raised from this adapter.
+ * Base URL is same-origin "/api" (`VITE_BOARD_API_URL` overrides). Auth is
+ * capability-scoped (see `identityTokenSource`): reads stay open through
+ * Ф0–Ф2 (ADR 0011 §7) and ship bare unless a paired DEVICE attaches its
+ * `mnd_…` identity (ADR 0012 §5); the ui token rides only `auth: true`
+ * calls; the 401/unauthorized flag is never raised from this adapter.
  *
  * Wire contract (board-openapi-snapshot.json):
  * - search         GET /api/mnemos/search        ?q&limit&project&scope (proxied)
@@ -341,9 +346,7 @@ export interface BoardGateway extends MemoryGateway {
    * auto-revoke — the owner chooses); 422 unknown harness_hint; 429 rate
    * 3/10 min per client; 503 fail-closed while the server has no ui token.
    */
-  createEnrollment(
-    payload: EnrollmentCreateInput,
-  ): Promise<EnrollmentCreatedResult>;
+  createEnrollment(payload: EnrollmentCreateInput): Promise<EnrollmentCreatedResult>;
   /**
    * Enrollment tokens for the owner panel (`GET /api/executors/enrollment`,
    * ui-token) — live tokens plus terminal history, no hash/token material.
@@ -358,6 +361,24 @@ export interface BoardGateway extends MemoryGateway {
   revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult>;
   /** Default/fallback executor pair (`GET /api/settings/execution`, open read). */
   getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
+  /**
+   * Harness dictionary (`GET /api/harnesses`, open read; wave 3C). The
+   * owner-managed nomination registry — meta.seed_min_count is the
+   * guaranteed seed size, the set itself is data, never a UI constant.
+   */
+  listHarnesses(signal?: AbortSignal): Promise<HarnessesPage>;
+  /**
+   * Add a harness (`POST /api/harnesses`, ui-token; wave 3C). 201 row;
+   * 422 bad name (server-side sanitization is authoritative) or
+   * dictionary cap (≤64); 409 duplicate.
+   */
+  createHarness(payload: HarnessCreateInput): Promise<HarnessStateResult>;
+  /**
+   * Remove a harness (`DELETE /api/harnesses/{name}`, ui-token; wave 3C).
+   * 404 unknown; 409 while the name is live in a registered executor, a
+   * non-terminal assignment or an automation rule.
+   */
+  deleteHarness(name: string): Promise<void>;
   /**
    * Set the default/fallback pair (`PUT /api/settings/execution`,
    * ui-token). Amd 2 §5 gates answer 422: a default must exist, be
@@ -451,6 +472,12 @@ export interface BoardAdapterOptions {
    * Bearer <token>` only when it answers non-empty.
    */
   getUiTokenFn?: () => string;
+  /**
+   * Test seam for the device-identity source. Defaults to the
+   * localStorage-backed `getDeviceToken` (gateway/deviceToken.ts) — the
+   * paired device's `mnd_…` fallback identity (ADR 0012 §5).
+   */
+  getDeviceTokenFn?: () => string;
 }
 
 export class BoardAdapter implements BoardGateway {
@@ -458,6 +485,7 @@ export class BoardAdapter implements BoardGateway {
   private readonly fetchImpl?: typeof fetch;
   private readonly timeoutMs: number;
   private readonly getUiTokenFn: () => string;
+  private readonly getDeviceTokenFn: () => string;
   /**
    * ADR 0014 Ф2: the adapter's last knowledge of a live `vesmaro_ui`
    * session cookie. Set only by a 204 boot/re-401 probe (a strict status
@@ -474,6 +502,7 @@ export class BoardAdapter implements BoardGateway {
     this.fetchImpl = opts.fetchImpl;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.getUiTokenFn = opts.getUiTokenFn ?? getUiToken;
+    this.getDeviceTokenFn = opts.getDeviceTokenFn ?? getDeviceToken;
   }
 
   async search(params: SearchParams, signal?: AbortSignal): Promise<SearchResult[]> {
@@ -895,13 +924,34 @@ export class BoardAdapter implements BoardGateway {
     });
   }
 
-  async revokeEnrollment(
-    enrollmentId: string,
-  ): Promise<EnrollmentRevokeResult> {
+  async revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult> {
     return this.request<EnrollmentCreatedResult>(
       `/executors/enrollment/${encodeURIComponent(enrollmentId)}`,
       { method: "DELETE", auth: true },
     );
+  }
+
+  async listHarnesses(signal?: AbortSignal): Promise<HarnessesPage> {
+    return this.request<HarnessesPage>("/harnesses", { signal });
+  }
+
+  async createHarness(payload: HarnessCreateInput): Promise<HarnessStateResult> {
+    return this.request<HarnessStateResult>("/harnesses", {
+      method: "POST",
+      // Omitted note stays at the server default (empty string).
+      body: {
+        name: payload.name,
+        ...(payload.note ? { note: payload.note } : {}),
+      },
+      auth: true,
+    });
+  }
+
+  async deleteHarness(name: string): Promise<void> {
+    await this.request<{ ok: boolean }>(`/harnesses/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      auth: true,
+    });
   }
 
   async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {
@@ -1033,10 +1083,10 @@ export class BoardAdapter implements BoardGateway {
   }
 
   async getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus> {
-    return this.request<PairingStatus>(
-      `/pairing/${encodeURIComponent(pairingId)}`,
-      { signal, auth: true },
-    );
+    return this.request<PairingStatus>(`/pairing/${encodeURIComponent(pairingId)}`, {
+      signal,
+      auth: true,
+    });
   }
 
   async confirmPairing(
@@ -1104,24 +1154,53 @@ export class BoardAdapter implements BoardGateway {
   }
 
   /**
-   * Reads stay unauthenticated (ADR 0011 §7: reads open through Ф0–Ф2).
-   * Ф3 mutations opt into `auth: true` — the stored ui token, when present,
-   * becomes `Authorization: Bearer <token>`; without a token the request
-   * ships bare and the server answers 401, which the UI layer turns into
-   * the token panel (never a hidden affordance). requestJson still maps
-   * every non-2xx to `ApiError` and composes timeouts with external aborts.
+   * Resolve the Authorization source for one request (ADR 0012 §5 device
+   * identity layered over the ADR 0011/0014 ui-token rules):
+   *
+   * - `/pairing/exchange` — NEVER authenticated: the single-use code IS the
+   *   credential (§2.3); neither the ui nor the device token may leak there.
+   * - `/auth/*` — the door speaks for itself (ui token rides the BODY of
+   *   verify, the cookie carries the session): a device `mnd_…` must not
+   *   claim identity at the login endpoints. `auth: true` here keeps the
+   *   plain ui-token source for any future authenticated auth-route call.
+   * - `auth: true` (Ф3 mutations, devices, owner pairing legs) — the ui
+   *   token when present, else the device token; without either the request
+   *   ships bare and the server answers 401 → the token panel.
+   * - Open reads — bare while an owner session speaks for this browser (the
+   *   pinned "reads never carry Authorization"), else the paired device's
+   *   `mnd_…` identity. v0 is read-only for devices (ADR 0012 §5): the
+   *   server answers 403 to device mutations that bypass `auth: true` — the
+   *   honest verdict, not an error to mask.
+   *
+   * requestJson maps every non-2xx to `ApiError` and composes timeouts with
+   * external aborts; an empty-token source simply sends no header.
    */
+  private identityTokenSource(
+    path: string,
+    auth: boolean | undefined,
+  ): (() => string) | undefined {
+    if (path === "/pairing/exchange") return undefined;
+    if (path.startsWith("/auth/")) {
+      return auth ? this.getUiTokenFn : undefined;
+    }
+    if (auth) {
+      return () => this.getUiTokenFn() || this.getDeviceTokenFn();
+    }
+    return () => (this.getUiTokenFn().length > 0 ? "" : this.getDeviceTokenFn());
+  }
+
   private request<T>(
     path: string,
     config: RequestConfig & { auth?: boolean },
   ): Promise<T> {
     const { auth, ...rest } = config;
+    const getToken = this.identityTokenSource(path, auth);
     return requestJson<T>(
       {
         baseUrl: this.baseUrl,
         fetchImpl: this.fetchImpl,
         defaultTimeoutMs: this.timeoutMs,
-        ...(auth ? { getToken: this.getUiTokenFn } : {}),
+        ...(getToken ? { getToken } : {}),
       },
       path,
       rest,
@@ -1343,7 +1422,8 @@ export function normalizeTagDrill(payload: unknown, tag: string): TagDrill {
 }
 
 /** `GET /api/health` anonymous dict → `BoardHealthDetail` (per-store rows). */
-export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {  const source = (payload ?? {}) as Record<string, unknown>;
+export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {
+  const source = (payload ?? {}) as Record<string, unknown>;
   const servers = Array.isArray(source.servers) ? source.servers : [];
   return {
     ok: source.ok === true,

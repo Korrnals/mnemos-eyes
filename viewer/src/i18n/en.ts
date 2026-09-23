@@ -51,6 +51,9 @@ export const en: Record<TranslationKey, string> = {
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------
   "breadcrumbs.label": "Breadcrumb",
+  // Back control of the sticky crumb row (UI-18 spec §3.4): see ru.ts.
+  "nav.backTo": "Back: {{place}}",
+  "nav.backFallback": "Back",
 
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Switch to light theme",
@@ -772,7 +775,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.registry.title": "Agent connections",
   "agents.registry.loading": "Loading the executor registry",
   "agents.registry.failed": "Failed to load the executor registry",
-  "agents.registry.empty": "No executors yet — connect the first one with the guide below.",
+  "agents.registry.empty":
+    "No executors yet — connect the first one with the guide below.",
   "agents.registry.band.pending": "Awaiting approval",
   "agents.registry.band.active": "Connected",
   "agents.registry.band.revoked": "Revoked",
@@ -935,6 +939,13 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.usedBy": "used: {{name}}",
   "agents.enrollment.usedIp": "connection IP: {{ip}}",
   "agents.enrollment.done": "Done",
+  "agents.harness.addOption": "Add harness…",
+  "agents.harness.add": "Add",
+  "agents.harness.adding": "Adding…",
+  "agents.harness.addFailed": "Failed to add the harness",
+  "agents.harness.invalid":
+    "Lowercase latin/digits first, then dots, dashes, underscores (≤60 chars).",
+
   "agents.enrollment.listTitle": "Enrollment tokens",
   "agents.enrollment.listHint": "live + history",
   "agents.enrollment.listLoading": "Loading tokens",
@@ -947,7 +958,6 @@ export const en: Record<TranslationKey, string> = {
     "Revoke the token {{label}}? It can no longer be used to connect.",
   "agents.enrollment.revoked": "Token revoked",
   "agents.enrollment.revokeFailed": "Failed to revoke the token",
-
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Automation",
@@ -1122,11 +1132,11 @@ export const en: Record<TranslationKey, string> = {
   "pairing.qr.hint": "No camera? Type the code below manually on the device.",
   "pairing.qr.loading": "Loading the QR…",
   "pairing.codeLabel": "Pairing code",
-  "pairing.codeHint":
-    "Manual path: open /pair on the device and enter this code.",
+  "pairing.codeHint": "Manual path: open /pair on the device and enter this code.",
   "pairing.copy": "Copy",
   "pairing.copied": "Copied",
-  "pairing.copyFailed": "Copy failed — the code stays in the field, select it manually.",
+  "pairing.copyFailed":
+    "Copy failed — the code stays in the field, select it manually.",
   "pairing.waitingScan": "Waiting for the scan…",
   "pairing.ttl": "expires in {{time}}",
   "pairing.expiredShort": "expired — start over",
@@ -1198,11 +1208,14 @@ export const en: Record<TranslationKey, string> = {
     "We will re-check automatically in a minute; the button works manually too.",
   "pair.checkNow": "Check now",
   "pair.checking": "Checking…",
-  "pair.successTitle": "Device connected",
+  "pair.linkedTitle": "Device connected — bound to this browser",
+  "pair.boundNote":
+    "The token is stored on this device — nothing to copy by hand. The button below is only for moving it into another app.",
   "pair.tokenLabel": "Device token",
-  "pair.tokenOnce":
-    "The token is shown once — save it now. This page cannot restore it.",
-  "pair.copyFailed": "Copy failed — the token stays in the field, select it manually.",
+  "pair.copyToken": "Copy token",
+  "pair.copyFallback": "Copied via the browser's fallback path.",
+  "pair.copyManual": "Copy failed — the token is selected in the row, copy it manually.",
+  "pair.startWork": "Start working",
   "pair.deviceId": "Device id",
   "pair.scope": "scope",
   "pair.expires": "expires",

@@ -140,6 +140,13 @@ class TaskNotAssignableError(AssignmentError):
     """Target task is archived or workflow-terminal (HTTP 422 upstream)."""
 
 
+class UnknownHarnessError(AssignmentError):
+    """Nomination references a harness absent from the dictionary (wave 3C;
+    HTTP 422 upstream). Raised from the IN-TRANSACTION assignment core so
+    every minting window is gated — the UI route, the manual run-now and
+    any future S2 engine mint through the same private code path."""
+
+
 # ----------------------------------------------------------- executors
 # ARCH-9 (ADR 0009 Amendment 2 §3-§4): the executor registry — the third
 # entity (specialist ≠ harness ≠ executor). Registry state model is
@@ -187,6 +194,40 @@ class ExecutorQuotaError(ExecutorError):
 # frees quota. Constant, not config — it is an abuse ceiling, not a
 # deployment knob.
 EXECUTOR_PENDING_CAP = 20
+
+
+# Harness dictionary (wave 3C): nomination-hygiene constants. The name
+# pattern keeps the value safe everywhere it lands (rules/conditions,
+# audit payloads, URLs, UI) — lowercase [a-z0-9] head, then [a-z0-9._-].
+HARNESS_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,59}$")
+# Dictionary ceiling: a sane select list and a junk-abuse bound. A cap hit
+# is a 422 (entry validation), not a 429 — the dictionary is not a rate
+# resource, it is a form the owner controls.
+HARNESS_MAX_COUNT = 64
+
+
+class HarnessError(Exception):
+    """Base class for harness-dictionary violations (wave 3C)."""
+
+
+class HarnessNotFoundError(HarnessError):
+    """Unknown harness name (HTTP 404 upstream)."""
+
+
+class HarnessConflictError(HarnessError):
+    """Duplicate harness name (HTTP 409 upstream)."""
+
+
+class HarnessInUseError(HarnessError):
+    """Harness still referenced by an executor, an active assignment or an
+    automation rule — deletion refused (HTTP 409 upstream). History
+    (terminal assignments, journal rows) deliberately does NOT block:
+    it is archival and stays verbatim."""
+
+
+class HarnessQuotaError(HarnessError):
+    """Dictionary ceiling reached (HTTP 422 upstream — entry validation,
+    same class as a bad name, not a rate guard)."""
 
 
 def presence_from_last_seen(last_seen: str) -> str:
@@ -361,18 +402,21 @@ RULE_CONDITION_FIELD_ENUMS: dict[str, tuple[str, ...] | None] = {
     "project": None,
     "specialist": None,
     "executor_id": None,
-    # "harness" joins via _condition_field_enums() — its enum is
-    # Store.KNOWN_HARNESSES (late binding: the class lives below).
+    # "harness" joins via _condition_field_enums() — its enum is the LIVE
+    # harnesses TABLE (wave 3C; callers pass harness_names()).
 }
 
 
-def _condition_field_enums() -> dict[str, tuple[str, ...] | None]:
+def _condition_field_enums(
+        harness_enum: tuple[str, ...] | frozenset[str],
+) -> dict[str, tuple[str, ...] | None]:
     """The FULL condition-field dictionary — the static table plus the
-    harness enum (Store.KNOWN_HARNESSES). Single source for BOTH the CRUD
-    validation and the /status meta-dictionary, so the UI form can never
-    offer a field the validator would reject."""
+    harness enum (the live ``harnesses`` table, passed by the caller).
+    Single source for BOTH the CRUD validation and the /status
+    meta-dictionary, so the UI form can never offer a field the validator
+    would reject."""
     enums = dict(RULE_CONDITION_FIELD_ENUMS)
-    enums["harness"] = tuple(sorted(Store.KNOWN_HARNESSES))
+    enums["harness"] = tuple(sorted(harness_enum))
     return enums
 _RULE_MAX_NAME = 120
 _RULE_MAX_CONDITION_CLAUSES = 8
@@ -446,11 +490,15 @@ def _validate_window(window_from: Any, window_to: Any) -> tuple[str | None, str 
     return wf, wt
 
 
-def validate_condition(raw: Any) -> list[dict[str, Any]]:
+def validate_condition(
+        raw: Any, harness_enum: tuple[str, ...] | frozenset[str],
+) -> list[dict[str, Any]]:
     """Normalize + validate a hook condition [{field, op, value}] against
     the closed allowlist (422 at CRUD time, not at fire time — ADR 0013
     §2). Structured fields only; values checked against the field's enum
-    when one exists (the UI form has no free-text condition input)."""
+    when one exists (the UI form has no free-text condition input).
+    ``harness_enum`` is the LIVE harness-dictionary snapshot from the
+    caller (wave 3C — hooks validate against the table, not the seed)."""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -458,7 +506,7 @@ def validate_condition(raw: Any) -> list[dict[str, Any]]:
     if len(raw) > _RULE_MAX_CONDITION_CLAUSES:
         raise AutomationValidationError(
             f"condition: max {_RULE_MAX_CONDITION_CLAUSES} clauses")
-    enums = _condition_field_enums()
+    enums = _condition_field_enums(harness_enum)
     out: list[dict[str, Any]] = []
     for item in raw:
         if (not isinstance(item, dict)
@@ -725,6 +773,21 @@ CREATE TABLE IF NOT EXISTS executors (
     registered_at  TEXT NOT NULL,
     updated_at     TEXT NOT NULL
 );
+-- Harness dictionary (wave 3C, design 2026-09-22 §C): the OWNER-MANAGED
+-- registry that replaced the closed KNOWN_HARNESSES nomination gate. The
+-- constant survives as the SEED (inserted once, when the table is empty —
+-- seeding on empty preserves owner deletions across restarts). Additive
+-- IF NOT EXISTS, no SEED_VERSION bump (task_assignments precedent). The
+-- gates (registration, enrollment hint, assignment create, automation
+-- payloads, rule condition enum) all read THIS table; launching is still
+-- gated by the poller's local allowlist (A3) — the dictionary only rules
+-- nomination hygiene on the board.
+CREATE TABLE IF NOT EXISTS harnesses (
+    name      TEXT PRIMARY KEY,
+    added_at  TEXT NOT NULL,
+    added_via TEXT NOT NULL DEFAULT 'seed',
+    note      TEXT NOT NULL DEFAULT ''
+);
 -- SCHED-1 S1 (ADR 0013 §2): automation contracts — additive only, no
 -- SEED_VERSION bump (task_assignments precedent). Three tables:
 -- schedules/hooks (the rules) + launches (the append-only journal).
@@ -955,6 +1018,7 @@ class Store:
             db.executescript(_SCHEMA)
             self._migrate(db)
             self._seed_if_empty(db)
+            self._seed_harnesses(db)
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, timeout=10)
@@ -966,11 +1030,29 @@ class Store:
     # ------------------------------------------------------------------ meta
     # Harnesses are EXECUTION ENVIRONMENTS (zcode, hermes, pi, copilot,
     # claude-code, ...). GCW roles like "gcw-tech-lead" are SPECIALISTS,
-    # never agents. Enforced on every write — cross-stack, config-independent.
+    # never agents. Since wave 3C this set is the SEED of the harnesses
+    # TABLE (owner-managed via /api/harnesses); every nomination gate reads
+    # the table (harness_names / _harness_names_db), never this constant.
     KNOWN_HARNESSES = frozenset({
         "zcode", "hermes", "pi", "copilot", "claude-code", "cursor",
         "aider", "continue", "cline", "windsurf",
     })
+
+    def _seed_harnesses(self, db: sqlite3.Connection) -> None:
+        """Seed the harness dictionary exactly once — when the table is
+        still empty. INSERT OR IGNORE keeps the boot idempotent; seeding
+        ONLY on empty preserves owner deletions across restarts (the
+        dictionary is owner-managed since wave 3C, deleted seeds must not
+        resurrect)."""
+        count = db.execute("SELECT COUNT(*) AS n FROM harnesses").fetchone()["n"]
+        if count:
+            return
+        now = _now()
+        db.executemany(
+            "INSERT OR IGNORE INTO harnesses (name, added_at, added_via, note) "
+            "VALUES (?,?,?,?)",
+            [(name, now, "seed", "") for name in sorted(self.KNOWN_HARNESSES)],
+        )
 
     def _migrate(self, db: sqlite3.Connection) -> None:
         # schema evolution for pre-0.7 databases.
@@ -1948,6 +2030,15 @@ class Store:
             raise TaskNotAssignableError(
                 f"task {task_id} is terminal ({task['status']}) — "
                 "assignment refused")
+        # Wave 3C: the nomination gate lives HERE, in-transaction, not on
+        # the UI route alone — the manual run-now (and the future S2
+        # engine) mint through this same private path, and a gate on the
+        # route only would let them nominate a DELETED harness (a zombie
+        # queued row holding the ≤1-active slot, launchable by nobody).
+        known = self._harness_names_db(db)
+        if harness not in known:
+            raise UnknownHarnessError(
+                f"unknown harness: {harness}; known: {sorted(known)}")
         active = db.execute(
             "SELECT COUNT(*) AS n FROM task_assignments "
             "WHERE task_id=? AND state IN ('queued','claimed','running')",
@@ -2007,6 +2098,9 @@ class Store:
         Raises:
             AssignmentNotFoundError — task id unknown (404 upstream);
             TaskNotAssignableError — task archived or workflow-terminal (422);
+            UnknownHarnessError — harness absent from the dictionary (422;
+                          wave 3C — the gate lives in the in-transaction
+                          core, so run-now and the S2 engine are gated too);
             AssignmentConflictError — the task already has an active
                                       assignment: the ≤1 invariant (409).
         """
@@ -2569,9 +2663,6 @@ class Store:
         name = name.strip()[:120]
         if not name:
             raise ValueError("executor name is empty")
-        if harness not in self.KNOWN_HARNESSES:
-            raise ValueError(
-                f"unknown harness: {harness}; known: {sorted(self.KNOWN_HARNESSES)}")
         if transport not in EXECUTOR_TRANSPORTS:
             raise ValueError(f"invalid transport: {transport}")
         secret = secrets.token_hex(24)
@@ -2587,6 +2678,14 @@ class Store:
                     f"open pending executor registrations are capped at "
                     f"{EXECUTOR_PENDING_CAP} — approve, revoke or delete "
                     "existing ones before registering more")
+            # Wave 3C: the harness gate reads the LIVE dictionary inside the
+            # registration transaction (no check-then-act window against a
+            # concurrent harness deletion). A rolled-back registration never
+            # fires.
+            known = self._harness_names_db(db)
+            if harness not in known:
+                raise ValueError(
+                    f"unknown harness: {harness}; known: {sorted(known)}")
             if db.execute("SELECT 1 FROM executors WHERE name=?",
                           (name,)).fetchone():
                 raise ExecutorConflictError(
@@ -2772,6 +2871,137 @@ class Store:
             db.execute("DELETE FROM executors WHERE id=?", (executor_id,))
             self._log(db, "executor.deleted", None, {
                 "executor_id": executor_id, "name": row["name"]})
+        return dict(row)
+
+    # ------------------------------------------- harness dictionary (wave 3C)
+    # The owner-managed nomination dictionary (design 2026-09-22 §C). The
+    # gates (registration, enrollment hint, assignment create, automation
+    # payloads, rule conditions) read it LIVE; launching stays gated by the
+    # poller's local allowlist (A3) — the dictionary never grants execution.
+    # Audits: harness.added / harness.removed.
+
+    @staticmethod
+    def _harness_names_db(db: sqlite3.Connection) -> frozenset[str]:
+        """Live dictionary snapshot on an OPEN connection (transaction-safe:
+        callers inside a write transaction use this; standalone callers use
+        harness_names())."""
+        return frozenset(
+            r["name"] for r in db.execute("SELECT name FROM harnesses"))
+
+    def harness_names(self) -> frozenset[str]:
+        """Live dictionary snapshot — the single lookup every nomination
+        gate uses. A per-call SELECT: the table is tiny (cap 64) and the
+        board sees single-digit rps; caching would only add a staleness
+        window between add/delete and the next nomination."""
+        with self._lock, self._conn() as db:
+            return self._harness_names_db(db)
+
+    def list_harnesses(self) -> list[dict[str, Any]]:
+        """Full dictionary rows, alphabetical (open read — a dictionary,
+        same boundary as GET /api/executors)."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM harnesses ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+
+    def add_harness(self, name: str, note: str = "",
+                    added_via: str = "owner") -> dict[str, Any]:
+        """Add a harness to the dictionary (ui-token route).
+
+        Raises:
+            ValueError — invalid name (HTTP 422 upstream);
+            HarnessQuotaError — dictionary ceiling HARNESS_MAX_COUNT
+                         (HTTP 422 upstream — entry validation);
+            HarnessConflictError — duplicate name (HTTP 409 upstream).
+        """
+        name = (name or "").strip()
+        if not HARNESS_NAME_RE.match(name):
+            raise ValueError(
+                f"invalid harness name: {name!r} (lowercase latin/digits "
+                "first, then [a-z0-9._-], max 60 chars)")
+        note = (note or "").strip()[:200]
+        with self._lock, self._conn() as db:
+            count = db.execute(
+                "SELECT COUNT(*) AS n FROM harnesses").fetchone()["n"]
+            if count >= HARNESS_MAX_COUNT:
+                raise HarnessQuotaError(
+                    f"the harness dictionary is capped at {HARNESS_MAX_COUNT} "
+                    "— remove unused entries before adding more")
+            if db.execute("SELECT 1 FROM harnesses WHERE name=?",
+                          (name,)).fetchone():
+                raise HarnessConflictError(
+                    f"harness '{name}' is already registered")
+            now = _now()
+            db.execute(
+                "INSERT INTO harnesses (name, added_at, added_via, note) "
+                "VALUES (?,?,?,?)", (name, now, added_via, note))
+            self._log(db, "harness.added", None, {
+                "name": name, "added_via": added_via[:60]})
+            row = db.execute(
+                "SELECT * FROM harnesses WHERE name=?", (name,)).fetchone()
+        return dict(row)
+
+    def delete_harness(self, name: str) -> dict[str, Any]:
+        """Remove a harness from the dictionary (ui-token route). Deletion
+        is refused while the name is LIVE anywhere an executor could act on
+        it: a registered executor (its poller.yaml allowlist matches this
+        string), a non-terminal assignment (a queued nomination for it) or
+        an ENABLED automation rule (schedule field / hook condition).
+        Terminal history (done/failed/expired assignments, launch journal)
+        and DISABLED rules do NOT block — a disabled rule cannot fire, and
+        rules are soft-deleted (retention: the row is never destroyed), so
+        counting them would make a harness undeletable forever. Re-enable
+        of a rule whose harness is gone is the S2 engine's fire-time
+        validation concern (422 at fire, decision logged), not a reason to
+        trap the dictionary.
+
+        Raises:
+            HarnessNotFoundError — unknown name (HTTP 404 upstream);
+            HarnessInUseError — live reference exists (HTTP 409 upstream).
+        """
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM harnesses WHERE name=?", (name,)).fetchone()
+            if row is None:
+                raise HarnessNotFoundError(
+                    f"harness {name!r} is not registered")
+            if db.execute(
+                    "SELECT 1 FROM executors WHERE harness=? LIMIT 1",
+                    (name,)).fetchone():
+                raise HarnessInUseError(
+                    f"harness '{name}' is used by a registered executor — "
+                    "delete that executor first (revoked executors keep blocking: the row and the poller.yaml allowlist drift stay)")
+            if db.execute(
+                    "SELECT 1 FROM task_assignments WHERE harness=? AND "
+                    "state IN ('queued','claimed','running') LIMIT 1",
+                    (name,)).fetchone():
+                raise HarnessInUseError(
+                    f"harness '{name}' has active assignments — cancel or "
+                    "finish them first")
+            if db.execute(
+                    "SELECT 1 FROM schedules WHERE harness=? AND enabled=1 "
+                    "LIMIT 1", (name,)).fetchone():
+                raise HarnessInUseError(
+                    f"harness '{name}' is referenced by an automation "
+                    "schedule — delete the schedule first")
+            for hook in db.execute(
+                    "SELECT name, condition FROM hooks "
+                    "WHERE enabled=1").fetchall():
+                try:
+                    clauses = json.loads(hook["condition"] or "[]")
+                except ValueError:
+                    clauses = []
+                if not isinstance(clauses, list):
+                    continue
+                for clause in clauses:
+                    if (isinstance(clause, dict)
+                            and clause.get("field") == "harness"
+                            and str(clause.get("value")) == name):
+                        raise HarnessInUseError(
+                            f"harness '{name}' is referenced by automation "
+                            f"hook '{hook['name']}' — delete the hook first")
+            db.execute("DELETE FROM harnesses WHERE name=?", (name,))
+            self._log(db, "harness.removed", None, {"name": name})
         return dict(row)
 
     def log_board_event(self, kind: str, payload: dict[str, Any]) -> None:
@@ -3250,10 +3480,15 @@ class Store:
         if name_hint:
             name_hint = name_hint.strip()[:120]
         harness_hint = (harness_hint or "").strip()[:60]
-        if harness_hint and harness_hint not in self.KNOWN_HARNESSES:
-            raise ValueError(
-                f"unknown harness: {harness_hint}; "
-                f"known: {sorted(self.KNOWN_HARNESSES)}")
+        if harness_hint:
+            # Wave 3C: the hint gate reads the LIVE harness dictionary (the
+            # hint feeds the bootstrap command — a bogus hint would mislead
+            # the remote leg).
+            known = self.harness_names()
+            if harness_hint not in known:
+                raise ValueError(
+                    f"unknown harness: {harness_hint}; "
+                    f"known: {sorted(known)}")
         token = ENROLLMENT_TOKEN_PREFIX + secrets.token_urlsafe(24)
         now = datetime.now(timezone.utc)
         enrollment_id = "enr-" + secrets.token_hex(6)
@@ -3457,10 +3692,11 @@ class Store:
                     "specialist must be a non-empty string (<=120 chars)")
             fields["specialist"] = specialist.strip()
         if "harness" in payload:
-            if payload["harness"] not in self.KNOWN_HARNESSES:
+            known = self.harness_names()
+            if payload["harness"] not in known:
                 raise AutomationValidationError(
                     f"unknown harness: {payload['harness']!r}; known: "
-                    f"{sorted(self.KNOWN_HARNESSES)}")
+                    f"{sorted(known)}")
             fields["harness"] = payload["harness"]
         if "executor_id" in payload:
             executor_id = payload["executor_id"]
@@ -3529,11 +3765,15 @@ class Store:
         — never accepted from a client (schedule-clock family is
         server-owned)."""
         name = self._rule_name(payload.get("name"))
-        fields = self._validate_schedule_fields({
-            k: v for k, v in payload.items() if k != "name"})
+        rest = {k: v for k, v in payload.items() if k != "name"}
+        # The harness default applies BEFORE validation: the effective
+        # value must pass the live-dictionary gate like any provided one
+        # (wave 3C review — a defaulted 'zcode' must not bypass the gate;
+        # with the seed deleted the omission is an honest 422).
+        rest.setdefault("harness", "zcode")
+        fields = self._validate_schedule_fields(rest)
         # target_kind was validated against the v1 dictionary ('task' only)
-        # inside _validate_schedule_fields; harness/executor pin defaults:
-        fields.setdefault("harness", "zcode")
+        # inside _validate_schedule_fields; executor pin default:
         fields.setdefault("executor_id", "")
         fields.setdefault("max_runs_per_day", SCHEDULE_DEFAULT_MAX_RUNS_PER_DAY)
         fields.setdefault("cooldown_s", SCHEDULE_DEFAULT_COOLDOWN_S)
@@ -3687,7 +3927,8 @@ class Store:
                     f"{sorted(HOOK_EVENT_WHITELIST)}")
             fields["on"] = payload["on"]
         if "condition" in payload:
-            fields["condition"] = validate_condition(payload["condition"])
+            fields["condition"] = validate_condition(
+                payload["condition"], self.harness_names())
         if "action" in payload:
             if payload["action"] not in HOOK_ACTIONS:
                 raise AutomationValidationError(
@@ -4064,7 +4305,7 @@ class Store:
         АРХКОМ-5): fields/ops/values enums over the closed allowlists — a
         free-text condition control never needs to exist. ``values_hint``
         maps field → enum list, or null where no closed set exists."""
-        enums = _condition_field_enums()
+        enums = _condition_field_enums(self.harness_names())
         return {
             "fields": sorted(enums),
             "ops": sorted(RULE_CONDITION_OPS),

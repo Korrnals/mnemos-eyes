@@ -1,10 +1,27 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import type { ConditionItem, HookCreateInput, ScheduleCreateInput } from "@/gateway/boardTypes";
-import { INTERVAL_PRESETS, KNOWN_HARNESSES } from "@/gateway/harnesses";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import type {
+  ConditionItem,
+  HookCreateInput,
+  ScheduleCreateInput,
+} from "@/gateway/boardTypes";
 import { useT } from "@/i18n";
 import { ConditionEditor } from "./ConditionEditor";
+import { HarnessSelect } from "@/features/agents/HarnessSelect";
+import { useDefaultHarness } from "@/features/agents/useHarnesses";
+
+/**
+ * Interval-trigger presets (moved here from the deleted gateway/harnesses.ts
+ * mirror, wave 3C): ISO-8601 durations the server validates — a curated
+ * closed set, no cron UI, no free text.
+ */
+const INTERVAL_PRESETS = ["PT1H", "PT6H", "PT12H", "P1D"] as const;
 import type { ConditionMeta } from "./conditionMeta";
 
 /**
@@ -67,8 +84,13 @@ function ScheduleForm({
   const [name, setName] = useState("");
   const [taskId, setTaskId] = useState("");
   const [specialist, setSpecialist] = useState("");
-  const [harness, setHarness] = useState<string>("zcode");
-  const [triggerKind, setTriggerKind] = useState<"time-of-day" | "interval">("time-of-day");
+  // Wave 3C review: the default is the first entry of the LIVE dictionary.
+  const defaultHarness = useDefaultHarness();
+  const [harnessChoice, setHarnessChoice] = useState<string>("");
+  const harness = harnessChoice || defaultHarness;
+  const [triggerKind, setTriggerKind] = useState<"time-of-day" | "interval">(
+    "time-of-day",
+  );
   const [dailyAt, setDailyAt] = useState("09:00");
   const [interval, setInterval] = useState<string>("PT12H");
   // P3-6: the guard tracks the REAL mutation in-flight — a double click
@@ -145,25 +167,21 @@ function ScheduleForm({
         </label>
         <label className="flex flex-col gap-1 text-xs text-foreground-secondary">
           {t("automation.form.harnessLabel")}
-          <select
+          <HarnessSelect
             id="schedule-harness"
             value={harness}
-            onChange={(event) => setHarness(event.target.value)}
+            onChange={setHarnessChoice}
             className={FIELD_CLASS}
-          >
-            {KNOWN_HARNESSES.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         <label className="flex flex-col gap-1 text-xs text-foreground-secondary">
           {t("automation.form.triggerKindLabel")}
           <select
             id="schedule-trigger-kind"
             value={triggerKind}
-            onChange={(event) => setTriggerKind(event.target.value as "time-of-day" | "interval")}
+            onChange={(event) =>
+              setTriggerKind(event.target.value as "time-of-day" | "interval")
+            }
             className={FIELD_CLASS}
           >
             <option value="time-of-day">{t("automation.form.triggerDaily")}</option>
@@ -210,7 +228,9 @@ function ScheduleForm({
           type="button"
           size="sm"
           onClick={submit}
-          disabled={submitting || name.trim().length === 0 || taskId.trim().length === 0}
+          disabled={
+            submitting || name.trim().length === 0 || taskId.trim().length === 0
+          }
         >
           {t("automation.form.create")}
         </Button>
@@ -325,7 +345,12 @@ function HookForm({
         <legend className="px-1 text-sm font-medium">
           {t("automation.form.conditionLabel")}
         </legend>
-        <ConditionEditor meta={meta} clauses={clauses} onChange={setClauses} idPrefix="hook" />
+        <ConditionEditor
+          meta={meta}
+          clauses={clauses}
+          onChange={setClauses}
+          idPrefix="hook"
+        />
         <p className="mt-1 text-xs text-foreground-muted">
           {t("automation.form.conditionNote")}
         </p>
