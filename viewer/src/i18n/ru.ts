@@ -1020,14 +1020,69 @@ export const ru = {
   "automation.settings.saved": "Настройки автоматизации сохранены",
   "automation.settings.savedDetail": "выключатель и дневной лимит обновлены",
   "automation.settings.saveFailed": "Не удалось сохранить настройки автоматизации",
-  // UI-21 settings hub: «Интерфейс» — cross-links only (preferences stay
-  // at their point of use; spec §0).
-  "settings.hub.interfaceTitle": "Интерфейс",
-  "settings.hub.interfaceHint": "Эти настройки живут на месте использования:",
-  "settings.hub.prefLang": "язык — RU|EN в шапке",
-  "settings.hub.prefDensity": "плотность — кнопка в шапке",
-  "settings.hub.prefBoardStyle": "вид доски — тумблер на странице задач",
-  "settings.hub.prefSidebar": "сайдбар — кнопка на самом сайдбаре",
+  // UI-23 settings hub v2: sections, controls, hints and verdicts (spec §7).
+  "settings.hub.navLabel": "Разделы страницы",
+  "settings.hub.appearanceTitle": "Внешний вид",
+  "settings.hub.behaviorTitle": "Поведение",
+  "settings.hub.boardTitle": "Доска",
+  "settings.hub.navigationTitle": "Навигация",
+  "settings.hub.executionTitle": "Исполнение",
+  "settings.hub.automationTitle": "Автоматизация",
+  "settings.hub.themeLabel": "Тема",
+  "settings.hub.themeSystem": "Системная",
+  "settings.hub.themeDark": "Тёмная",
+  "settings.hub.themeLight": "Светлая",
+  "settings.hub.themeHint": "«Системная» следует за настройкой вашей ОС.",
+  "settings.hub.langLabel": "Язык интерфейса",
+  "settings.hub.densityLabel": "Плотность строк",
+  "settings.hub.densityComfortable": "Просторная",
+  "settings.hub.densityCompact": "Компактная",
+  "settings.hub.densityHint":
+    "Рабочие списки — задачи, реестры, выдача. Поиск и память остаются просторными.",
+  "settings.hub.appliesEverywhere": "Применяется сразу во всём интерфейсе.",
+  "settings.hub.boardStyleLabel": "Стиль канбан-доски",
+  "settings.hub.boardStyleHint": "Применится на странице Задачи → Канбан.",
+  "settings.hub.motionLabel": "Анимации",
+  "settings.hub.motionSystem": "Системные",
+  "settings.hub.motionReduced": "Минимум",
+  "settings.hub.motionHint":
+    "«Минимум» отключает движение и мерцания независимо от настроек ОС.",
+  "settings.hub.sidebarLabel": "Сайдбар",
+  "settings.hub.sidebarExpanded": "Развёрнут",
+  "settings.hub.sidebarCollapsed": "Свёрнут",
+  "settings.hub.sidebarHint": "Меняется и кнопкой на самом сайдбаре.",
+  "settings.hub.onboardingReplay": "Показать подсказку «Как это работает» снова",
+  "settings.hub.onboardingReplayed":
+    "Подсказка снова развернётся на странице Исполнение.",
+  "settings.hub.notCustomizable": "Что не настраивается",
+  "settings.hub.verdict.fonts":
+    "Типографика — одна пара шрифтов и одна шкала: целостность важнее выбора.",
+  "settings.hub.verdict.contemplative":
+    "Поиск и память остаются просторными независимо от плотности — это дизайн-решение.",
+  "settings.hub.verdict.viewRoute":
+    "«Канбан» и «Список» — маршруты, а не настройка: адрес страницы и есть выбор.",
+  "settings.hub.verdict.domains":
+    "Состав и порядок разделов сайдбара фиксированы — карта продукта видна целиком.",
+  "settings.hub.verdict.groups":
+    "Свёрнутость групп проектов запоминается по каждому проекту — это состояние, не настройка.",
+  "settings.hub.verdict.dnd":
+    "Перетаскивание карточек — основной способ управления доской.",
+  "settings.hub.verdict.filters":
+    "Фильтры и поиск — часть адреса страницы (?project=&q=), их можно сохранить в закладку.",
+  "settings.hub.verdict.panels":
+    "Панели терминала и ленты сворачиваются на месте на странице Исполнение — состояние запоминается.",
+  "settings.hub.verdict.confirms":
+    "Подтверждения опасных действий всегда включены — это защита ваших данных.",
+  "settings.hub.verdict.scrolls":
+    "Прокрутка страниц целиком с возвратом позиции по «Назад» зафиксирована.",
+  "settings.hub.verdict.updateBanner":
+    "Страница никогда не перезагружается сама — о новой версии сообщает спокойный баннер.",
+  "settings.hub.verdict.hotkeys":
+    "Горячие клавиши фиксированы: «/» — поиск, «?» — подсказка.",
+  "settings.hub.verdict.search":
+    "Глобальный поиск — единый вход в память: его поведение — часть структуры, а не настройка.",
+  "settings.hub.verdict.crumbs":
+    "Хлебные крошки — навигационный контекст маршрута; их отключение ломает ориентирование.",
   "automation.listLoading": "Загружаем",
   "automation.listFailed": "Не удалось загрузить список",
   "automation.schedule.create": "Новое расписание",

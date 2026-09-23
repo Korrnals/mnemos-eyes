@@ -27,3 +27,10 @@
     background-image: none;
   }
 }
+
+/* vesmaro.motion="reduced" (UI-23): the hub's forced reduced regime kills
+ * the shimmer exactly like the OS preference above. */
+[data-motion="reduced"] .shimmer {
+  animation: none;
+  background-image: none;
+}

@@ -1,10 +1,16 @@
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useEffect } from "react";
 import { Outlet, ScrollRestoration, useLocation } from "react-router";
 import { RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { Button } from "@/components/ui/button";
+import {
+  saveSidebarCollapsed,
+  SIDEBAR_COLLAPSED_STORAGE_KEY,
+  toggleSidebarCollapsed,
+  useSidebarCollapsed,
+} from "@/lib/sidebarState";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
@@ -24,55 +30,20 @@ import { useT } from "@/i18n";
  * cannot see inner containers. `FocusMain` moves focus to <main> on route
  * change so keyboard/SR users land at the new content (WCAG 2.4.3).
  *
- * Collapse state lives here so it survives route changes, and persists under
+ * Collapse state lives here so it survives route changes and persists under
  * "vesmaro.sidebarCollapsed" (UI-19 owner feedback: the collapsed rail must
- * survive F5; the `vesmaro.*` namespace, guarded read/write exactly like
- * executionPrefs.ts — the node test environment has no DOM). UI-22: the flag
- * is the DESKTOP intent only — the Sidebar's mobile (<md) overlay state is
- * session-only and its toggle never reaches this setter, so a phone can
- * never corrupt the desktop's remembered panel width.
+ * survive F5). UI-23 moved the storage + state into lib/sidebarState.ts —
+ * «one state, two controls» (settings-hub spec §4.3): the sidebar button and
+ * the hub's «Сайдбар» control consume the same store; Shell re-affirms the
+ * stored value on every mount exactly as before.
  */
 
-/** localStorage key for the sidebar collapsed rail — the DESKTOP intent
- * (UI-19 persist, UI-22 scope: mobile overlay never reads or writes it). */
-export const SIDEBAR_COLLAPSED_STORAGE_KEY = "vesmaro.sidebarCollapsed";
-
-/** Guarded localStorage handle — undefined outside a browser/test stub. */
-function safeStorage(): Storage | undefined {
-  try {
-    return typeof localStorage === "undefined" ? undefined : localStorage;
-  } catch {
-    return undefined; // private mode / disabled storage
-  }
-}
-
-/** Read the persisted DESKTOP collapse flag; absent/corrupt data falls back
- * to open. (The mobile panel ignores it entirely — UI-22.) */
-function loadSidebarCollapsed(storage: Storage | undefined = safeStorage()): boolean {
-  if (!storage) return false;
-  try {
-    if (storage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1") return true;
-  } catch {
-    // private mode — fall through to the default
-  }
-  return false;
-}
-
-/** Persist the collapse flag; storage failures are non-fatal. */
-function saveSidebarCollapsed(
-  collapsed: boolean,
-  storage: Storage | undefined = safeStorage(),
-): void {
-  try {
-    storage?.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
-  } catch {
-    // Swallow: the in-memory state still switches for this session.
-  }
-}
+// Re-exported for the persistence tests (the key moved to lib/sidebarState).
+export { SIDEBAR_COLLAPSED_STORAGE_KEY };
 
 export function Shell() {
-  const [collapsed, setCollapsed] = useState(loadSidebarCollapsed);
-  const toggle = useCallback(() => setCollapsed((value) => !value), []);
+  const collapsed = useSidebarCollapsed();
+  const toggle = toggleSidebarCollapsed;
   // Persist on every change (SSR-safe: effects never run on the server; the
   // initial render also re-affirms the stored value — a no-op write).
   useEffect(() => saveSidebarCollapsed(collapsed), [collapsed]);

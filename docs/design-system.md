@@ -295,8 +295,31 @@ In light mode, shadow opacity values halve (applied via CSS custom property over
 - Tailwind config reads the tokens via `var(--...)` in the theme extension.
 - shadcn/ui components inherit tokens via the Tailwind config; no inline style overrides.
 - Theme is toggled by setting `document.documentElement.dataset.theme = "light"` (or removing attribute for dark).
-- Persisted in `localStorage.getItem("mnemos-eyes:theme")`.
-- Default: system preference via `prefers-color-scheme: dark` (most users are in dark mode for an agent memory tool).
+- Persisted in `localStorage.getItem("vesmaro.theme")` (UI-23 migration, spec 2026-09-23 §4.2): the legacy `mnemos-eyes:theme` is still READ as a fallback so an updated browser keeps its old choice — but never written; the legacy key dies out naturally. Choosing «Системная» removes both records.
+- Default: system preference via `prefers-color-scheme` (followed live while no explicit choice exists). The settings hub offers all three positions (system/light/dark); the top-bar toggle stays two-position (dark↔light).
+
+### 9.1 Preference registry (`vesmaro.*`, UI-23)
+
+Canonical table per settings-hub-v2 spec §4.1 (descriptive mirror of
+`viewer/src/lib/settingsRegistry.ts`; the drift guard lives in
+`settingsRegistry.test.ts`):
+
+| Ключ | Тип | Дефолт | Область | Владелец |
+| --- | --- | --- | --- | --- |
+| `vesmaro.lang` | enum `ru\|en` | `ru` | глобально | `src/i18n/index.ts` |
+| `vesmaro.density` | enum `comfortable\|compact` | `comfortable` | глобально | `src/components/density-provider.tsx` |
+| `vesmaro.theme` | enum `system\|light\|dark` | `system` | глобально | `src/components/theme-provider.tsx` (легаси-чтение `mnemos-eyes:theme`) |
+| `vesmaro.motion` | enum `system\|reduced` | `system` | глобально | `src/lib/motionStore.ts` (NEW v2: `reduced` форсит reduced-ветки независимо от ОС) |
+| `vesmaro.boardStyle` | enum `groups\|classic` | `groups` | домен «Задачи» | `src/lib/boardStyleStore.ts` + `tasksViewPrefs.ts` |
+| `vesmaro.sidebarCollapsed` | flag `1\|0` | `0` | глобально | `src/lib/sidebarState.ts` (потребитель `Shell.tsx`) |
+| `vesmaro.agents.onboardingDone` | flag `1\|0` | `0` | компонент | `features/agents/executionPrefs.ts` (хаб умеет сбросить) |
+| `vesmaro.tasksView` | — | — | — | УСТАРЕЛ (2026-09-22): маршрут — контракт; старые записи игнорируются |
+
+Вне реестра (state-ключи, не preference): `vesmaro.taskGroups`,
+`vesmaro.agents.terminalCollapsed`, `vesmaro.agents.feedCollapsed`;
+учётные данные (`vesmaro.uiToken`, `vesmaro.boardToken`, auth-токен) — не
+настройки. Область действия всех preference — устройство и браузер
+(кросс-девайсной синхронизации нет, спека §4.4).
 
 ---
 
