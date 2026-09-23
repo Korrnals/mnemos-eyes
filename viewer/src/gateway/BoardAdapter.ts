@@ -44,6 +44,7 @@ import type {
   InboxRefreshResult,
   LaunchesPage,
   LaunchesParams,
+  DeviceGrantsResult,
   DeviceRevokedResult,
   DevicesPage,
   MemoryPulse,
@@ -161,6 +162,7 @@ import type {
  * CV-7 QR pairing + devices (ADR 0012; ui-token class EXCEPT the exchange leg):
  * - listDevices          GET    /api/devices                      (no token material)
  * - revokeDevice         DELETE /api/devices/{id}                 → 200 | 404
+ * - setDeviceGrants      PUT    /api/devices/{id}/grants          → 200 | 404/409/422 (§A.7)
  * - createPairing        POST   /api/pairing                      → 201 code+verify | 429/503
  * - getPairing           GET    /api/pairing/{id}                 (trusted side; verify)
  * - confirmPairing       POST   /api/pairing/{id}/confirm {allow} → 200 idempotent | 409/410
@@ -1101,6 +1103,23 @@ export class BoardAdapter implements BoardGateway {
     return this.request<DeviceRevokedResult>(
       `/devices/${encodeURIComponent(deviceId)}`,
       { method: "DELETE", auth: true },
+    );
+  }
+
+  /**
+   * Set the per-device granule set (`PUT /api/devices/{id}/grants`,
+   * ui-token; Amendment §A.7). FULL replacement — the sent array IS the
+   * set (empty = every granule revoked, global reads stay open). Applies
+   * to the live session on the device's very next request; 404 unknown
+   * device, 409 not-active, 422 unknown granule names.
+   */
+  async setDeviceGrants(
+    deviceId: string,
+    grants: readonly string[],
+  ): Promise<DeviceGrantsResult> {
+    return this.request<DeviceGrantsResult>(
+      `/devices/${encodeURIComponent(deviceId)}/grants`,
+      { method: "PUT", body: { grants: [...grants] }, auth: true },
     );
   }
 

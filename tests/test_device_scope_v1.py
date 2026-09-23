@@ -13,8 +13,9 @@ Pinned contract (each test names its matrix line):
   (incl. the v1 reads-добавка) → 200, mutations → 403;
 - validation order: invalid / revoked mnd_ → 401 on ANY route (v0 answered
   403 on mutations first — inverted, fixed in v1);
-- TTL: control slides 7 d, read slides 30 d, hard 90 d for both; the
-  sliding UPDATE never rewrites the scope column;
+- TTL: ONE sliding window for every device — 30 d (§A.7 owner override,
+  revocation-first: the 7 d control clock is retired); hard 90 d; the
+  sliding UPDATE never rewrites the scope or grants columns;
 - migration: active+read → control in place on boot; revoked/expired keep
   their historical scope; idempotent (second boot writes nothing);
 - new pairings default to scope='control' (store layer; DB default stays
@@ -34,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from conftest import DATA_DIR
+from server.store import DEVICE_GRANTS
 
 DB_PATH = DATA_DIR / "board.db"
 
@@ -281,12 +283,15 @@ class TestControlHardDeny:
             assert r.status_code == 403, (method, path, r.status_code)
 
     def test_closed_route_403_not_401_detail(self, client, control_dev):
-        """The 403 detail names the scope — the honest verdict, opposite of
-        the 401 the inner guard would have produced for an mnd_ bearer."""
+        """The 403 detail names the rights verdict — the honest answer,
+        opposite of the 401 the inner guard would have produced for an
+        mnd_ bearer. §A.7: the verdict speaks GRANTS (the load-bearing
+        set), not the legacy scope record."""
         r = client.get("/api/devices",
                        headers=_device_headers(control_dev["device_token"]))
         assert r.status_code == 403
-        assert "control" in r.json()["detail"]
+        assert "grants" in r.json()["detail"]
+        assert "cover" in r.json()["detail"]
 
 
 # ----------------------------------------------------- legacy read scope
@@ -367,14 +372,16 @@ class TestValidationOrder:
 
 # ------------------------------------------------------------------- TTL
 class TestScopeTtl:
-    def test_control_slides_7d_read_slides_30d(self, app_module):
+    def test_slides_30d_for_every_scope(self, app_module):
+        """§A.7 owner override: ONE sliding window — 30 d for control AND
+        read; the hard 90-day cap is unchanged for both."""
         control = _paired_control_device(app_module.store)
         read = _paired_read_device(app_module.store)
         try:
             c_exp = datetime.fromisoformat(_device_row(control["id"])["expires_at"])
             r_exp = datetime.fromisoformat(_device_row(read["id"])["expires_at"])
             now = datetime.now(timezone.utc)
-            assert timedelta(days=6) < c_exp - now < timedelta(days=8)
+            assert timedelta(days=29) < c_exp - now < timedelta(days=31)
             assert timedelta(days=29) < r_exp - now < timedelta(days=31)
             # hard cap is unchanged for BOTH scopes: 90 d from creation
             for dev in (control, read):
@@ -386,10 +393,10 @@ class TestScopeTtl:
                 db.executemany("DELETE FROM device_sessions WHERE id=?",
                                [(control["id"],), (read["id"],)])
 
-    def test_sliding_refresh_keeps_control_window(self, client, control_dev):
+    def test_sliding_refresh_lands_at_30d(self, client, control_dev):
         """Мок времени (the house pattern): squeeze expires_at into the
-        future, use the token — the refresh lands at ~now+7d, NOT +30d, and
-        the scope column survives the UPDATE untouched."""
+        future, use the token — the refresh lands at ~now+30d and the
+        scope + grants columns survive the UPDATE untouched."""
         with _db() as db:
             db.execute("UPDATE device_sessions SET expires_at=? WHERE id=?",
                        (_future_iso(86400), control_dev["id"]))
@@ -400,10 +407,13 @@ class TestScopeTtl:
         row = _device_row(control_dev["id"])
         refreshed = datetime.fromisoformat(row["expires_at"])
         now = datetime.now(timezone.utc)
-        assert timedelta(days=6) < refreshed - now < timedelta(days=8)
+        assert timedelta(days=29) < refreshed - now < timedelta(days=31)
         assert row["scope"] == "control"
+        assert json.loads(row["grants"]) == list(DEVICE_GRANTS)
 
-    def test_control_lapses_after_7d_idle(self, client, control_dev):
+    def test_lapsed_session_401_expired(self, client, control_dev):
+        """The sliding clock only moves on activity: a lapsed session is
+        dead regardless of scope (control shown; mechanics are uniform)."""
         with _db() as db:
             db.execute("UPDATE device_sessions SET expires_at=? WHERE id=?",
                        (_past_iso(), control_dev["id"]))

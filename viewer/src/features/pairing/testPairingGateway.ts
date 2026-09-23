@@ -1,6 +1,7 @@
 import type { MemoryGateway } from "@/gateway/MemoryGateway";
 import type { PairingGateway } from "@/gateway/capabilities";
 import type {
+  DeviceGrantsResult,
   DeviceRevokedResult,
   DeviceSession,
   DevicesPage,
@@ -22,6 +23,7 @@ export const FIXTURE_DEVICE: DeviceSession = {
   id: "dev-1",
   name: "Телефон",
   scope: "read",
+  grants: ["tasks", "reports", "inbox", "notifications"],
   state: "active",
   created_at: "2026-09-23T10:00:00Z",
   last_seen_at: "2026-09-23T10:05:00Z",
@@ -97,6 +99,9 @@ export interface PairingGatewayScript {
   confirmOutcome?: string;
   createError?: Error;
   statusError?: Error;
+  /** Grants: scripted answer (default echoes the sent set) or a failure. */
+  grantsResult?: (deviceId: string, grants: readonly string[]) => DeviceGrantsResult;
+  grantsError?: Error;
 }
 
 export function createPairingTestGateway(script: PairingGatewayScript = {}) {
@@ -107,6 +112,7 @@ export function createPairingTestGateway(script: PairingGatewayScript = {}) {
     cancel: 0,
     revoke: [] as string[],
     listDevices: 0,
+    setGrants: [] as Array<{ id: string; grants: string[] }>,
   };
   const gateway = {
     createPairing: async (): Promise<PairingCreatedResult> => {
@@ -151,6 +157,21 @@ export function createPairingTestGateway(script: PairingGatewayScript = {}) {
       return {
         ok: true,
         device: { ...item, state: "revoked" },
+      };
+    },
+    setDeviceGrants: async (
+      deviceId: string,
+      grants: readonly string[],
+    ): Promise<DeviceGrantsResult> => {
+      calls.setGrants.push({ id: deviceId, grants: [...grants] });
+      if (script.grantsError) throw script.grantsError;
+      if (script.grantsResult) return script.grantsResult(deviceId, grants);
+      const item =
+        script.devices?.items.find((device) => device.id === deviceId) ??
+        FIXTURE_DEVICE;
+      return {
+        ok: true,
+        device: { ...item, grants: [...grants] },
       };
     },
   };

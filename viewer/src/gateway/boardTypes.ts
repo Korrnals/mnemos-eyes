@@ -677,6 +677,25 @@ export type DevicesPage = Schemas["DevicesOut"];
 /** Revoke answer — board `DeviceRevokedOut` (the final row snapshot). */
 export type DeviceRevokedResult = Schemas["DeviceRevokedOut"];
 
+/** Grants answer — board `DeviceGrantsOut` (`PUT /api/devices/{id}/grants`,
+ * ADR 0012 Amendment §A.7): the updated row with its live granule set. */
+export type DeviceGrantsResult = Schemas["DeviceGrantsOut"];
+
+/**
+ * The granule dictionary (ADR 0012 Amendment §A.7) as the viewer mirrors
+ * it — LABELS ONLY. The server owns validation (unknown names → 422);
+ * this list drives the toggle rendering and the PUT payload order.
+ */
+export const DEVICE_GRANULES = [
+  "tasks",
+  "reports",
+  "inbox",
+  "notifications",
+] as const;
+
+/** One granule id (a `DEVICE_GRANULES` member). */
+export type DeviceGranule = (typeof DEVICE_GRANULES)[number];
+
 /** Create answer — board `PairingCreatedOut` (`POST /api/pairing`, 201).
  * The code appears HERE and NOWHERE else on the owner leg (§2.1). */
 export type PairingCreatedResult = Schemas["PairingCreatedOut"];
