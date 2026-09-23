@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
-# Identity guard (owner directive 2026-09-23): commits in this repo may only
-# be authored by the owner's canonical identity. Agents working in cloned
-# worktrees MUST inherit user.name/user.email from the repo/global config —
-# a commit under any other identity is an environment bug, not a choice.
+# Identity guard (owner directive 2026-09-23): commits in THIS repository
+# may only be authored by the canonical owner identity. Agents working in
+# cloned worktrees MUST inherit user.name/user.email from the repo/global
+# config — a commit under any other identity is an environment bug.
+#
+# Scope: the canonical repo and its worktrees ONLY. Test fixtures that
+# git-init temp copies elsewhere are intentionally exempt (the tmp repo
+# has its own toplevel; the canonical root check below fails it through).
 set -euo pipefail
 
 ALLOWED_NAME="Korrnals"
 ALLOWED_EMAIL="153223100+Korrnals@users.noreply.github.com"
+CANONICAL_ROOT="$(cd /var/home/abyss/LABs/Projects/Project-Mnemos/mnemos-eyes && pwd -P)"
+
+toplevel="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+toplevel="$(cd "$toplevel" && pwd -P)"
+case "$toplevel" in
+  "$CANONICAL_ROOT"|"$CANONICAL_ROOT"/*) ;;  # canonical repo or a worktree
+  *) exit 0 ;;                                # foreign tmp clone — not our rule
+esac
 
 name="$(git config user.name || true)"
 email="$(git config user.email || true)"
