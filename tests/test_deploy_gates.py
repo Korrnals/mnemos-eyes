@@ -13,13 +13,18 @@ QA matrix:
   the repair/rollback hint; --skip-history-gate is repair+rollback-only
   (deploy/verify: arg error; rollback on a failed release: passes);
 - values gate: live==git+intent passes; rootApp fallback / stale tag /
-  diagnostics-window keys / missing keys refuse; secret-class values are
+  diagnostics-window keys / missing keys refuse; RELEASE-BUMP
+  FORGIVENESS (1.33.0 battle): an image.tag-only drift where live ==
+  appVersion of the deployed revision (helm history) is auto-waived
+  with an audit note, no flag; a foreign manually-pinned tag refuses
+  (and still passes via --allow-drift); secret-class values are
   never printed (key names only); --allow-drift waives NON-SECRET drift
   only (deploy subcommand, mandatory reason journaled; secret-class and
   every other gate still refuse);
 - tag resolution: values image.tag, appVersion fallback;
 - journal: append-only line format, header on create; the git
-  add/commit/push branch exercised with a real tmp git repo;
+  add/commit/push branch exercised with a real tmp git repo (branch
+  checkout AND detached-HEAD worktree — the push goes out HEAD:main);
 - subcommands: verify (gates only, no helm upgrade), deploy (podman
   build+push with the resolved tag, helm upgrade --atomic -f values
   --set image.tag --set rootApp=app, journal), rollback (helm rollback
@@ -180,9 +185,16 @@ class FakeWorld:
             capture_output=True, text=True, timeout=60, env=self.env())
 
     # ------------------------------------------------------ state twiddles
-    def set_history(self, *rows: tuple[int, str]) -> None:
-        (self.state / "hist.json").write_text(json.dumps(
-            [{"revision": r, "status": s} for r, s in rows]))
+    def set_history(self, *rows: tuple[int, ...]) -> None:
+        # each row: (revision, status[, app_version]) — app_version is
+        # what the release-bump forgiveness compares the live tag against
+        out = []
+        for row in rows:
+            entry = {"revision": row[0], "status": row[1]}
+            if len(row) > 2:
+                entry["app_version"] = row[2]
+            out.append(entry)
+        (self.state / "hist.json").write_text(json.dumps(out))
 
     def set_live(self, **overrides) -> None:
         live = yaml.safe_load((self.state / "live.yaml").read_text())
@@ -301,6 +313,31 @@ class TestValuesGate:
         r = world.run_function("gate_values_drift")
         assert r.returncode == 1
         assert "image.tag" in r.stderr
+
+    # --------------------------- release-bump forgiveness (1.33.0 battle)
+    def test_release_bump_tag_only_drift_auto_waived(self, world):
+        # the 1.33.0 battle (deploy rev 67>68): git bumped the tag, live
+        # still runs the PREVIOUS release — the gate recognizes it via
+        # the deployed revision's appVersion (helm history) and passes
+        # WITHOUT --allow-drift
+        prev = "1.32.0" if _resolved_tag() != "1.32.0" else "1.31.0"
+        world.set_history((39, "superseded", "0.9.9"), (40, "deployed", prev))
+        world.set_live(**{"image.tag": prev})
+        r = world.run_function("gate_values_drift")
+        assert r.returncode == 0, r.stderr
+        assert "WAIVED" in r.stdout
+        assert "previous release, not manual drift" in r.stdout
+
+    def test_foreign_manual_tag_refuses_despite_known_appversion(self, world):
+        # same tag-only shape, but the live tag matches NEITHER git nor
+        # the deployed revision's appVersion = a manual --set of a
+        # foreign tag: auto-waive explicitly does not apply
+        world.set_history((40, "deployed", "1.32.0"))
+        world.set_live(**{"image.tag": "9.9.9-hax"})
+        r = world.run_function("gate_values_drift")
+        assert r.returncode == 1
+        assert "NOT the previous release" in r.stderr
+        assert "9.9.9-hax" in r.stderr
 
     def test_diagnostics_window_left_on_refuses(self, world):
         world.set_live(**{"networkPolicy.ingress.allowLan": {"enabled": True}})
@@ -424,6 +461,67 @@ class TestJournal:
         pushed = git("rev-parse", "main", git_dir=origin).stdout.strip()
         assert pushed == head
 
+    def test_journal_push_lands_on_main_from_detached_head(self, world,
+                                                           tmp_path):
+        """The 1.33.0 battle shape: deploys run from a worktree on a
+        DETACHED HEAD at main's tip (gate 1 only needs HEAD ==
+        origin/main; the main checkout owns the branch). `git push
+        origin main` would push the STALE local main and silently
+        strand the journal commit — the push must go out as HEAD:main.
+        One-shot tmp repo + linked worktree, detached HEAD."""
+        repo = tmp_path / "repo"
+        wt = tmp_path / "wt"
+        (repo / "deploy").mkdir(parents=True)
+        origin = tmp_path / "origin.git"
+
+        def git(*args: str, cwd=None, git_dir=None) -> subprocess.CompletedProcess:
+            cmd = ["git"]
+            if git_dir:
+                cmd += ["--git-dir", str(git_dir)]
+            else:
+                cmd += ["-C", str(cwd or repo)]
+            return subprocess.run(cmd + list(args), capture_output=True,
+                                  text=True, check=True)
+
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+        # isolate from machine-global hooks; identity for the commits
+        git("config", "core.hooksPath", "")
+        git("config", "user.email", "deploy-test@example.com")
+        git("config", "user.name", "deploy-test")
+        (repo / "README.md").write_text("tmp repo\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "init")
+        git("remote", "add", "origin", str(origin))
+        git("push", "-q", "origin", "main")
+        base = git("rev-parse", "HEAD").stdout.strip()
+        # the battle shape: a linked worktree on a DETACHED HEAD — it
+        # cannot check out main (the main repo owns it)
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q",
+                        "--detach", str(wt), base], check=True)
+        (wt / "deploy").mkdir()   # journal_append writes the file, not the dir
+
+        env = world.env(VESMARO_DEPLOY_JOURNAL=str(wt / "deploy" / "JOURNAL.md"))
+        env["VESMARO_DEPLOY_GIT"] = "git"          # REAL git for this one
+        r = subprocess.run(
+            ["bash", "-c",
+             f"cd '{wt}' && source '{DEPLOY_SH}' "
+             f"&& REPO_ROOT='{wt}' journal_append deploy 5 6 1.2.3"],
+            capture_output=True, text=True, timeout=60, env=env)
+        assert r.returncode == 0, r.stderr
+
+        assert "| deploy | rev 5>6 | image 1.2.3 |" in \
+            (wt / "deploy" / "JOURNAL.md").read_text()
+        # the journal commit sits on the worktree's detached HEAD...
+        head = git("rev-parse", "HEAD", cwd=wt).stdout.strip()
+        assert head != base
+        # ...and reached origin/main — via HEAD:main, NOT the stale
+        # local main (which is still at base and would have pushed
+        # nothing new under the old `push origin main`)
+        pushed = git("rev-parse", "main", git_dir=origin).stdout.strip()
+        assert pushed == head
+        assert git("rev-parse", "main").stdout.strip() == base
+
 
 # ------------------------------------------------------------ subcommands
 class TestSubcommands:
@@ -465,6 +563,55 @@ class TestSubcommands:
         assert r.returncode == 1
         assert "upgrade" not in world.logs()["helm.log"]
         assert world.logs()["podman.log"] == ""
+
+    # --------------------------- release-bump forgiveness (1.33.0 battle)
+    def test_release_bump_deploys_without_allow_drift(self, world):
+        # AGW-10 battle fix (deploy 1.33.0, rev 67>68): a release bump
+        # must NOT require --allow-drift — the gate itself recognizes
+        # the previous release via the deployed revision's appVersion
+        prev = "1.32.0" if _resolved_tag() != "1.32.0" else "1.31.0"
+        world.set_history((39, "superseded", "0.9.9"), (40, "deployed", prev))
+        world.set_live(**{"image.tag": prev})
+        r = world.run_subcommand("deploy")
+        assert r.returncode == 0, r.stderr
+        assert "WAIVED" in r.stdout
+        assert "previous release, not manual drift" in r.stdout
+        assert "upgrade" in world.logs()["helm.log"]   # deploy proceeds
+        journal = (world.state / "JOURNAL.md").read_text()
+        assert "| deploy | rev 40>41 |" in journal
+        # the auto-waiver is audited in the JOURNAL line itself
+        assert "auto-waived: image.tag drift = previous release" in journal
+        assert "allow-drift:" not in journal            # no escape flag used
+
+    def test_manual_tag_drift_requires_allow_drift(self, world):
+        # tag-only drift that is NOT the previous release (manual --set
+        # of a foreign tag): refuses bare; --allow-drift still waives it
+        # (non-secret) — pinned both ways
+        world.set_history((40, "deployed", "1.32.0"))
+        world.set_live(**{"image.tag": "9.9.9-hax"})
+        r = world.run_subcommand("deploy")
+        assert r.returncode == 1
+        assert "NOT the previous release" in r.stderr
+        assert "upgrade" not in world.logs()["helm.log"]
+        assert world.logs()["podman.log"] == ""
+        assert not (world.state / "JOURNAL.md").exists()
+        r = world.run_subcommand("deploy", "--allow-drift",
+                                 "deliberate pin to 9.9.9-hax")
+        assert r.returncode == 0, r.stderr
+        assert "WAIVED (--allow-drift)" in r.stdout
+        assert "upgrade" in world.logs()["helm.log"]
+        journal = (world.state / "JOURNAL.md").read_text()
+        assert "allow-drift: deliberate pin to 9.9.9-hax" in journal
+        assert "auto-waived" not in journal              # flag, not auto
+
+    def test_redeploy_same_version_is_quiet(self, world):
+        # the pre-existing case: re-deploying the SAME version (no
+        # drift at all) stays silent — no WAIVED lines anywhere
+        r = world.run_subcommand("deploy")
+        assert r.returncode == 0, r.stderr
+        assert "WAIVED" not in r.stdout
+        journal = (world.state / "JOURNAL.md").read_text()
+        assert "waived" not in journal
 
     def test_rollback(self, world):
         # post-rollback the live release carries the TARGET revision's
