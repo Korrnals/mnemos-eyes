@@ -21,6 +21,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
@@ -3835,9 +3836,13 @@ _PROVISION_BOARD_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d{1,5})?$")
 
 
 def _created_ts(iso: str) -> float:
+    """Epoch seconds of a stored UTC ISO timestamp. P3: the old
+    mktime(timezone double-correction) math drifted on any non-UTC host
+    (cooldown age went negative — the gate silently disarmed).
+    fromisoformat is offset-aware and host-TZ neutral."""
     try:
-        return time.mktime(time.strptime(iso, "%Y-%m-%dT%H:%M:%S+00:00")) - time.timezone
-    except ValueError:
+        return datetime.fromisoformat(iso).timestamp()
+    except (ValueError, TypeError):
         return 0.0
 
 
@@ -4010,12 +4015,17 @@ async def provision_job_status(job_id: str, request: Request) -> ProvisionJobOut
 
 
 @app.post("/api/executors/provision/host/{host}/repin")
-async def provision_repin(host: str, body: HostRepinBody,
-                          request: Request) -> OkOut:
+async def provision_repin(host: str, body: HostRepinBody, request: Request,
+                          port: int = Query(default=22, ge=1, le=65535)) -> OkOut:
     """Re-pin a host key (ui-token): a separate OWNER action with the
     old→new pair in the audit (provisioning.host_key_repinned). Use after
-    a deliberate host reinstall — never to silence a mismatch."""
+    a deliberate host reinstall — never to silence a mismatch. P2-1: the
+    pin identity is (host, port); live jobs of that identity are failed
+    (pin.invalidated) — they were authenticating against the old pin."""
     _guard_ui_write(request)
+    if not _PROVISION_HOST_RE.match(host):
+        # P1-1 charset gate: the host rides audit payloads and SSE frames
+        raise HTTPException(422, "host must be a lowercase FQDN/IP name")
     # P1-3: same normalization as strict mode — hex64 input becomes the
     # canonical ssh-keygen form before it lands in the pin table.
     fp = provisioner_mod.normalize_fingerprint(body.fingerprint)
@@ -4023,14 +4033,19 @@ async def provision_repin(host: str, body: HostRepinBody,
         raise HTTPException(
             422, "fingerprint must be SHA256:base64 (ssh-keygen form) or "
                  "hex sha256")
-    old = store.get_host_pin(host)
-    store.set_host_pin(host, fp)
+    old = store.get_host_pin(host, port)
+    store.set_host_pin(host, port, fp)
     store.log_board_event("provisioning.host_key_repinned", {
-        "host": host,
+        "host": host, "port": port,
         "old": old["fingerprint"] if old else "",
         "new": fp,
     })
-    _broadcast({"kind": "provisioning.repinned", "host": host,
+    invalidated = store.fail_live_provision_jobs_for_host(
+        host, port, "pin.invalidated")
+    for row in invalidated:
+        _broadcast({"kind": "provisioning.failed", "job_id": row["id"],
+                    "error_code": "pin.invalidated"})
+    _broadcast({"kind": "provisioning.repinned", "host": host, "port": port,
                 "fingerprint": fp})
     return {"ok": True}
 

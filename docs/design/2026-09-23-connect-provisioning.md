@@ -134,3 +134,22 @@ A+B / C при двух специалистах. E2E vpn.us (hysteria-овер�
 1. Provisioner на борде (α) — УТВЕРЖДЕНО. 2. Автоallowlist default-on fresh — УТВЕРЖДЕНО
 (воля владельца из формулировки «сам находит и берёт на себя»). 3. Root/NOPASSWD v1 —
 УТВЕРЖДЕНО (собственные VPS владельца).
+
+## Addendum (решение ТЛ, 2026-09-23): provisioner доставляет CA по SSH-каналу и использует
+## curl --cacert
+
+Итог security-ревью WIP-реализации (M2): provisioner-путь обязан быть безопаснее ручного
+Пути 1. Исполнение: CA-сертификат борда доставляется на таргет ПО SSH-КАНАЛУ (SFTP-запись
+в job-scoped `/tmp/vesmaro-lab-ca-<job>.crt`, 0600 attrs + контрольный chmod), внешний
+curl запускается с `--cacert` и БЕЗ `-k`; борд без настроенного `VESMARO_TLS_CA_FILE`
+честно валит job (ca.unavailable) — downgrade на unpinned TLS невозможен. **Ручной Путь 1
+не трогаем** (его bounded `-k`-окно для CA-only с печатью отпечатка и проверкой CA:TRUE —
+известный, задокументированный риск): отдельный риск-тикет владельцу, бэклог.
+
+Попутно зафиксировано ревью (реализация 2026-09-23): pin по identity (host, port) с
+repin-роутом `?port=` и инвалидацией живых job'ов identity (pin.invalidated); fingerprint —
+строго канон ssh-keygen (SHA256:base64-без-паддинга), hex64-вход нормализуется; ноль
+производных ssh-пароля в БД/API (CWE-759); транспорт на client_factory + SSHClient-подкласс
+`validate_host_public_key(host, addr, port, key)` (арность сверена с asyncssh 2.24.0,
+закреплён в requirements); sudo -n префлайт отдельным exec → ssh.sudo_required; install-нога
+со своим таймаутом → bootstrap.timeout.

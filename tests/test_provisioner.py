@@ -570,6 +570,118 @@ class TestTransitInvariants:
         assert len(out) <= 200
 
 
+# ------------------------------------------------------- pins/repin (P2-1)
+class TestPinsAndRepin:
+    """Pin identity is (host, port); repin is an owner act with old→new
+    in the audit and invalidates live jobs of that identity."""
+
+    def _pin_row(self, app_module, host: str, port: int = 22):
+        import sqlite3
+        from conftest import DATA_DIR
+        db = sqlite3.connect(DATA_DIR / "board.db")
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            "SELECT * FROM provision_host_pins WHERE host=? AND port=?",
+            (host, port)).fetchone()
+        db.close()
+        return dict(row) if row else None
+
+    def test_tofu_pins_host_port(self, client, ui_auth, app_module):
+        r = _provision(client, ui_auth, host="pin-hp-1", port=2222)
+        job_id = r.json()["job_id"]
+        row = _poll_until(lambda: _job(client, ui_auth, job_id, state="done"))
+        fp = row["host_key_fingerprint"]
+        assert fp and fp.startswith("SHA256:")
+        assert self._pin_row(app_module, "pin-hp-1", 2222)["fingerprint"] == fp
+        assert self._pin_row(app_module, "pin-hp-1", 22) is None  # no bleed
+
+    def _board_events(self, app_module, kind: str) -> list[dict]:
+        import json as json_mod
+        import sqlite3
+        from conftest import DATA_DIR
+        db = sqlite3.connect(DATA_DIR / "board.db")
+        db.row_factory = sqlite3.Row
+        rows = db.execute("SELECT payload FROM events WHERE kind=? "
+                          "ORDER BY id", (kind,)).fetchall()
+        db.close()
+        return [json_mod.loads(r["payload"]) for r in rows]
+
+    def test_repin_port_scoped_old_new_and_invalidation(self, client, ui_auth,
+                                                        app_module,
+                                                        fake_provisioner):
+        canonical = prov.fingerprint_of_bytes(b"fake-host-key")
+        r = _provision(client, ui_auth, host="repin-hp-1", port=2200)
+        job_id = r.json()["job_id"]
+        _poll_until(lambda: _job(client, ui_auth, job_id, state="done"))
+
+        # a live job on the same identity gets invalidated by the repin
+        live_id = _live_job_direct(app_module, "repin-hp-1", 2200)
+        new_fp = FP_B
+        rr = client.post("/api/executors/provision/host/repin-hp-1/repin"
+                         "?port=2200", json={"fingerprint": new_fp},
+                         headers=ui_auth)
+        assert rr.status_code == 200, rr.text
+        assert self._pin_row(app_module, "repin-hp-1", 2200)["fingerprint"] == new_fp
+        repins = self._board_events(app_module, "provisioning.host_key_repinned")
+        assert repins and repins[-1]["old"] == canonical
+        assert repins[-1]["new"] == new_fp
+        assert repins[-1]["port"] == 2200
+        live_row = _job(client, ui_auth, live_id)
+        assert live_row["state"] == "failed"
+        assert live_row["error_code"] == "pin.invalidated"
+
+    def test_repin_hex_input_normalized(self, client, ui_auth, app_module):
+        hex_fp = "b" * 64  # the digest in hex form
+        expected = "SHA256:" + base64.b64encode(
+            bytes.fromhex(hex_fp)).decode().rstrip("=")
+        rr = client.post("/api/executors/provision/host/repin-hex-1/repin",
+                         json={"fingerprint": hex_fp}, headers=ui_auth)
+        assert rr.status_code == 200, rr.text
+        assert (self._pin_row(app_module, "repin-hex-1", 22)["fingerprint"]
+                == expected)
+
+    def test_repin_bad_host_charset_422(self, client, ui_auth):
+        rr = client.post("/api/executors/provision/host/x%3B%20reboot/repin",
+                         json={"fingerprint": FP_B}, headers=ui_auth)
+        assert rr.status_code == 422
+
+    def test_terminal_job_not_resurrected(self, app_module):
+        job_id = _live_job_direct(app_module, "terminal-1")
+        app_module.store.update_provision_job(job_id, state="failed",
+                                              error_code="ssh.unreachable")
+        row = app_module.store.update_provision_job(job_id, state="done")
+        assert row["state"] == "failed"  # terminal is terminal
+
+
+# ------------------------------------------------------- cooldown TZ (P3)
+class TestCooldownTimezone:
+    def test_cooldown_is_host_tz_neutral(self, client, ui_auth, app_module,
+                                         monkeypatch):
+        # a failed job arms the 90 s cooldown; on a non-UTC host the old
+        # mktime+timezone math drifted by multiples of the offset and the
+        # gate disarmed (age went negative). With TZ set to UTC+10 the
+        # gate must STILL hold right after the job.
+        _noop_worker(app_module, monkeypatch)
+        job_id = _live_job_direct(app_module, "tz-cool-1")
+        app_module.store.update_provision_job(job_id, state="failed",
+                                              error_code="ssh.unreachable")
+        import os
+        import time as time_mod
+        old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Asia/Vladivostok"
+        time_mod.tzset()
+        try:
+            r = _provision(client, ui_auth, host="tz-cool-1")
+            assert r.status_code == 429
+            assert "cooldown" in r.json()["detail"]
+        finally:
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+            time_mod.tzset()
+
+
 # ------------------------------------------------------------------ restart
 class TestRestart:
     def test_live_jobs_fail_on_restart(self, client, ui_auth, app_module,

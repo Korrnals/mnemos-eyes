@@ -324,7 +324,7 @@ class Provisioner:
             "auth_kind": facts.auth_kind, "enrollment_id": facts.enrollment_id})
         step("connecting", f"ssh connect {facts.host}:{facts.port}")
 
-        known_pin = self._store.get_host_pin(facts.host)
+        known_pin = self._store.get_host_pin(facts.host, facts.port)
         expected = facts.expected_host_key_fingerprint or (
             known_pin["fingerprint"] if known_pin else "")
         policy = HostKeyPolicy(expected=expected)
@@ -347,15 +347,17 @@ class Provisioner:
 
         try:
             if not expected:
-                # TOFU: first contact — pin what the host presented.
+                # TOFU: first contact — pin what the host presented, per
+                # host:port identity (P2-1: different ports are different
+                # endpoints with different keys).
                 fp = policy.presented_fingerprint
                 if fp:
-                    self._store.set_host_pin(facts.host, fp)
+                    self._store.set_host_pin(facts.host, facts.port, fp)
                     self._store.update_provision_job(
                         facts.job_id, host_key_fingerprint=fp)
                     self._audit(kind="provisioning.host_key_pinned", payload={
                         "job_id": facts.job_id, "host": facts.host,
-                        "fingerprint": fp})
+                        "port": facts.port, "fingerprint": fp})
                     step(None, f"host key pinned (TOFU): {fp}")
 
             # Sudo preflight (design §A, P2-4): the bootstrap is a root
