@@ -887,7 +887,18 @@ async def add_security_headers(request: Request, call_next):
 
 
 # --------------------------------------------------------------------- models
+# BE-15: unknown keys are an honest 422 (extra="forbid") — silently dropping
+# a typo'd field (QA lesson 2026-09-22: "description" vanished) hides client
+# bugs. Declared-but-ignored keys are the documented exceptions, each pinned
+# by a test:
+#   - TaskCreate.id      — UI-7 v1.1.3-era clients still send it; the
+#                          server-generated id stays authoritative (never
+#                          honored — see store.create_task callers).
+#   - TaskPatch.col      — v1 semantics: columns move via POST /move, a
+#                          PATCH carrying col is a no-op for that key.
 class TaskCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(min_length=1, max_length=200)
     summary: str = ""
     spec: str = ""
@@ -903,15 +914,23 @@ class TaskCreate(BaseModel):
     project: str = ""
     memory_ids: list[str] = []
     mnemos_tags: list[str] = []
+    # Legacy tolerated key (UI-7 v1.1.3-era clients): accepted, never
+    # honored — the response always carries the server-generated id.
+    id: str | None = None
 
 
 class TaskPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = None
     summary: str | None = None
     spec: str | None = None
     # BE-10: full workflow dictionary (incl. `withdrawn`, which has no
     # board column); lives until the next column move — see store.move_task.
     status: str | None = None
+    # Legacy no-op (pinned v1 semantics): columns move via POST /move —
+    # the store allow-list silently skips this key (NOT a 422).
+    col: str | None = None
     # BE-12: content edit of a task older than 24h (EDITABLE_FIELDS) is
     # rejected with 423 unless the request opts in here. Status changes are
     # workflow transitions and stay free at any age (UI-8 «Вернуть в работу»).
@@ -1905,9 +1924,14 @@ async def create_task(body: TaskCreate, request: Request) -> TaskOut:
     if body.col not in VALID_STATUSES:
         raise HTTPException(422, f"invalid col: {body.col}")
     _validate_agents(body.agents)  # ADR 0005: harnesses only
+    dump = body.model_dump()
+    # Legacy tolerated key (UI-7 v1.1.3-era clients): accepted, NEVER
+    # honored — the server-generated id stays authoritative (store.create_task
+    # would otherwise adopt payload["id"]).
+    dump.pop("id", None)
     # store raises ValueError on unknown env/col — surface as 422, not 500
     try:
-        task = store.create_task(body.model_dump(),
+        task = store.create_task(dump,
                                  actor=_device_actor(request))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
