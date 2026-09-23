@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
 import { TagBadge } from "@/components/TagBadge/TagBadge";
+import { TextEngine } from "@/components/TextEngine";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { InboxEditInput, TaskInboxEntry } from "@/gateway/boardTypes";
@@ -390,9 +391,16 @@ function InboxExpandedDetails({ item }: { item: TaskInboxEntry }) {
             {t("tasks.inboxFullTextFailed")}
           </p>
         ) : (
-          <p className="mt-1 whitespace-pre-line text-xs text-foreground-secondary">
-            {memory.data?.content}
-          </p>
+          /* UI-27: the source record text renders through the TextEngine
+           * primitive — the owner's raw `##`/`**` complaint surface. Plain
+           * records keep the legacy pre-wrap output; markdown records
+           * render formatted (full, clamped with «показать полностью»). */
+          <TextEngine
+            text={memory.data?.content}
+            variant="full"
+            clamp
+            className="mt-1"
+          />
         )}
       </div>
     </div>

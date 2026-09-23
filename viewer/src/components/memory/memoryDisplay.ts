@@ -21,12 +21,6 @@ export function memoryTitle(memory: Memory): string {
   return content.length > 60 ? `${content.slice(0, 60).trimEnd()}…` : content;
 }
 
-/** First `max` characters of the effective content (inventory §4: 120 chars). */
-export function memorySnippet(memory: Memory, max = 120): string {
-  const content = memoryEffectiveContent(memory).trim();
-  return content.length > max ? `${content.slice(0, max).trimEnd()}…` : content;
-}
-
 /**
  * Rule/code memories render in mono (D11: frozen — Lora for everything else).
  * The tag contract spells these `type:rule` / `mnemos:rule` / `*:code`; any

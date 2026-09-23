@@ -65,6 +65,14 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  // UI-27 chunking note: the markdown parser (react-markdown + remark-gfm,
+  // ~48 KB gzip) must stay out of the entry and out of route chunks whose
+  // texts are plain previews. This is achieved purely by module graph
+  // hygiene — components/TextEngine/index.ts must NOT statically re-export
+  // MarkdownView; the renderer is reachable only through TextEngine's
+  // dynamic import() (docs keep their own static react-markdown usage, as
+  // before). No manualChunks: forcing one here made Rollup merge unrelated
+  // shared modules into the vendor chunk and widened its static fan-in.
   server: {
     proxy: DEV_ADAPTER.includes("board")
       ? {

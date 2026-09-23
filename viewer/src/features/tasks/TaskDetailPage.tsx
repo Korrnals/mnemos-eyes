@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton, TableRowSkeleton } from "@/components/skeletons/Skeletons";
+import { TextEngine } from "@/components/TextEngine";
 import { TaskExecutionTab } from "@/features/agents/TaskExecutionTab";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
@@ -365,9 +366,10 @@ function ReportsTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
                 {formatTaskDate(report.created_at, lang)}
               </span>
             </summary>
-            <p className="mt-2 whitespace-pre-wrap text-foreground-secondary">
-              {report.body}
-            </p>
+            {/* UI-27: agent report bodies are markdown almost by definition —
+             * they render through the TextEngine primitive (plain fallback
+             * keeps legacy output for terse one-liners). */}
+            <TextEngine text={report.body} variant="full" className="mt-2" />
           </details>
         </li>
       ))}
@@ -580,15 +582,31 @@ function DetailsTab({ task, lang }: { task: BoardTask; lang: "ru" | "en" }) {
         <h2 className="text-sm font-medium text-foreground-secondary">
           {t("tasks.detailsSummaryLabel")}
         </h2>
-        <p className="mt-1 whitespace-pre-wrap text-sm">{current.summary || "—"}</p>
+        {current.summary ? (
+          /* UI-27: summary is author text — through the TextEngine primitive. */
+          <TextEngine
+            text={current.summary}
+            variant="compact"
+            className="mt-1 text-sm"
+          />
+        ) : (
+          <p className="mt-1 text-sm">—</p>
+        )}
       </section>
       <section aria-label={t("tasks.detailsSpecLabel")}>
         <h2 className="text-sm font-medium text-foreground-secondary">
           {t("tasks.detailsSpecLabel")}
         </h2>
-        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-well p-3 font-mono text-xs leading-relaxed text-foreground-secondary">
-          {current.spec || "—"}
-        </pre>
+        {current.spec ? (
+          /* UI-27: the spec is the task's markdown document (headings,
+           * checklists, code) — formatted in the well box; plain specs keep
+           * the legacy pre-wrap look inside the same box. */
+          <div className="mt-1 rounded-md border border-border-subtle bg-well p-3">
+            <TextEngine text={current.spec} variant="full" className="text-sm" />
+          </div>
+        ) : (
+          <p className="mt-1 text-sm">—</p>
+        )}
       </section>
       <section aria-label={t("tasks.detailsMetaLabel")}>
         <h2 className="text-sm font-medium text-foreground-secondary">
