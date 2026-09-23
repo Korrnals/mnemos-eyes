@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TextEngine } from "@/components/TextEngine";
 import {
   Dialog,
   DialogContent,
@@ -168,9 +169,14 @@ export function AssignmentDrawer({
                 {t("agents.drawer.reportLoading")}
               </p>
             ) : lastFinal ? (
-              <p className="mt-1 line-clamp-4 whitespace-pre-wrap rounded-md border border-border-subtle bg-well p-2 text-xs text-foreground-secondary">
-                {lastFinal.body}
-              </p>
+              /* UI-27 + owner clamp directive: the report preview is author
+               * text — through the TextEngine primitive with the measured
+               * clamp. Replaces the hard 4-line CSS cut: long finals get the
+               * inline «показать полностью» expand instead of an unreadable
+               * truncation. */
+              <div className="mt-1 rounded-md border border-border-subtle bg-well p-2 text-xs text-foreground-secondary">
+                <TextEngine text={lastFinal.body} variant="compact" clamp />
+              </div>
             ) : (
               <p className="mt-1 text-xs text-foreground-muted">
                 {t("agents.drawer.reportNone")}

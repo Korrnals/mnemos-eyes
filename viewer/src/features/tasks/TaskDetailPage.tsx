@@ -368,8 +368,12 @@ function ReportsTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
             </summary>
             {/* UI-27: agent report bodies are markdown almost by definition —
              * they render through the TextEngine primitive (plain fallback
-             * keeps legacy output for terse one-liners). */}
-            <TextEngine text={report.body} variant="full" className="mt-2" />
+             * keeps legacy output for terse one-liners). The <details> row is
+             * a disclosure, so the body clamps with «показать полностью» —
+             * a long report opens to its height, the tab never turns into an
+             * unbounded wall of report text (owner directive: clamp on every
+             * disclosure). */}
+            <TextEngine text={report.body} variant="full" clamp className="mt-2" />
           </details>
         </li>
       ))}
