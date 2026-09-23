@@ -1261,6 +1261,9 @@ export const en: Record<TranslationKey, string> = {
 
   // --- shared empty/error ----------------------------------------------------------
   "common.retry": "Retry",
+
+  // --- UI-27: TextEngine (author text — markdown engine) ----------------------------
+  "text.showFull": "Show full text",
   "empty.offlineNote":
     "If you are running against a live mnemos, check that the API is up and that the dev proxy (/api → mnemos) is reachable. Browser requests stay CORS-gated during development.",
   "app.loadingView": "Loading view",

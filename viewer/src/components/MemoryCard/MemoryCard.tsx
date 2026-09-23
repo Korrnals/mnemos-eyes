@@ -1,9 +1,10 @@
 import { Link } from "react-router";
 import { TagBadge } from "@/components/TagBadge/TagBadge";
+import { TextEngine } from "@/components/TextEngine";
 import {
   formatConfidence,
   formatTimestamp,
-  memorySnippet,
+  memoryEffectiveContent,
   memoryTitle,
 } from "@/components/memory/memoryDisplay";
 import { statusBadgeVariant, statusLabelKey } from "@/components/memory/memoryBadges";
@@ -58,9 +59,18 @@ export function MemoryCard({ memory, className, returnSource }: MemoryCardProps)
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="line-clamp-3 font-scroll text-sm leading-relaxed text-foreground">
-          {memorySnippet(memory)}
-        </p>
+        {/* UI-27: the snippet goes through the TextEngine primitive — plain
+         * prose renders exactly as before (pre-wrap), markdown-carrying
+         * memories render formatted (compact) and CSS-clamp to the same
+         * 3-line card rhythm. Full content instead of the 120-char cut:
+         * the line clamp owns the preview height, the title link opens the
+         * detail scroll (no in-card expand button — one link action per
+         * card, component-inventory §4). */}
+        <TextEngine
+          text={memoryEffectiveContent(memory)}
+          variant="compact"
+          className="line-clamp-3 font-scroll text-sm leading-relaxed text-foreground"
+        />
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="outline">{memory.memory_type}</Badge>
           {(memory.tags ?? []).map((tag) => (

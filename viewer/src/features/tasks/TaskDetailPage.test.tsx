@@ -149,7 +149,10 @@ describe("TaskDetailPage (mock adapter)", () => {
       seedAll,
     );
     expect(html).toContain("Specification");
-    expect(html).toContain("<pre");
+    // UI-27: the spec renders through TextEngine — this mock spec is plain
+    // prose (em-dash dashes, no markdown syntax), so the plain path keeps
+    // the verbatim pre-wrap output inside the well box (no <pre> anymore).
+    expect(html).toContain("whitespace-pre-wrap");
     expect(html).toContain("Metadata");
     expect(html).toContain("Acceptance criteria");
     expect(html).toContain("mnemos:decision");
