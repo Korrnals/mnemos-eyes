@@ -249,3 +249,69 @@ class TestAgentsAreHarnessesNotRoles:
                          json={"agents": ["zcode", "hermes"]}, headers=auth)
         assert r.status_code == 200
         assert r.json()["agents"] == ["zcode", "hermes"]
+
+
+class TestUnknownFieldsRejected422:
+    """BE-15 (QA lesson 2026-09-22): unknown keys used to be silently
+    dropped (pydantic default) — a client sending ``description`` got 200
+    and the text vanished. Honest contract: unknown keys answer 422 naming
+    the offending field. Declared-but-ignored legacy keys (Create.id,
+    Patch.col) stay tolerated — pinned in test_task_status_field.py and
+    test_task_priority_edit_window.py."""
+
+    def test_create_unknown_field_422_names_it(self, client, auth):
+        r = client.post("/api/tasks",
+                        json={"title": "x", "description": "junk"},
+                        headers=auth)
+        assert r.status_code == 422
+        assert "description" in r.text
+
+    def test_patch_unknown_field_422_names_it(self, client, auth, make_task):
+        task = make_task(title="be15-patch")
+        r = client.patch(f"/api/tasks/{task['id']}",
+                         json={"description": "junk"}, headers=auth)
+        assert r.status_code == 422
+        assert "description" in r.text
+
+    def test_create_accepts_every_known_field(self, client, auth):
+        r = client.post("/api/tasks", json={
+            "title": "be15 full", "summary": "sum", "spec": "spec",
+            "col": "open", "status": "open", "priority": "high",
+            "env": "laptop", "agents": ["zcode"], "specialists": ["@GCW: QA"],
+            "project": "be15", "memory_ids": ["m-1"],
+            "mnemos_tags": ["be15"],
+        }, headers=auth)
+        assert r.status_code == 201, r.text
+        body = r.json()
+        client.delete(f"/api/tasks/{body['id']}", headers=auth)
+        for key, expected in (("summary", "sum"), ("spec", "spec"),
+                              ("col", "open"), ("status", "open"),
+                              ("priority", "high"), ("env", "laptop"),
+                              ("agents", ["zcode"]),
+                              ("specialists", ["@GCW: QA"]),
+                              ("project", "be15"),
+                              ("memory_ids", ["m-1"]),
+                              ("mnemos_tags", ["be15"])):
+            assert body[key] == expected, key
+
+    def test_patch_accepts_every_content_field(self, client, auth, make_task):
+        task = make_task(title="be15 patch-all")
+        r = client.patch(f"/api/tasks/{task['id']}", json={
+            "title": "be15 patched", "summary": "sum2", "spec": "spec2",
+            "priority": "low", "env": "local", "agents": ["hermes"],
+            "specialists": ["@GCW: Tech Lead"], "project": "be15b",
+            "memory_ids": [], "mnemos_tags": [],
+        }, headers=auth)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["title"] == "be15 patched"
+        assert body["env"] == "local"
+        assert body["agents"] == ["hermes"]
+
+    def test_patch_partial_does_not_break(self, client, auth, make_task):
+        task = make_task(title="be15 partial", summary="keep me")
+        r = client.patch(f"/api/tasks/{task['id']}",
+                         json={"summary": "only this"}, headers=auth)
+        assert r.status_code == 200, r.text
+        assert r.json()["summary"] == "only this"
+        assert r.json()["title"] == "be15 partial"
