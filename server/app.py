@@ -4751,6 +4751,25 @@ async def tasks_inbox(scope: str = "all", project: str = "",
     )
 
 
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str) -> TaskOut:
+    """Task detail by id (BE-16): one handler for BOTH active and archived
+    tasks. The store keeps them in a single ``tasks`` table split only by
+    the ``archived`` flag and ``store.task`` applies no archived filter, so
+    the response shape never diverges from the board/PATCH TaskOut — the
+    SPA may drop its archive-list probe (UI-18 pair 4) without adding a
+    single conditional beyond 404. Read-only: covered by the global device
+    read wildcard (``GET /api/tasks*``) and, like every other task read,
+    open without a token; DELETE hard-deny and archive/unarchive mutations
+    are untouched. Registered AFTER ``GET /api/tasks/inbox`` on purpose:
+    FastAPI matches routes in registration order and ``{task_id}`` would
+    otherwise swallow the static inbox path."""
+    task = store.task(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+    return task
+
+
 @app.post("/api/tasks/inbox/refresh")
 async def tasks_inbox_refresh(request: Request) -> TaskInboxRefreshOut:
     """Force one inbox scan synchronously (mutation-action). The mnemos

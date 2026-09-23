@@ -131,6 +131,65 @@ class TestTaskCrudApi:
         assert r.status_code == 404
 
 
+class TestTaskDetailGet:
+    """BE-16: GET /api/tasks/{task_id} resolves a task by id for BOTH
+    active and archived rows with the SAME TaskOut shape — the server fix
+    that lets the SPA drop its archive-list probe (UI-18 pair 4).
+
+    Regression triple: archived task resolvable by id (no shape
+    divergence), active-task response byte-identical to the shipped
+    TaskOut, unknown id still 404. Reads stay open: no token and any
+    token class must pass exactly as for the other task reads."""
+
+    def test_active_task_byte_identical_to_created_and_board(
+            self, client, auth, make_task):
+        task = make_task(title="detail-active")
+        r = client.get(f"/api/tasks/{task['id']}")
+        assert r.status_code == 200, r.text
+        # byte-identical to the TaskOut the create call already returned…
+        assert r.json() == task
+        # …and to the board projection of the same row
+        board_row = next(t for t in client.get("/api/board").json()["tasks"]
+                         if t["id"] == task["id"])
+        assert r.json() == board_row
+
+    def test_archived_task_resolvable_same_shape(
+            self, client, auth, make_task):
+        active = make_task(title="detail-shape-ref")
+        task = make_task(title="detail-archived")
+        assert client.post(f"/api/tasks/{task['id']}/archive",
+                           headers=auth).status_code == 200
+
+        r = client.get(f"/api/tasks/{task['id']}")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["archived"] == 1
+        assert body["archived_from"] == task["col"]
+
+        # no shape divergence: identical key set as an active detail…
+        active_body = client.get(f"/api/tasks/{active['id']}").json()
+        assert set(body) == set(active_body)
+        # …and byte-identical to the archive-list item the SPA probe
+        # (UI-18 pair 4) used to search client-side — the client can drop
+        # the probe without a single new conditional beyond 404.
+        archive_items = client.get("/api/archive?limit=200").json()["items"]
+        assert body == next(i for i in archive_items
+                            if i["id"] == task["id"])
+
+    def test_detail_get_open_without_token(self, client, make_task):
+        task = make_task(title="detail-no-token")
+        assert client.get(f"/api/tasks/{task['id']}").status_code == 200
+
+    def test_detail_get_open_for_machine_token(self, client, auth,
+                                               make_task):
+        task = make_task(title="detail-machine-read")
+        r = client.get(f"/api/tasks/{task['id']}", headers=auth)
+        assert r.status_code == 200
+
+    def test_missing_task_404(self, client):
+        assert client.get("/api/tasks/no-such-id").status_code == 404
+
+
 class TestBE1InvalidEnvIs422Never500:
     """BE-1: store-level ValueError (unknown env / col) must surface as
     HTTP 422 from POST and PATCH, never as an unhandled 500."""
