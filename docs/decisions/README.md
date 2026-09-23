@@ -21,3 +21,4 @@ one decision. The authoritative summary lives in [`../CHARTER.md`](../CHARTER.md
 | [0011](0011-ui-convergence.md) | Конвергенция фронтендов в единое web-приложение (strangler Ф0–Ф4) | Accepted by committee — pending owner ratification |
 | [0012](0012-qr-pairing-device-tokens.md) | QR-пейринг и device-токены (LAN-direct, `mnd_`) | Accepted by committee — pending owner ratification |
 | [0015](0015-documentation-section.md) | Раздел документации (/docs) — markdown в бандле UI, без бэкенда | Accepted by committee |
+| [0016](0016-docs-upstream-import.md) | Импорт документации апстрим-проектов в /docs — sync-пайплайн на зафиксированном SHA, хабы проектов, билингво | Accepted by committee — pending owner ratification |

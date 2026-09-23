@@ -6,8 +6,8 @@ import { useT } from "@/i18n";
 import { useTaskInbox } from "@/features/tasks/useTasks";
 import { useSessionControl } from "@/features/ui-token/useSessionControl";
 import { useBoardHealth } from "@/hooks/usePulse";
+import { DocsSidebarGroups } from "@/features/docs/DocsSidebarGroups";
 import { NAV_DOMAINS, activeDomain, isPathActive } from "./navItems";
-import { isDocsSectionActive } from "@/features/docs/docsNav";
 import type { NavDomain, NavSection } from "./navItems";
 import { cn } from "@/lib/utils";
 
@@ -130,6 +130,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {openDomain?.to === domain.to && domain.to === "/docs" ? (
+                // The docs domain's THIRD layer (ADR 0016 / design spec §3):
+                // project groups with nested categories, expanded from the
+                // pathname alone. Owns its rail geometry + icon-rail fallback.
+                <DocsSidebarGroups collapsed={collapsed} hideLabels={hideLabels} />
               ) : null}
             </li>
           ))}
@@ -264,17 +270,13 @@ function SectionLink({
   // Records ("/memory") must highlight on its detail route too
   // ("/memory/:id") — the list is the master of the master-detail pair.
   // The task list ("/tasks") likewise owns its detail route ("/tasks/:id").
-  // Docs sections light up on their ARTICLES too: slug → category goes
-  // through the docs manifest (design spec §2 — базовый isPathActive не
-  // знает про slug→category).
+  // (Docs sections moved to DocsSidebarGroups — projects → categories.)
   const active =
     section.to === "/memory"
       ? pathname === "/memory" || /^\/memory\/[^/]+$/.test(pathname)
       : section.to === "/tasks"
         ? pathname === "/tasks" || /^\/tasks\/[^/]+$/.test(pathname)
-        : section.to.startsWith("/docs/c/")
-          ? isDocsSectionActive(pathname, section.to)
-          : isPathActive(pathname, section.to, section.end);
+        : isPathActive(pathname, section.to, section.end);
   return (
     <Link
       to={section.to}

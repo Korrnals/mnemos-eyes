@@ -1,18 +1,19 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToString } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 
 import { Markdown } from "./Markdown";
 import { extractHeadings } from "./headingSlug";
-import { parseFrontmatter, stripLeadingH1 } from "./manifest";
+import { getManifest, parseFrontmatter, stripLeadingH1 } from "./manifest";
 import hostileRaw from "./__fixtures__/hostile.md?raw";
 
 /**
  * Markdown.tsx gates (contract §9.2/§9.4, §10): gfm tables render, links
- * are classed (external → noopener/new tab, /docs → SPA Link), raw HTML
- * never becomes DOM, and the HOSTILE fixture produces no script/iframe/
- * event-handler nodes with http/https/mailto/#/relative-only hrefs.
+ * are classed (external → noopener/new tab, /docs → SPA Link), corpus-internal
+ * references resolve through the manifest (W1c), raw HTML never becomes DOM,
+ * and the HOSTILE fixture produces no script/iframe/event-handler nodes with
+ * http/https/mailto/#/relative-only hrefs.
  */
 
 function render(source: string): string {
@@ -85,6 +86,86 @@ describe("markdown rendering", () => {
     expect(html).toContain("bash");
     expect(html).toContain("helm upgrade mnemos");
     expect(html).toContain('aria-live="polite"');
+  });
+});
+
+describe("corpus link internalization (W1c)", () => {
+  const warnSpy = vi.spyOn(console, "warn");
+
+  afterEach(() => {
+    warnSpy.mockClear();
+  });
+
+  function renderWithSlug(source: string, pageSlug: string): string {
+    return renderToString(
+      <MemoryRouter>
+        <Markdown source={source} pageSlug={pageSlug} />
+      </MemoryRouter>,
+    );
+  }
+
+  it("resolves our relative slug.md references through the manifest", async () => {
+    await getManifest(); // the resolver reads the hydrated manifest
+    const html = renderWithSlug("[токены](tokens.md)\n", "pairing");
+    const href = /href="([^"]*)"/.exec(html)?.[1];
+    expect(href).toBe("/docs/vesmaro-eyes/tokens");
+  });
+
+  it("resolves upstream board slugs (sync form) into project-scoped URLs", async () => {
+    await getManifest();
+    const html = renderWithSlug(
+      "[http api](mnemos/user/http-api) [mesh](mnemos-mesh/user/configuration)\n",
+      "mnemos/user/getting-started",
+    );
+    expect(html).toContain('href="/docs/mnemos/user/http-api"');
+    expect(html).toContain('href="/docs/mnemos-mesh/user/configuration"');
+  });
+
+  it("keeps #anchors on internalized links", async () => {
+    await getManifest();
+    const html = renderWithSlug(
+      "[stats](mnemos/user/cli-reference#stats)\n",
+      "mnemos/user/sync",
+    );
+    expect(html).toContain('href="/docs/mnemos/user/cli-reference#stats"');
+  });
+
+  it("styles unresolvable .md refs as broken and warns (no crash)", async () => {
+    await getManifest();
+    const html = renderWithSlug("[призрак](ghost-page.md)\n", "pairing");
+    const anchor = /<a[^>]*href="ghost-page\.md"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(anchor).toContain("text-foreground-muted"); // broken styling
+    expect(
+      warnSpy.mock.calls.some((call) => String(call[0]).includes("ghost-page.md")),
+    ).toBe(true);
+  });
+
+  it("leaves external .md URLs external (never corpus-broken)", async () => {
+    await getManifest();
+    const html = renderWithSlug(
+      "[contrib](https://github.com/example/repo/blob/abcdef/CONTRIBUTING.md)\n",
+      "mnemos/user/sync",
+    );
+    const anchor = /<a[^>]*href="https:\/\/github\.com[^"]*"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(anchor).toContain('rel="noopener noreferrer"');
+    expect(anchor).toContain('target="_blank"');
+  });
+});
+
+describe("upstream typography (W1c spec §9)", () => {
+  it("renders h5 with the text-sm/medium look (order preserved, no TOC entry)", () => {
+    const html = render("##### Тонкий заголовок\n");
+    expect(html).toContain("<h5");
+    expect(html).toContain("text-sm");
+    expect(html).not.toContain('id="тонкий-заголовок"'); // TOC stays h2/h3
+  });
+
+  it("keeps wide tables scrollable inside their wrapper (72ch measure holds)", () => {
+    const html = render(
+      "| col1 | col2 | col3 |\n| --- | --- | --- |\n| a | b | c |\n",
+    );
+    const table = /<div[^>]*>[\s\S]*?<table/.exec(html)?.[0] ?? "";
+    expect(table).toContain("overflow-x-auto");
   });
 });
 

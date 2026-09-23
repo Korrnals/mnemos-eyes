@@ -1078,16 +1078,16 @@ export const ru = {
   "overview.agentsAll": "Исполнение",
   "overview.autoLaunchesToday": "авто-запусков сегодня: {{count}}",
 
-  // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
+  // --- docs section (ADR 0015/0016, contract 2026-09-23 §§4–6) ---------------------
   "nav.docs": "Документация",
-  "docs.index.lede": "Справочник по бору: от первого запуска до обновления.",
   "docs.cat.product": "О продукте",
   "docs.catDesc.product": "Что такое mnemos и vesmaro-eyes: концепции и словарь.",
   "docs.cat.gettingStarted": "Начало работы",
   "docs.catDesc.gettingStarted":
     "Развёртывание борда и первый вход — с нуля до рабочего места.",
-  "docs.cat.board": "Панель и группы",
-  "docs.catDesc.board": "Группы памяти и канбан-доска: структура и работа с записями.",
+  "docs.cat.board": "Доска и группы",
+  "docs.catDesc.board":
+    "Группы проектов и канбан-доска: структура и повседневная работа с задачами.",
   "docs.cat.agents": "Агенты и поручения",
   "docs.catDesc.agents": "Поручения, исполнители и отчёты об исполнении.",
   "docs.cat.automation": "Автоматизация",
@@ -1101,6 +1101,20 @@ export const ru = {
     "Бэкап, обновление и диагностика — что делать, когда что-то пошло не так.",
   "docs.cat.faq": "Частые вопросы",
   "docs.catDesc.faq": "Короткие ответы на частые вопросы.",
+  // Imported hubs (contract §4 — формулировки по спеке хабов §2).
+  "docs.cat.mnemosUser": "Пользователю",
+  "docs.catDesc.mnemosUser":
+    "Установка, первый прогон, синхронизация и справочники — повседневная работа с сервером памяти.",
+  "docs.cat.mnemosAdmin": "Администратору",
+  "docs.catDesc.mnemosAdmin":
+    "Безопасность, федерация и операционные ранбуки для администратора mnemos.",
+  "docs.cat.mnemosArchitecture": "Архитектура",
+  "docs.catDesc.mnemosArchitecture":
+    "Обзор устройства mnemos: гибридная память и поверхности управления.",
+  "docs.cat.meshUser": "Пользователю",
+  "docs.catDesc.meshUser": "Запуск узла mnemos-mesh и настройка федерации.",
+  "docs.cat.meshAdmin": "Администратору",
+  "docs.catDesc.meshAdmin": "Эксплуатация и безопасность узла mnemos-mesh.",
   "docs.search.placeholder": "Поиск по документации",
   "docs.search.ariaLabel": "Поиск по документации",
   "docs.search.resultsLabel": "Результаты поиска",
@@ -1108,17 +1122,36 @@ export const ru = {
   "docs.search.noResults": "По запросу «{{query}}» ничего не найдено",
   "docs.search.noResultsHint":
     "Попробуйте одно слово: «токен» вместо «ротация токенов»",
+  "docs.search.localeHint":
+    "Некоторые страницы доступны только на одном языке — переключите язык интерфейса (RU|EN в шапке).",
   "docs.toc.title": "На этой странице",
   "docs.prev": "Предыдущая",
   "docs.next": "Следующая",
   "docs.prevNextNav": "Навигация по страницам",
   "docs.badge.verified": "актуально для v{{version}}",
-  "docs.localeFallback": "Доступно на русском",
+  "docs.localeOriginal": "На языке оригинала ({{lang}})",
+  "docs.lang.ru": "русский",
+  "docs.lang.en": "английский",
+  "docs.provenance.badge": "из {{repo}}@{{sha}} · синхр. {{date}}",
+  "docs.provenance.full":
+    "Импортировано из репозитория {{repo}}, коммит {{sha}}, синхронизировано {{date}}",
+  "docs.hub.start": "С чего начать",
+  "docs.hub.categories": "Категории",
+  "docs.hub.vesmaroEyes.lede":
+    "Справочник по борду: от первого запуска до обновления — доска, агенты, токены и обслуживание.",
+  "docs.hub.mnemos.lede":
+    "Сервер памяти для ИИ-агентов: колодец записей, поиск по смыслу и хранилище под контрактом тегов. Здесь — руководства пользователя и администратора и обзорная архитектура.",
+  "docs.hub.mnemosMesh.lede":
+    "Федерация хранилищ: поднять узел mnemos-mesh, настроить канал и эксплуатировать связку двух инстансов.",
+  "docs.hub.coverage.both": "Доступно на русском и английском",
+  "docs.hub.coverage.ru": "Доступно на русском",
+  "docs.hub.coverage.en": "Доступно на английском",
+  "docs.hub.coverage.mixed": "Частично переведено (ru+en)",
   "docs.copy.code": "Скопировать код",
   "docs.copy.done": "Код скопирован",
   "docs.notFound.title": "Такой страницы нет",
   "docs.notFound.message": "Проверьте адрес или вернитесь к списку категорий.",
-  "docs.notFound.cta": "Все категории",
+  "docs.notFound.cta": "Открыть документацию",
   "docs.error.title": "Не удалось показать страницу",
   "docs.loading": "Загрузка…",
   "docs.pages.one": "{{count}} страница",

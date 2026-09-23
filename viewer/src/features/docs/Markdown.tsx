@@ -8,6 +8,7 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { createHeadingSlugger } from "./headingSlug";
 import { resolveDocImageUrl } from "./docsAssets";
+import { resolveDocLink } from "./docsLinks";
 
 /**
  * The SINGLE react-markdown + remark-gfm point (contract §3, gate §9.4).
@@ -16,6 +17,9 @@ import { resolveDocImageUrl } from "./docsAssets";
  * Element classes follow the design-spec token table (§6–§7) — no literal
  * colours anywhere. In-body images resolve through docsAssets.ts (the one
  * asset glob); absolute http(s) srcs and unknown paths render as-is.
+ * Links: /docs* stay SPA Links, anchors stay plain, and corpus-internal
+ * references (our `slug.md`, upstream board slugs like `mnemos/user/sync`)
+ * resolve through the manifest into project-scoped URLs (W1c — дефект из W2).
  */
 
 // Minimal structural hast shape (avoids importing transitive type packages
@@ -46,6 +50,10 @@ export const DOCS_MARK_CLASS = "rounded-sm bg-iris/15 px-0.5 text-foreground";
 
 const LINK_CLASS =
   "text-iris-bright underline underline-offset-2 transition-colors duration-instant hover:decoration-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright";
+
+/** Unresolvable .md reference — visibly broken, never a crash (W1c gate). */
+const BROKEN_LINK_CLASS =
+  "text-foreground-muted underline decoration-dashed underline-offset-2";
 
 function CopyButton({ code }: { code: string }) {
   const t = useT();
@@ -124,7 +132,7 @@ function CodeBlock({ node }: { node?: HastishNode }) {
   );
 }
 
-function buildComponents(): Components {
+function buildComponents(pageSlug: string | undefined): Components {
   const slug = createHeadingSlugger();
   return {
     h1: ({ node, children }) => (
@@ -155,6 +163,14 @@ function buildComponents(): Components {
     ),
     h4: ({ children }) => (
       <h4 className="text-base font-medium text-foreground">{children}</h4>
+    ),
+    // Upstream typography (design spec §9.2): h5–h6 share one honest look —
+    // text-sm/medium. Order stays visible; TOC remains h2/h3 only.
+    h5: ({ children }) => (
+      <h5 className="text-sm font-medium text-foreground">{children}</h5>
+    ),
+    h6: ({ children }) => (
+      <h6 className="text-sm font-medium text-foreground-secondary">{children}</h6>
     ),
     p: ({ children }) => (
       <p className="mb-4 text-base leading-relaxed text-foreground">{children}</p>
@@ -188,6 +204,28 @@ function buildComponents(): Components {
             {children}
           </a>
         );
+      // Corpus-internal references (slug.md / board slugs) → SPA links;
+      // unresolvable .md refs render visibly broken — never a crash.
+      const resolution = resolveDocLink(href, pageSlug);
+      if (resolution.kind === "internal") {
+        return (
+          <Link to={resolution.to} className={LINK_CLASS}>
+            {children}
+          </Link>
+        );
+      }
+      if (resolution.kind === "broken") {
+        // A content bug the integrity gates should catch — signal it here
+        // without crashing the page (W1c gate) and leave a console trace.
+        console.warn(
+          `[docs] unresolved markdown link "${href}" on page "${pageSlug ?? "?"}"`,
+        );
+        return (
+          <a href={href} className={BROKEN_LINK_CLASS}>
+            {children}
+          </a>
+        );
+      }
       return (
         <a href={href} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
           {children}
@@ -242,13 +280,19 @@ function buildComponents(): Components {
 export interface MarkdownProps {
   source: string;
   className?: string;
+  /**
+   * Slug of the page being rendered — the base for resolving corpus-relative
+   * links (`slug.md`, `../x.md`) through the manifest. Undefined in tests
+   * and previews: relative refs then resolve from the corpus root.
+   */
+  pageSlug?: string;
 }
 
-export function Markdown({ source, className }: MarkdownProps) {
+export function Markdown({ source, className, pageSlug }: MarkdownProps) {
   // Built per render: a fresh object of closures is cheap, and a fresh
   // slug counter per pass keeps h2/h3 anchors deterministic (same heading
   // order → same ids) while restarting per document by construction.
-  const components = buildComponents();
+  const components = buildComponents(pageSlug);
   return (
     <div className={cn("text-base leading-relaxed text-foreground", className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

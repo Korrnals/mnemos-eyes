@@ -1,24 +1,30 @@
 /**
  * The SINGLE `import.meta.glob` for docs static assets (contract §3 pattern
  * — one glob per concern). Resolves in-body image references like
- * `![alt](diagrams/vesmaro-stack.svg)` to bundled URLs. `eager: true` is
- * allowed HERE only: the map holds six URLs, not file content (budget §10 —
- * the markdown chunks stay lazy; the URLs ride the bundle that already
- * imports Markdown.tsx).
+ * `![alt](diagrams/vesmaro-stack.svg)` — and, since the upstream import
+ * (contract §4), vendored refs like `upstream/<project>/<path>.png` — to
+ * bundled URLs. `eager: true` is allowed HERE only: the map holds URLs, not
+ * file content (budget §10 — the markdown chunks stay lazy; the URLs ride
+ * the bundle that already imports Markdown.tsx). The upstream subtree starts
+ * empty (the v1 corpus carries no images); the mask covers the formats the
+ * sync may vendor (svg/webp/png/jpg).
  */
 
-const assets = import.meta.glob<string>("./assets/**/*.{svg,webp}", {
-  query: "?url",
-  import: "default",
-  eager: true,
-}) as Record<string, string>;
+const assets = import.meta.glob<string>(
+  "./assets/**/*.{svg,webp,png,jpg,jpeg}",
+  {
+    query: "?url",
+    import: "default",
+    eager: true,
+  },
+) as Record<string, string>;
 
 /** Glob key (`./assets/diagrams/x.svg`) → key relative to the assets root. */
 function toAssetKey(path: string): string {
   return path.replace(/^\.\/assets\//, "");
 }
 
-/** Keys are corpus-side paths: `diagrams/x.svg`, `screens/y.webp`. */
+/** Keys are corpus-side paths: `diagrams/x.svg`, `upstream/mnemos/y.png`. */
 const ASSET_URLS: ReadonlyMap<string, string> = new Map(
   Object.entries(assets).map(([key, url]) => [toAssetKey(key), url]),
 );

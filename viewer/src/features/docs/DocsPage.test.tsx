@@ -2,19 +2,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Navigate, Route, Routes } from "react-router";
 
 import { DocsPage } from "./DocsPage";
-import { DocsIndexPage } from "./DocsIndexPage";
+import { DocsHubPage } from "./DocsHubPage";
 import { DocsCategoryPage } from "./DocsCategoryPage";
+import { DocsCategoryLegacyRedirect } from "./DocsRedirects";
 import { ZERO_RESULTS_KEY } from "./docsSearch";
 import { loadMarkdown } from "./markdownModules";
 import { I18nProvider } from "@/i18n";
 
 /**
- * /docs pages (contract §10): article render from a slug, unknown slug →
- * not-found with the «Все категории» CTA, prev/next in manifest order, and
- * the header search combobox (results + Enter navigation + zero-result log).
+ * /docs pages under the three-hub IA (ADR 0016, design spec §4–§8, W1c):
+ * articles render from project-scoped URLs, legacy /docs/<slug> redirects
+ * into the default hub (replace, invisible), imported pages carry the
+ * provenance badge, the locale badge works in BOTH directions, prev/next
+ * stays inside the project, hubs are title-page covers with honest status
+ * lines, and unknown URLs land on not-found with the CTA into the hub.
  * Pattern: AutomationPage.test.tsx — happy-dom pragma, createRoot +
  * MemoryRouter; gateway mocks are NOT needed (docs is backend-independent).
  */
@@ -28,9 +32,14 @@ async function mountDocs(path: string, lang: "ru" | "en" = "ru") {
       <I18nProvider initialLang={lang}>
         <MemoryRouter initialEntries={[path]}>
           <Routes>
-            <Route path="/docs" element={<DocsIndexPage />} />
-            <Route path="/docs/c/:category" element={<DocsCategoryPage />} />
-            <Route path="/docs/:slug" element={<DocsPage />} />
+            <Route path="/docs" element={<Navigate to="/docs/vesmaro-eyes" replace />} />
+            <Route path="/docs/c/:category" element={<DocsCategoryLegacyRedirect />} />
+            <Route path="/docs/:project" element={<DocsHubPage />} />
+            <Route
+              path="/docs/:project/c/:category"
+              element={<DocsCategoryPage />}
+            />
+            <Route path="/docs/:project/*" element={<DocsPage />} />
           </Routes>
         </MemoryRouter>
       </I18nProvider>,
@@ -68,17 +77,17 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("article /docs/:slug", () => {
-  it("renders the article from the manifest: chip, version badge, h1, body", async () => {
-    const { root, container } = await mountDocs("/docs/upgrade");
+describe("our article (/docs/vesmaro-eyes/<slug>)", () => {
+  it("renders chip, version badge, h1, body — no locale/provenance badges in ru", async () => {
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes/upgrade");
     await vi.waitFor(() => {
       expect(container.querySelector("h1")?.textContent).toBe("Обновление борда");
     });
     const text = container.textContent ?? "";
     expect(text).toContain("Обслуживание"); // the category chip link
     expect(text).toContain("актуально для v1.13.0"); // last_verified badge
-    // No locale badge under a ru UI (contract §6 — the fallback is en-only).
-    expect(text).not.toContain("Доступно на русском");
+    expect(text).not.toContain("На языке оригинала");
+    expect(text).not.toContain("из mnemos@"); // our pages carry no provenance
     await vi.waitFor(() => {
       expect(
         (container.querySelector("article")?.textContent ?? "").length,
@@ -88,7 +97,7 @@ describe("article /docs/:slug", () => {
   });
 
   it("keeps one h1 per page (the body's own h1 is stripped)", async () => {
-    const { root, container } = await mountDocs("/docs/tokens");
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes/tokens");
     await vi.waitFor(() => {
       expect(container.querySelector("article h1")).not.toBeNull();
     });
@@ -96,62 +105,124 @@ describe("article /docs/:slug", () => {
     root.unmount();
   });
 
-  it("unknown slug → not-found EmptyState with the CTA to /docs", async () => {
-    const { root, container } = await mountDocs("/docs/nope");
+  it("UI=en over a bilingual own page renders the EN mirror — no «оригинал» badge (post-W3)", async () => {
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes/upgrade", "en");
     await vi.waitFor(() => {
-      expect(container.textContent).toContain("Такой страницы нет");
+      expect(container.querySelector("h1")?.textContent).toBe("Upgrading the board");
     });
-    const cta = [...container.querySelectorAll("a")].find((link) =>
-      link.textContent?.includes("Все категории"),
+    expect(container.textContent).not.toContain("In the original language");
+    root.unmount();
+  });
+});
+
+describe("imported article (/docs/mnemos/**, spec §6)", () => {
+  it("renders the provenance badge after the version slot + category chip", async () => {
+    const { root, container } = await mountDocs(
+      "/docs/mnemos/user/getting-started",
     );
-    expect(cta?.getAttribute("href")).toBe("/docs");
+    await vi.waitFor(() => {
+      expect(container.querySelector("h1")?.textContent).toBe("Начало работы");
+    });
+    const text = container.textContent ?? "";
+    expect(text).toContain("Пользователю"); // imported category chip
+    expect(text).not.toContain("актуально для"); // no release badge upstream
+    expect(text).toContain("из mnemos@23f0fce · синхр. 23.09");
+    // Full form rides title/aria-label (whole SHA + dd.mm.yyyy).
+    const badge = [...container.querySelectorAll("[title]")].find((element) =>
+      element.getAttribute("title")?.startsWith("Импортировано из репозитория mnemos"),
+    );
+    expect(badge?.getAttribute("title")).toContain("23f0fce42ea87c329d4049397292b3dca948773c");
+    expect(badge?.getAttribute("title")).toContain("23.09.2026");
+    expect(badge?.getAttribute("aria-label")).toBe(badge?.getAttribute("title"));
     root.unmount();
   });
 
-  it("prev/next follow the manifest order (upgrade sits between backup and troubleshooting)", async () => {
-    const { root, container } = await mountDocs("/docs/upgrade");
+  it("ru UI over a mesh page: the curated ru translation renders, NOT badged as original (post-W3)", async () => {
+    const { root, container } = await mountDocs(
+      "/docs/mnemos-mesh/user/getting-started",
+    );
     await vi.waitFor(() => {
-      expect(container.textContent).toContain("Бэкап и восстановление");
+      expect(container.querySelector("h1")?.textContent).toBe(
+        "Первый запуск mnemos-mesh",
+      );
+    });
+    expect(container.textContent).not.toContain("На языке оригинала");
+    root.unmount();
+  });
+
+  it("prev/next stays inside the project (no cross-project reading, spec §9.7)", async () => {
+    const { root, container } = await mountDocs(
+      "/docs/mnemos/user/getting-started",
+    );
+    await vi.waitFor(() => {
+      expect(container.querySelector("h1")?.textContent).toBe("Начало работы");
     });
     const nav = container.querySelector("nav[aria-label='Навигация по страницам']");
     expect(nav).not.toBeNull();
-    expect(nav?.textContent).toContain("Предыдущая");
+    expect(nav?.textContent).not.toContain("Предыдущая"); // first in project
     expect(nav?.textContent).toContain("Следующая");
     const links = [...(nav?.querySelectorAll("a") ?? [])].map((link) =>
       link.getAttribute("href"),
     );
-    expect(links).toContain("/docs/backup-restore");
-    expect(links).toContain("/docs/troubleshooting");
+    expect(links).toEqual(["/docs/mnemos/user/integration-guide"]);
     root.unmount();
   });
 
-  it("first page has no prev slot (крайние страницы не рисуют пустой слот)", async () => {
-    // Wave 2: the product category opens the reading order — its first page
-    // is the new крайняя страница (deploy now sits behind glossary).
-    const { root, container } = await mountDocs("/docs/what-is-mnemos");
+  it("the LAST page of a project draws no next slot", async () => {
+    const { root, container } = await mountDocs(
+      "/docs/mnemos/architecture/overview",
+    );
     await vi.waitFor(() => {
-      expect(container.querySelector("h1")?.textContent).toBe("Что такое mnemos");
+      expect(container.querySelector("h1")?.textContent).toContain("Архитектура");
     });
     const nav = container.querySelector("nav[aria-label='Навигация по страницам']");
-    const links = [...(nav?.querySelectorAll("a") ?? [])].map((link) =>
-      link.getAttribute("href"),
-    );
-    expect(links).toEqual(["/docs/what-is-vesmaro-eyes"]); // next only
+    expect(nav?.textContent).toContain("Предыдущая");
+    expect(nav?.textContent).not.toContain("Следующая");
+    root.unmount();
+  });
+});
+
+describe("legacy redirects and misses (spec §8)", () => {
+  it("old /docs/<slug> replaces into the default hub and renders the page", async () => {
+    const { root, container } = await mountDocs("/docs/upgrade");
+    await vi.waitFor(() => {
+      expect(container.querySelector("h1")?.textContent).toBe("Обновление борда");
+    });
     root.unmount();
   });
 
-  it("UI=en over a ru-only page shows the neutral locale badge", async () => {
-    const { root, container } = await mountDocs("/docs/upgrade", "en");
+  it("old /docs/c/<category> replaces into the project-scoped category", async () => {
+    const { root, container } = await mountDocs("/docs/c/security");
     await vi.waitFor(() => {
-      expect(container.textContent).toContain("Available in Russian only");
+      expect(container.textContent).toContain("Токены и доступ");
+    });
+    root.unmount();
+  });
+
+  it("unknown slug → not-found EmptyState with the CTA into the hub", async () => {
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes/nope");
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Такой страницы нет");
+    });
+    const cta = [...container.querySelectorAll("a")].find((link) =>
+      link.textContent?.includes("Открыть документацию"),
+    );
+    expect(cta?.getAttribute("href")).toBe("/docs/vesmaro-eyes");
+    root.unmount();
+  });
+
+  it("unknown project namespace → the same not-found (redirect-map miss)", async () => {
+    const { root, container } = await mountDocs("/docs/ghost-project/page");
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Такой страницы нет");
     });
     root.unmount();
   });
 });
 
-describe("docs search combobox (design spec §8)", () => {
-  it("finds pages by a prefix («токен» → both token pages) and Enter opens the active hit", async () => {
-    const { root, container } = await mountDocs("/docs");
+describe("docs search combobox (design spec §8 + §7.3)", () => {
+  it("finds pages by a prefix and Enter opens the active hit at its hub URL", async () => {
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes");
     const input = await vi.waitFor(() => {
       const found = container.querySelector<HTMLInputElement>("input[role='combobox']");
       expect(found).not.toBeNull();
@@ -176,8 +247,8 @@ describe("docs search combobox (design spec §8)", () => {
     root.unmount();
   });
 
-  it("zero results → honest empty text, hint and the localStorage log", async () => {
-    const { root, container } = await mountDocs("/docs");
+  it("zero results → honest empty text, hints and the localStorage log", async () => {
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes");
     const input = await vi.waitFor(() => {
       const found = container.querySelector<HTMLInputElement>("input[role='combobox']");
       expect(found).not.toBeNull();
@@ -188,60 +259,97 @@ describe("docs search combobox (design spec §8)", () => {
       expect(container.textContent).toContain("ничего не найдено");
     });
     expect(container.textContent).toContain("Попробуйте одно слово");
+    // Post-W3 the corpus is fully bilingual → the locale-gap hint stays
+    // silent (it names single-language pages, and none remain).
+    expect(container.textContent).not.toContain("только на одном языке");
     const log = JSON.parse(localStorage.getItem(ZERO_RESULTS_KEY) ?? "[]");
     expect(log).toContain("квантомеханика");
     root.unmount();
   });
+});
 
-  it("Esc closes the list and focus stays in the field", async () => {
-    const { root, container } = await mountDocs("/docs");
-    const input = await vi.waitFor(() => {
-      const found = container.querySelector<HTMLInputElement>("input[role='combobox']");
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    setInput(input, "токен");
+describe("hub covers (design spec §4)", () => {
+  it("vesmaro-eyes hub: 9 category rows with counts, NO provenance badge", async () => {
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes");
     await vi.waitFor(() => {
-      expect(container.querySelector("ul[role='listbox']")).not.toBeNull();
+      expect(container.querySelector("h1")?.textContent).toBe("vesmaro-eyes");
     });
-    act(() => {
-      input.focus();
+    const text = container.textContent ?? "";
+    expect(text).toContain("С чего начать");
+    expect(text).toContain("Первый вход");
+    expect(text).toContain("Категории");
+    expect(container.querySelectorAll("a[href^='/docs/vesmaro-eyes/c/']")).toHaveLength(
+      9,
+    );
+    expect(text).toContain("2 страницы"); // getting-started
+    expect(text).not.toContain("из mnemos@"); // our docs carry no provenance
+    root.unmount();
+  });
+
+  it("mnemos hub: bilingual coverage badge + provenance badge + 3 categories", async () => {
+    const { root, container } = await mountDocs("/docs/mnemos");
+    await vi.waitFor(() => {
+      expect(container.querySelector("h1")?.textContent).toBe("Mnemos");
     });
-    pressKey(input, "Escape");
-    expect(container.querySelector("ul[role='listbox']")).toBeNull();
-    expect(document.activeElement).toBe(input);
+    const text = container.textContent ?? "";
+    expect(text).toContain("Доступно на русском и английском");
+    expect(text).toContain("из mnemos@23f0fce · синхр. 23.09");
+    expect(container.querySelectorAll("a[href^='/docs/mnemos/c/']")).toHaveLength(3);
+    // «С чего начать» links into the imported corpus.
+    expect(
+      container.querySelectorAll("a[href='/docs/mnemos/user/getting-started']").length,
+    ).toBeGreaterThan(0);
+    root.unmount();
+  });
+
+  it("mnemos-mesh hub: bilingual coverage after W3 curated translations", async () => {
+    const { root, container } = await mountDocs("/docs/mnemos-mesh");
+    await vi.waitFor(() => {
+      expect(container.querySelector("h1")?.textContent).toBe("mnemos-mesh");
+    });
+    const text = container.textContent ?? "";
+    expect(text).toContain("Доступно на русском и английском");
+    expect(text).toContain("из mnemos-mesh@331ef3a · синхр. 22.09");
+    expect(container.querySelectorAll("a[href^='/docs/mnemos-mesh/c/']")).toHaveLength(
+      2,
+    );
     root.unmount();
   });
 });
 
-describe("index and category pages", () => {
-  it("index lists all 9 categories with pluralized page counts", async () => {
-    const { root, container } = await mountDocs("/docs");
-    await vi.waitFor(() => {
-      expect(container.textContent).toContain("Начало работы");
-    });
-    const text = container.textContent ?? "";
-    expect(text).toContain("О продукте"); // wave-2: first card
-    expect(text).toContain("Что такое mnemos");
-    expect(text).toContain("2 страницы"); // getting-started
-    expect(text).toContain("3 страницы"); // product/maintenance
-    expect(text).toContain("1 страница"); // board/agents/…
-    expect(container.querySelectorAll("a[href^='/docs/c/']")).toHaveLength(9);
-    root.unmount();
-  });
-
-  it("category page lists its pages with version stamps", async () => {
-    const { root, container } = await mountDocs("/docs/c/security");
+describe("category pages (project-scoped)", () => {
+  it("lists pages with version stamps and hub-scoped links", async () => {
+    const { root, container } = await mountDocs("/docs/vesmaro-eyes/c/security");
     await vi.waitFor(() => {
       expect(container.textContent).toContain("Токены и доступ");
     });
-    const text = container.textContent ?? "";
-    expect(text).toContain("Ротация токенов");
-    // The stamp must mirror the page's own frontmatter, not a pinned number.
+    const links = [...container.querySelectorAll("a[href]")].map((link) =>
+      link.getAttribute("href"),
+    );
+    expect(links).toContain("/docs/vesmaro-eyes/tokens");
     const raw = (await loadMarkdown("token-rotation", "ru")) ?? "";
     const verified = raw.match(/last_verified:\s*"([^"]+)"/)?.[1];
     expect(verified, "token-rotation declares last_verified").toBeTruthy();
-    expect(text).toContain(`v${verified}`);
+    expect(container.textContent).toContain(`v${verified}`);
+    root.unmount();
+  });
+
+  it("a cross-project category URL is a miss → not-found", async () => {
+    const { root, container } = await mountDocs("/docs/mnemos/c/security");
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Такой страницы нет");
+    });
+    root.unmount();
+  });
+
+  it("an imported category lists its upstream pages", async () => {
+    const { root, container } = await mountDocs("/docs/mnemos/c/mnemos-admin");
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain("Администратору");
+      expect(
+        container.querySelectorAll("a[href^='/docs/mnemos/admin/']").length,
+      ).toBeGreaterThanOrEqual(3);
+    });
     root.unmount();
   });
 });
