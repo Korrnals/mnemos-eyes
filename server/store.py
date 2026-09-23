@@ -841,6 +841,46 @@ CREATE TABLE IF NOT EXISTS harnesses (
     added_via TEXT NOT NULL DEFAULT 'seed',
     note      TEXT NOT NULL DEFAULT ''
 );
+-- Provisioner jobs (wave 4, design blocks A/B/D — variant α): the board
+-- drives an INSTALL-TIME SSH channel to connect a remote machine and run
+-- the frozen bootstrap one-liner there. NO SECRET COLUMNS, EVER: the
+-- enrollment token and the ssh credentials live only in the worker's
+-- task context (transit-only invariant); this table is the job's
+-- progress/verdict record. Steps is a JSON array of human-readable
+-- progress lines. A live job found at board start is failed
+-- (provisioner.restarted) — the in-memory token context died with the
+-- old process.
+CREATE TABLE IF NOT EXISTS provision_jobs (
+    id            TEXT PRIMARY KEY,
+    host          TEXT NOT NULL,
+    port          INTEGER NOT NULL DEFAULT 22,
+    auth_kind     TEXT NOT NULL,
+    key_fingerprint TEXT NOT NULL DEFAULT '',
+    host_key_fingerprint TEXT NOT NULL DEFAULT '',
+    harness_hint  TEXT NOT NULL DEFAULT '',
+    board_url_for_host TEXT NOT NULL DEFAULT '',
+    enrollment_id TEXT NOT NULL DEFAULT '',
+    state         TEXT NOT NULL DEFAULT 'queued'
+                  CHECK (state IN ('queued','connecting','installing',
+                                   'watching','done','failed')),
+    error_code    TEXT NOT NULL DEFAULT '',
+    steps         TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+-- Host-key pins (TOFU + re-pin): one pin per host:port identity (P2-1:
+-- different ports are DIFFERENT endpoints with different keys — the old
+-- host-only PK let port 2222 silently inherit port 22's trust). Written
+-- by the first successful connect (audit provisioning.host_key_pinned)
+-- or by the owner's explicit re-pin (audit provisioning.host_key_repinned,
+-- old→new in the payload). NEVER a secret.
+CREATE TABLE IF NOT EXISTS provision_host_pins (
+    host        TEXT NOT NULL,
+    port        INTEGER NOT NULL DEFAULT 22,
+    fingerprint TEXT NOT NULL,
+    pinned_at   TEXT NOT NULL,
+    PRIMARY KEY (host, port)
+);
 -- SCHED-1 S1 (ADR 0013 §2): automation contracts — additive only, no
 -- SEED_VERSION bump (task_assignments precedent). Three tables:
 -- schedules/hooks (the rules) + launches (the append-only journal).
@@ -1238,6 +1278,16 @@ class Store:
             db.execute(
                 "ALTER TABLE executors "
                 "ADD COLUMN registered_via TEXT NOT NULL DEFAULT ''")
+        # P2-1: provision_host_pins was reshaped from host-PK to (host,port)
+        # PK while still WIP (unreleased). A dev DB carrying the old shape
+        # would silently break every pin call — drop it; pins are TOFU
+        # material and re-pin automatically on the next first connect
+        # (fail-safe: a lost pin triggers a fresh TOFU, never a skipped
+        # verification).
+        pcols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(provision_host_pins)").fetchall()}
+        if pcols and "port" not in pcols:
+            db.execute("DROP TABLE provision_host_pins")
         # UI-25: owner edits of an inbox row BEFORE adoption (title/summary/
         # priority/project overlay as JSON; '' = unedited). Additive ALTER —
         # the '' DEFAULT covers pre-UI-25 rows; no SEED_VERSION bump.
@@ -3152,6 +3202,161 @@ class Store:
             db.execute("DELETE FROM harnesses WHERE name=?", (name,))
             self._log(db, "harness.removed", None, {"name": name})
         return dict(row)
+
+    # ------------------------------------------------ provisioning (wave 4)
+    # Install-time SSH jobs: the job row is the PROGRESS/VERDICT record —
+    # zero secret columns (the enrollment token and ssh credentials live
+    # only in the worker's task context, transit-only invariant). Errors
+    # are stored as (error_code, detail) where the detail is ALREADY
+    # mask→truncate-processed by the caller.
+
+    def create_provision_job(self, *, host: str, port: int, auth_kind: str,
+                             key_fingerprint: str, harness_hint: str,
+                             board_url_for_host: str, enrollment_id: str,
+                             expected_host_key_fingerprint: str = "",
+                             ) -> dict[str, Any]:
+        """Insert one queued job. host_key_fingerprint is seeded from the
+        expected pin (strict mode) or from the existing host pin; TOFU
+        fills it at first connect."""
+        now = _now()
+        job_id = "pj-" + secrets.token_hex(6)
+        with self._lock, self._conn() as db:
+            db.execute(
+                """INSERT INTO provision_jobs
+                       (id, host, port, auth_kind, key_fingerprint,
+                        host_key_fingerprint, harness_hint,
+                        board_url_for_host, enrollment_id, state,
+                        created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?, 'queued', ?, ?)""",
+                (job_id, host.strip()[:200], int(port), auth_kind,
+                 key_fingerprint.strip()[:128],
+                 expected_host_key_fingerprint.strip()[:128],
+                 harness_hint.strip()[:60], board_url_for_host.strip()[:200],
+                 enrollment_id, now, now))
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row)
+
+    def get_provision_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def update_provision_job(
+            self, job_id: str, *, state: str | None = None,
+            step: str | None = None, error_code: str = "",
+            host_key_fingerprint: str | None = None,
+            enrollment_id: str | None = None) -> dict[str, Any] | None:
+        """Advance the job: set state, append a step line, set the error
+        code and/or the pinned/expected host-key fingerprint."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                return None
+            updates: dict[str, Any] = {"updated_at": _now()}
+            if state is not None and state != row["state"]:
+                # Terminal is terminal (P2-1): an in-flight worker must not
+                # resurrect a row an owner action already failed (e.g. a
+                # re-pin invalidating jobs mid-flight).
+                if row["state"] in ("done", "failed"):
+                    return dict(row)
+                updates["state"] = state
+            if error_code:
+                updates["error_code"] = error_code[:64]
+            if host_key_fingerprint is not None:
+                updates["host_key_fingerprint"] = host_key_fingerprint[:128]
+            if enrollment_id is not None:
+                updates["enrollment_id"] = enrollment_id
+            if step:
+                steps = _loads(row["steps"])
+                steps.append(f"[{_now()}] {step[:200]}")
+                updates["steps"] = json.dumps(steps[-40:])
+            sets = ", ".join(f"{k}=?" for k in updates)
+            db.execute(
+                f"UPDATE provision_jobs SET {sets} WHERE id=?",  # noqa: S608 — fixed allow-list keys
+                (*updates.values(), job_id))
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row)
+
+    def count_active_provision_jobs(self) -> int:
+        """Jobs still alive (the anti-spray global cap, security P2-5)."""
+        with self._lock, self._conn() as db:
+            return db.execute(
+                "SELECT COUNT(*) AS n FROM provision_jobs "
+                "WHERE state IN ('queued','connecting','installing','watching')"
+            ).fetchone()["n"]
+
+    def active_job_for_host(self, host: str, port: int) -> dict[str, Any] | None:
+        """One active job per host:port (dedup, security P2-5)."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE host=? AND port=? "
+                "AND state IN ('queued','connecting','installing','watching') "
+                "LIMIT 1", (host, int(port))).fetchone()
+        return dict(row) if row else None
+
+    def last_provision_job_for_host(self, host: str, port: int) -> dict[str, Any] | None:
+        """The most recent job for host:port (cooldown check, P2-5)."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE host=? AND port=? "
+                "ORDER BY created_at DESC LIMIT 1", (host, int(port))).fetchone()
+        return dict(row) if row else None
+
+    def fail_live_provision_jobs(self, error_code: str = "provisioner.restarted",
+                                 ) -> list[dict[str, Any]]:
+        """Board-start housekeeping: any job still alive died with the old
+        process (its in-memory token context is gone) — honest failure."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM provision_jobs "
+                "WHERE state IN ('queued','connecting','installing','watching')"
+            ).fetchall()
+            out = []
+            for row in rows:
+                db.execute(
+                    "UPDATE provision_jobs SET state='failed', "
+                    "error_code=?, updated_at=? WHERE id=?",
+                    (error_code, _now(), row["id"]))
+                out.append(dict(row))
+        return out
+
+    def get_host_pin(self, host: str, port: int) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_host_pins WHERE host=? AND port=?",
+                (host, int(port))).fetchone()
+        return dict(row) if row else None
+
+    def set_host_pin(self, host: str, port: int, fingerprint: str) -> None:
+        with self._lock, self._conn() as db:
+            db.execute(
+                "INSERT INTO provision_host_pins (host, port, fingerprint, pinned_at) "
+                "VALUES (?,?,?,?) ON CONFLICT(host, port) DO UPDATE SET "
+                "fingerprint=excluded.fingerprint, pinned_at=excluded.pinned_at",
+                (host, int(port), fingerprint[:128], _now()))
+
+    def fail_live_provision_jobs_for_host(self, host: str, port: int,
+                                          error_code: str) -> list[dict[str, Any]]:
+        """Kill every live job of one host:port (P2-1: a re-pin invalidates
+        the in-flight jobs that were authenticating against the OLD pin —
+        honest terminal state instead of a stale-pin race)."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM provision_jobs WHERE host=? AND port=? "
+                "AND state IN ('queued','connecting','installing','watching')",
+                (host, int(port))).fetchall()
+            out = []
+            for row in rows:
+                db.execute(
+                    "UPDATE provision_jobs SET state='failed', error_code=?, "
+                    "updated_at=? WHERE id=?",
+                    (error_code[:64], _now(), row["id"]))
+                out.append(dict(row))
+        return out
 
     def log_board_event(self, kind: str, payload: dict[str, Any]) -> None:
         """Board-level audit event with no task attached (registry and
