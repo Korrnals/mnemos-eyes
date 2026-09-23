@@ -49,4 +49,20 @@ describe("docs feature architecture gates", () => {
     );
     expect(offenders.map((file) => file.replace(`${DOCS_DIR}/`, ""))).toEqual([]);
   });
+
+  it("keeps mermaid imports in exactly one module (Mermaid.tsx, АРХКОМ-8)", () => {
+    // The lazy-chunk budget (ADR-0015: mermaid pool ≤450 KiB, loaded only on
+    // fence pages) depends on the library being behind Mermaid.tsx's single
+    // dynamic import — static or duplicate imports weld it into base chunks.
+    // Test files are out of scope (they mock or smoke the real package).
+    const offenders = sources.filter(
+      (file) =>
+        !file.endsWith("Mermaid.tsx") &&
+        !file.includes(".test.") &&
+        /(from\s+["']mermaid["'])|(import\s*\(\s*["']mermaid["']\s*\))/.test(
+          readFileSync(file, "utf8"),
+        ),
+    );
+    expect(offenders.map((file) => file.replace(`${DOCS_DIR}/`, ""))).toEqual([]);
+  });
 });
