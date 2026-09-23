@@ -15,14 +15,20 @@ import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { ExecutorItem } from "@/gateway/boardTypes";
 
 /**
- * The enrollment dialog integration (AGW-5 phase 2): form → token screen.
- * Covered: the mne_ plaintext MASKED until «Показать», copy wiring, the
- * live TTL countdown, the bootstrap block (REMOTE-EXECUTOR.md projection),
- * and the SERVER-text paths — 409 live-quota and 503 fail-closed — landing
- * verbatim in the error toast while the dialog stays on the form.
+ * The enrollment dialog integration (AGW-5 phase 2 + AGW-11 masking):
+ * form → token screen. Covered: the mne_ token ALWAYS masked on screen
+ * (the plaintext rides the clipboard only; a copy FAILURE unmasks as the
+ * last resort), the ≤3 live-token pre-flight, the --expect-fp задел,
+ * copy wiring, the live TTL countdown, the bootstrap block
+ * (REMOTE-EXECUTOR.md projection), and the SERVER-text paths — 409
+ * live-quota and 503 fail-closed — landing verbatim in the error toast
+ * while the dialog stays on the form.
  */
 
-async function mount(executors: ExecutorItem[] = []): Promise<{
+async function mount(
+  executors: ExecutorItem[] = [],
+  liveCount?: number,
+): Promise<{
   root: Root;
   container: HTMLElement;
   gateway: MockAdapter;
@@ -45,6 +51,7 @@ async function mount(executors: ExecutorItem[] = []): Promise<{
                   open
                   onOpenChange={onOpenChange}
                   executors={executors}
+                  liveCount={liveCount}
                 />
                 <ToastViewport />
               </I18nProvider>
@@ -101,24 +108,38 @@ describe("EnrollmentDialog — form phase", () => {
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("shown ONCE");
     });
-    // Masked: the visible prefix + bullets, never the material.
+    // AGW-11: the token is ALWAYS masked on screen — the full plaintext
+    // exists only on the clipboard (no reveal button anymore).
     const code = document.querySelector("code")!;
     expect(code.textContent).toMatch(/^mne_•+$/);
-    // Reveal only on demand.
-    await act(async () => {
-      button(container, "Show").click();
-    });
-    const revealed = document.querySelector("code")!.textContent ?? "";
-    expect(revealed.startsWith("mne_")).toBe(true);
-    expect(revealed).not.toContain("•");
-    // Hiding works too.
-    await act(async () => {
-      button(container, "Hide").click();
-    });
-    expect(document.querySelector("code")!.textContent).toMatch(/•/);
+    expect(button(container, "Show")).toBeUndefined();
+    // The copy-note says exactly where the plaintext goes.
+    expect(document.body.textContent).toContain("FULL token on the clipboard");
     // The mint went through the real gateway exactly once.
     expect(gatewayListLength(gateway)).toBe(1);
     root.unmount();
+  });
+
+  it("AGW-11 quota pre-flight: the counter blocks at 3 live tokens", async () => {
+    const { root } = await mount([], 3);
+    // The honest full-state line renders and the submit is disabled.
+    expect(document.body.textContent).toContain("Live-token limit (3) reached");
+    expect(
+      [...document.querySelectorAll("button")].find((b) =>
+        b.textContent?.includes("Create token"),
+      )!.disabled,
+    ).toBe(true);
+    root.unmount();
+
+    // Below the cap the count is visible and the button armed.
+    const second = await mount([], 1);
+    expect(document.body.textContent).toContain("Live tokens: 1 of 3");
+    expect(
+      [...document.querySelectorAll("button")].find((b) =>
+        b.textContent?.includes("Create token"),
+      )!.disabled,
+    ).toBe(false);
+    second.root.unmount();
   });
 
   it("the 409 live-quota lands VERBATIM in an error toast; the form stays", async () => {
@@ -206,6 +227,100 @@ describe("EnrollmentDialog — token screen", () => {
     });
     root.unmount();
   });
+  it("AGW-11: the one-command grows --expect-fp when the mint carries the CA fingerprint", async () => {
+    const { root, container, gateway } = await mount();
+    // Canonical ssh-keygen shape (43 unpadded base64 chars) — P3-3
+    // validates the form before the flag may ride the command.
+    const validFp = `SHA256:${"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"}`;
+    const spy = vi
+      .spyOn(gateway, "createEnrollment")
+      .mockImplementation(async (payload) => {
+        const real = await MockAdapter.prototype.createEnrollment.call(
+          gateway,
+          payload,
+        );
+        return { ...real, ca_fingerprint: validFp };
+      });
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("expires in");
+    });
+    // The masked one-liner carries the flag with the PUBLIC fingerprint.
+    const onScreen = document.querySelectorAll("pre")[0].textContent ?? "";
+    expect(onScreen).toContain(`--expect-fp ${validFp}`);
+    // And the deliberate copy carries it too.
+    const oneLinerBlock = document.querySelectorAll("pre")[0].closest("div")!;
+    const copyButton = [...oneLinerBlock.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Copy"),
+    )!;
+    await copyButton.click();
+    await vi.waitFor(() => {
+      const last = (
+        navigator.clipboard.writeText as ReturnType<typeof vi.fn>
+      ).mock.calls.at(-1)?.[0] as string;
+      expect(last).toContain(`--expect-fp ${validFp}`);
+    });
+    expect(spy).toHaveBeenCalled();
+    root.unmount();
+  });
+
+  it("PR #99 P3-3: a MALFORMED ca_fingerprint never rides the command (no flag)", async () => {
+    const { root, container, gateway } = await mount();
+    vi.spyOn(gateway, "createEnrollment").mockImplementation(async (payload) => {
+      const real = await MockAdapter.prototype.createEnrollment.call(
+        gateway,
+        payload,
+      );
+      // Hostile shapes — the field feeds a paste-ready shell line, so
+      // anything off the canonical forms is dropped, not interpolated.
+      return { ...real, ca_fingerprint: 'SHA256:oops; rm -rf / #' };
+    });
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("expires in");
+    });
+    const onScreen = document.querySelectorAll("pre")[0].textContent ?? "";
+    expect(onScreen).not.toContain("--expect-fp");
+    expect(onScreen).not.toContain("rm -rf");
+    root.unmount();
+  });
+
+  it("AGW-11: without the field (pre-AGW-9 board) the command stays WITHOUT the flag", async () => {
+    const { root, container } = await mount();
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("expires in");
+    });
+    expect(document.querySelectorAll("pre")[0].textContent).not.toContain(
+      "--expect-fp",
+    );
+    root.unmount();
+  });
+
+  it("AGW-11: the manual steps mask the token on screen; the copy keeps it full", async () => {
+    const { root, container, gateway } = await mount();
+    const spy = vi.spyOn(gateway, "createEnrollment");
+    await submitForm(container);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("expires in");
+    });
+    const createdToken = (await spy.mock.results[0]!.value).token;
+    const manual = [...document.querySelectorAll("details pre")];
+    expect(manual.length).toBeGreaterThan(0);
+    for (const step of manual) {
+      expect(step.textContent).not.toContain(createdToken);
+    }
+    // Copy-all still hands the REAL script to the VPS shell.
+    await act(async () => {
+      button(container, "Copy all").click();
+    });
+    const allText = String(
+      (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock.lastCall?.[0] ?? "",
+    );
+    expect(allText).toContain(createdToken);
+    root.unmount();
+  });
+
   it("copy buttons hand the token and the whole script to the clipboard", async () => {
     const { root, container } = await mount();
     await submitForm(container);
@@ -249,8 +364,11 @@ describe("EnrollmentDialog — honest copy (review P2-2)", () => {
       "Copy failed — the token stays visible",
     );
     expect(document.body.textContent).not.toContain("Copied");
-    // The token is still on screen (masked) — recoverable by hand.
-    expect(document.querySelector("code")!.textContent).toMatch(/^mne_•+$/);
+    // AGW-11: the failure UNMASKS the one-time token — bullets are not
+    // hand-recoverable, and losing a shown-once token to a broken
+    // clipboard is worse than the brief shoulder-surfing window.
+    expect(document.querySelector("code")!.textContent).toMatch(/^mne_\S+$/);
+    expect(document.querySelector("code")!.textContent).not.toContain("•");
     root.unmount();
   });
 

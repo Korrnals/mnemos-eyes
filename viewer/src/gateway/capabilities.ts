@@ -45,6 +45,9 @@ import type {
   EnrollmentCreatedResult,
   EnrollmentRevokeResult,
   EnrollmentsPage,
+  ProvisionCreateInput,
+  ProvisionCreatedResult,
+  ProvisionJobStatus,
   HookCreateInput,
   HookPatchInput,
   HookRule,
@@ -290,6 +293,24 @@ export interface AgentsMutationSource {
    * 404 unknown; 409 while live in an executor/assignment/rule.
    */
   deleteHarness(name: string): Promise<void>;
+  /**
+   * Queue an SSH provision job (`POST /api/executors/provision`, ui-token;
+   * wave 4 AGW-11). 202 {job_id, enrollment_id} — the mne_ token NEVER
+   * rides the answer (transit-only server-side). 422 password-auth while
+   * the deployment flag is off / bad host charset / unknown harness;
+   * 409 one live job per host:port or live-token quota; 429 anti-spray
+   * (rate, per-host cooldown, global live cap); 503 provisioner disabled.
+   */
+  createProvisionJob(
+    payload: ProvisionCreateInput,
+  ): Promise<ProvisionCreatedResult>;
+  /**
+   * Job progress for the connect card (`GET /api/executors/provision/{id}`,
+   * ui-token): state, steps, the pinned host-key fingerprint, the linked
+   * enrollment. SSE provisioning.* frames invalidate the query family;
+   * no secret material travels.
+   */
+  getProvisionJob(jobId: string, signal?: AbortSignal): Promise<ProvisionJobStatus>;
 }
 
 /** Gateway type that also speaks the agents-domain mutation wire. */
@@ -309,7 +330,9 @@ export function isAgentsMutationSource(
     typeof (gateway as Partial<AgentsMutationSource>).listEnrollments === "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).revokeEnrollment === "function" &&
     typeof (gateway as Partial<AgentsMutationSource>).createHarness === "function" &&
-    typeof (gateway as Partial<AgentsMutationSource>).deleteHarness === "function"
+    typeof (gateway as Partial<AgentsMutationSource>).deleteHarness === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).createProvisionJob === "function" &&
+    typeof (gateway as Partial<AgentsMutationSource>).getProvisionJob === "function"
   );
 }
 

@@ -950,8 +950,6 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.created": "Enrollment token created",
   "agents.enrollment.tokenLabel": "Enrollment token",
   "agents.enrollment.tokenOnce": "The token is shown ONCE — copy it now.",
-  "agents.enrollment.show": "Show",
-  "agents.enrollment.hide": "Hide",
   "agents.enrollment.copy": "Copy",
   "agents.enrollment.copied": "Copied",
   "agents.enrollment.copyFailedToken":
@@ -980,7 +978,118 @@ export const en: Record<TranslationKey, string> = {
 
   "agents.enrollment.oneLinerHint": "The outer -k is safe: the installer text is public and secret-free — everything inside rides the pinned CA. The --url must be the address THIS machine resolves (the VPN overlay address may differ from the LAN one).",
   "agents.enrollment.tokenInCopyNote": "Copying puts the FULL token on the clipboard.",
+  "agents.enrollment.quotaCount": "Live tokens: {{count}} of 3",
+  "agents.enrollment.quotaFull":
+    "Live-token limit (3) reached — revoke one or wait out the TTL.",
   "agents.enrollment.manualToggle": "Manual path — diagnostics / air-gapped installs",
+
+  // --- AGW-11: the connect card (SSH provisioner, wave 4) -------------------
+
+  "agents.provision.title": "Connect over SSH",
+  "agents.provision.subtitle":
+    "the board logs into the machine itself, installs the agent and walks it to your approval",
+  "agents.provision.host": "Machine address (IP or hostname)",
+  "agents.provision.hostError":
+    "lowercase letters/digits/hyphens and dots — an IP or FQDN, no slashes",
+  "agents.provision.port": "SSH port",
+  "agents.provision.portError": "port is a number from 1 to 65535",
+  "agents.provision.name": "Executor name (optional)",
+  "agents.provision.nameError":
+    "starts with a letter/digit; letters, digits, dot, '_', '-' up to 120 chars",
+  "agents.provision.authLegend": "How to log in",
+  "agents.provision.authKey": "SSH key",
+  "agents.provision.authAlias": "Alias from the board's ssh-config",
+  "agents.provision.authPassword": "Password",
+  "agents.provision.authPasswordNote":
+    "Password auth is OFF by default on the board: it needs the provisioner.passwordAuth deployment flag. Until it is on, the server honestly refuses (422).",
+  "agents.provision.authAliasNote":
+    "The board connects via an alias from its own ssh-config: user, key and port come from the config. A separate username field is not accepted by the server yet — use an alias.",
+  "agents.provision.keySecret": "Private key (paste in full)",
+  "agents.provision.passwordSecret": "Password",
+  "agents.provision.secretShow": "Show key",
+  "agents.provision.secretHide": "Hide key",
+  "agents.provision.secretNote":
+    "The secret lives only in page memory until submit: never in the DB, logs or events. Masked against shoulder surfing.",
+  "agents.provision.secretError": "This login method needs a secret.",
+  "agents.provision.passphrase": "Key passphrase (if any)",
+  "agents.provision.harness": "Harness (hint for commands)",
+  "agents.provision.boardUrl": "Board address for the machine",
+  "agents.provision.boardUrlNote":
+    "https://host[:port] the TARGET machine resolves (the overlay address may differ from the browser one).",
+  "agents.provision.boardUrlError":
+    "strict https://host[:port] required — no path, no query",
+  "agents.provision.submit": "Connect",
+  "agents.provision.submitting": "Starting…",
+  "agents.provision.submitFailed": "Failed to start the connection",
+  "agents.provision.queued": "Connection to {{host}} started",
+  "agents.provision.reuseNote":
+    "The retry reuses the live enrollment token from the previous attempt",
+  "agents.provision.feedTitle": "Connecting {{host}}",
+  "agents.provision.close": "Hide",
+  "agents.provision.closeAria": "Hide the connect card",
+  "agents.provision.feedLoading": "Reading the job state…",
+  "agents.provision.feedError": "Job unavailable: {{message}}",
+  "agents.provision.feedLive": "The job is running — the feed updates itself",
+  "agents.provision.funnelAria": "Install steps",
+  "agents.provision.state.live": "running",
+  "agents.provision.state.done": "agent registered",
+  "agents.provision.state.failed": "failed",
+  "agents.provision.stage.bootstrapStarted": "SSH connection to the machine",
+  "agents.provision.stage.caPinned": "Machine trust anchor pinned",
+  "agents.provision.stage.pollerInstalled": "Agent installed",
+  "agents.provision.stage.firstHeartbeat": "First agent heartbeat",
+  "agents.provision.stage.wgHandshake": "Mesh tunnel",
+  "agents.provision.stage.reserved": "later",
+  "agents.provision.connectivityTitle": "Connectivity transport",
+  "agents.provision.connectivityManual": "interim: manual tunnel",
+  "agents.provision.connectivityMesh": "mesh",
+  "agents.provision.connectivityProfile": "Connectivity profile:",
+  "agents.provision.connectivityLater": "later",
+  "agents.provision.logTitle": "Step feed",
+  "agents.provision.updatedAt": "updated {{time}}",
+  "agents.provision.errorCode": "Code: {{code}}",
+  "agents.provision.expectedFingerprint": "Expected machine key fingerprint:",
+  "agents.provision.knownHostsHint":
+    "The machine key does not match the pinned one. If the machine was REINSTALLED on purpose, the board has a separate re-pin action (POST /api/executors/provision/host/{host}/repin). Do not blindly retry: a mismatch may mean a MITM.",
+  "agents.provision.retry": "Retry",
+  "agents.provision.doneTitle": "Executor “{{name}}” awaits your approval",
+  "agents.provision.doneLoadingRow": "Waiting for the registry row to appear…",
+  "agents.provision.approvedAlready":
+    "“{{name}}” is already approved — enable routing in the registry",
+  "agents.provision.approveIntro":
+    "Check the machine key and confirm the connection.",
+  "agents.provision.pasteBackLabel":
+    "Last 8 hex chars of the fingerprint FROM THE MACHINE",
+  "agents.provision.pasteBackHint":
+    "Run on the machine: awk '{print $2}' /etc/ssh/ssh_host_ed25519_key.pub | base64 -d | sha256sum — type the last 8 characters of its output. The button unlocks only on a match.",
+  "agents.provision.pasteBackSkipped":
+    "This machine's key was pinned and verified earlier — no re-verification needed.",
+  "agents.provision.hint.sshUnreachable":
+    "Machine unreachable: check the address, port and firewall.",
+  "agents.provision.hint.sshAuthFailed": "The key or password did not fit.",
+  "agents.provision.hint.sshSudoRequired":
+    "Give the user passwordless sudo (NOPASSWD) or run the install as root.",
+  "agents.provision.hint.caUnavailable":
+    "The board did not serve its CA — a board-side problem, check its logs.",
+  "agents.provision.hint.hostKeyMismatch":
+    "The machine key did not match the expected one — the install stopped for safety.",
+  "agents.provision.hint.wgKeyDelivery":
+    "Tunnel key delivery failed (a future mesh transport leg — placeholder).",
+  "agents.provision.hint.wgHandshake":
+    "The tunnel did not come up in time (a future mesh transport leg — placeholder).",
+  "agents.provision.hint.bootstrapTimeout":
+    "The install ran long and was stopped by its timeout.",
+  "agents.provision.hint.bootstrapExit":
+    "The installer exited with an error — technical detail below.",
+  "agents.provision.hint.registerTimeout":
+    "The agent was installed but never registered in time — check its journal on the machine.",
+  "agents.provision.hint.restarted":
+    "The board restarted mid-install — job secrets live in memory only. Start the connection again.",
+  "agents.provision.hint.pinInvalidated":
+    "The machine's pinned key was changed (re-pin) — the job was stopped.",
+  "agents.provision.hint.generic":
+    "The install failed — technical detail below.",
+
   "agents.enrollment.listTitle": "Enrollment tokens",
   "agents.enrollment.listHint": "live + history",
   "agents.enrollment.listLoading": "Loading tokens",

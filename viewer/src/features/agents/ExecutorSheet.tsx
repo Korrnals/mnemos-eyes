@@ -14,6 +14,9 @@ import {
   addCapability,
   executorPatchDiff,
 } from "./executorForm";
+import { PasteBackApprove } from "./ProvisionApprove";
+import { PROVISION_APPROVE_PUBLISHED, peekProvisionApprove } from "./provisionContext";
+import type { ProvisionApproveContext } from "./provisionContext";
 import { useExecutors } from "./useAgents";
 import { useExecutorMutations } from "./useExecutorMutations";
 
@@ -127,6 +130,37 @@ function ExecutorSheetForm({
 
   const revoked = executor.state === "revoked";
   const pending = executor.state === "pending";
+
+  // AGW-11 paste-back: when THIS browser session ran the provision job
+  // that minted the pending row, the card carries the pinned fingerprint
+  // (provisionContext.ts) — the approve goes through the verify. Rows
+  // without context (the manual mint path, another device) keep the
+  // plain approve.
+  //
+  // PR #99 review P3-1: a verdict published while this sheet is OPEN is
+  // picked up live — the card dispatches PROVISION_APPROVE_PUBLISHED (a
+  // same-tab signal; the storage event never fires in the writing tab,
+  // and a no-change refetch re-renders nothing under structural
+  // sharing). The latch keeps the verify visible after the successful
+  // approve consumed the storage row, until the registry row leaves
+  // pending — no flash of the plain button mid-invalidation.
+  const peeked =
+    executor.state === "pending" ? peekProvisionApprove(executor.id) : null;
+  const [latchedContext, setLatchedContext] =
+    useState<ProvisionApproveContext | null>(peeked);
+  useEffect(() => {
+    if (executor.state !== "pending") return;
+    const onPublished = (event: Event): void => {
+      const detail = (event as CustomEvent<{ executorId: string }>).detail;
+      if (detail?.executorId !== executor.id) return;
+      const fresh = peekProvisionApprove(executor.id);
+      if (fresh !== null) setLatchedContext(fresh);
+    };
+    window.addEventListener(PROVISION_APPROVE_PUBLISHED, onPublished);
+    return () =>
+      window.removeEventListener(PROVISION_APPROVE_PUBLISHED, onPublished);
+  }, [executor.id, executor.state]);
+  const approveContext = peeked ?? latchedContext;
 
   // Form state seeds from the loaded row; the diff (name + capabilities
   // only — enabled/approve/revoke/delete are immediate single PATCHes).
@@ -295,12 +329,19 @@ function ExecutorSheetForm({
           <Badge variant="outline" className="font-normal">
             {t(stateBadge().key)}
           </Badge>
-          {pending ? (
+          {pending && approveContext === null ? (
             <Button size="sm" className="h-7 px-2 text-xs" onClick={() => mutations.approveExecutor(executor)}>
               {t("agents.registry.approve")}
             </Button>
           ) : null}
         </div>
+        {pending && approveContext !== null ? (
+          <PasteBackApprove
+            executor={executor}
+            fingerprint={approveContext.fingerprint}
+            tofu={approveContext.tofu}
+          />
+        ) : null}
         {executor.state === "approved" ? (
           <label className="flex cursor-pointer items-start gap-2 text-sm">
             <input

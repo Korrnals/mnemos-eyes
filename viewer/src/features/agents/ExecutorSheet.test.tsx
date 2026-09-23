@@ -7,6 +7,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ExecutorSheet } from "./ExecutorSheet";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
+import { ApiError } from "@/lib/errors";
+import { rememberProvisionApprove } from "./provisionContext";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
@@ -110,6 +112,7 @@ function stubConfirm(returnValue: boolean): ReturnType<typeof vi.fn> {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -272,6 +275,145 @@ describe("ExecutorSheet — the revoked tombstone", () => {
     // The secret is NEVER rendered — only the honest hint about it.
     expect(html).toContain("The secret is never shown");
     expect(html).not.toMatch(/mne_[A-Za-z0-9]/);
+    mount.root.unmount();
+  });
+});
+
+describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
+  const hexPin =
+    "3f2a9c1d5b7e40a68d93c1f0b2e4d6a8c0e2f4b6d8a0c2e4f60482a6c8e0d2f4";
+  const tail = hexPin.slice(-8);
+
+  it("a pending row WITH provision context demands the fingerprint tail", async () => {
+    sessionStorage.setItem(
+      "vesmaro.provision-approve.exec-copilot-pending",
+      JSON.stringify({ fingerprint: hexPin, tofu: true, jobId: "pj-1" }),
+    );
+    const mount = await mountCard("exec-copilot-pending");
+    // The pin is on screen (public material) + the verify input.
+    expect(mount.text()).toContain(hexPin);
+    expect(mount.text()).toContain("Last 8 hex chars");
+    // The approve starts DISABLED — a partial/absent tail never approves.
+    const approve = mount
+      .query<HTMLButtonElement>("button")
+      .find((candidate) => candidate.textContent?.includes("Approve"))!;
+    expect(approve.disabled).toBe(true);
+    mount.root.unmount();
+  });
+
+  it("the exact tail unlocks the approve; the click consumes the context", async () => {
+    sessionStorage.setItem(
+      "vesmaro.provision-approve.exec-copilot-pending",
+      JSON.stringify({ fingerprint: hexPin, tofu: true, jobId: "pj-1" }),
+    );
+    const mount = await mountCard("exec-copilot-pending");
+    const spy = vi.spyOn(mount.gateway, "patchExecutor");
+    const input = mount.query<HTMLInputElement>("input[maxlength='8']")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, "deadbeef");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // A wrong tail keeps the gate shut.
+    expect(
+      mount
+        .query<HTMLButtonElement>("button")
+        .find((candidate) => candidate.textContent?.includes("Approve"))!.disabled,
+    ).toBe(true);
+    await act(async () => {
+      nativeSetter?.call(input, tail);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickButton(mount, "Approve");
+    await vi.waitFor(() => {
+      expect(spy).toHaveBeenCalledWith("exec-copilot-pending", { state: "approved" });
+    });
+    // The context is one-shot: consumed by the successful verify.
+    expect(sessionStorage.getItem("vesmaro.provision-approve.exec-copilot-pending")).toBeNull();
+    mount.root.unmount();
+  });
+
+  it("a pre-pinned fingerprint (tofu=false) is the plain approve — no re-verify", async () => {
+    sessionStorage.setItem(
+      "vesmaro.provision-approve.exec-copilot-pending",
+      JSON.stringify({ fingerprint: hexPin, tofu: false, jobId: "pj-1" }),
+    );
+    const mount = await mountCard("exec-copilot-pending");
+    expect(mount.text()).toContain(hexPin);
+    expect(mount.text()).toContain("pinned and verified earlier");
+    // No tail input on this path.
+    expect(mount.query<HTMLInputElement>("input[maxlength='8']")).toHaveLength(0);
+    const approve = mount
+      .query<HTMLButtonElement>("button")
+      .find((candidate) => candidate.textContent?.includes("Approve"))!;
+    expect(approve.disabled).toBe(false);
+    mount.root.unmount();
+  });
+
+  it("WITHOUT context (the manual mint path) the pending row keeps the plain approve", async () => {
+    const mount = await mountCard("exec-copilot-pending");
+    expect(mount.text()).not.toContain("Last 8 hex chars");
+    const approve = mount
+      .query<HTMLButtonElement>("button")
+      .find((candidate) => candidate.textContent?.includes("Approve"))!;
+    expect(approve.disabled).toBe(false);
+    mount.root.unmount();
+  });
+
+  it("PR #99 P3-1: a FAILED approve keeps the context — the re-opened sheet still verifies", async () => {
+    sessionStorage.setItem(
+      "vesmaro.provision-approve.exec-copilot-pending",
+      JSON.stringify({ fingerprint: hexPin, tofu: true, jobId: "pj-1" }),
+    );
+    const mount = await mountCard("exec-copilot-pending");
+    vi.spyOn(mount.gateway, "patchExecutor").mockRejectedValue(
+      new ApiError(500, "board unreachable", { url: "mock:/api/executors" }),
+    );
+    const input = mount.query<HTMLInputElement>("input[maxlength='8']")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, tail);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickButton(mount, "Approve");
+    // The server text landed in the toast; the one-shot context SURVIVED.
+    await vi.waitFor(() => {
+      expect(mount.text()).toContain("board unreachable");
+    });
+    expect(
+      sessionStorage.getItem("vesmaro.provision-approve.exec-copilot-pending"),
+    ).not.toBeNull();
+    mount.root.unmount();
+
+    // The re-opened sheet demands the tail again — no silent downgrade
+    // to the plain approve after a network failure.
+    const reopened = await mountCard("exec-copilot-pending");
+    expect(reopened.text()).toContain("Last 8 hex chars");
+    reopened.root.unmount();
+  });
+
+  it("PR #99 P3-1: a verdict published while the sheet is OPEN is picked up live", async () => {
+    const mount = await mountCard("exec-copilot-pending");
+    expect(mount.text()).not.toContain("Last 8 hex chars");
+    // The connect card reaches done while the sheet stays open — it
+    // publishes through rememberProvisionApprove (storage + the same-tab
+    // signal; a bare setItem + no-change refetch re-renders nothing).
+    act(() => {
+      rememberProvisionApprove("exec-copilot-pending", {
+        fingerprint: hexPin,
+        tofu: true,
+        jobId: "pj-1",
+      });
+    });
+    await vi.waitFor(() => {
+      expect(mount.text()).toContain("Last 8 hex chars");
+    });
     mount.root.unmount();
   });
 });

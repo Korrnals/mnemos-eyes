@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Copy, Eye, EyeOff, ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,7 @@ import {
   buildBootstrapSteps,
   effectiveEnrollmentState,
   formatTtlCountdown,
+  maskEnrollmentToken,
 } from "./enrollment";
 import { useEnrollmentActions, useHonestCopy } from "./useEnrollment";
 import { HarnessSelect } from "./HarnessSelect";
@@ -32,12 +33,14 @@ import { useDefaultHarness } from "./useHarnesses";
  * 1. FORM — label (≤64), harness_hint (the LIVE dictionary combobox with
  *    free entry — wave 3C; the server 422s unknown values with the
  *    authoritative list), name_hint (optional, ≤120).
- * 2. TOKEN SCREEN — the mne_… plaintext hidden until «Показать» (shoulder
- *    surfacing beats a ninja reveal), copy buttons, the LIVE TTL countdown
- *    (mm:ss off the shared 1 Hz ticker), and the VPS bootstrap block — the
- *    commands are a copy-paste projection of deploy/poller/
- *    REMOTE-EXECUTOR.md §4б/§4в (the runbook is the source of truth; this
- *    screen never invents a second one).
+ * 2. TOKEN SCREEN — the mne_… token MASKED on screen (AGW-11: the full
+ *    plaintext exists only on the clipboard via «Копировать»), the LIVE
+ *    TTL countdown (mm:ss off the shared 1 Hz ticker), the live-token
+ *    ≤3 counter on the form, and the VPS bootstrap block — the commands
+ *    are a copy-paste projection of deploy/poller/REMOTE-EXECUTOR.md
+ *    §4б/§4в (the runbook is the source of truth; this screen never
+ *    invents a second one); the one-command grows --expect-fp as soon as
+ *    the board's mint answer carries the CA fingerprint (AGW-9).
  *
  * The dialog owns NO enrollment state after close: the panel below the
  * registry (fed by the invalidated list query + enrollment.* SSE) is the
@@ -47,11 +50,19 @@ export function EnrollmentDialog({
   open,
   onOpenChange,
   executors,
+  liveCount,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The registry — a used token links to its minted pending row. */
   executors: readonly ExecutorItem[];
+  /**
+   * AGW-11: live (created) token count for the ≤3 pre-flight (the server
+   * 409s at the cap — the counter is UX parity, not enforcement). Absent
+   * = the caller has no list yet (the counter hides, the server still
+   * guards).
+   */
+  liveCount?: number;
 }) {
   const t = useT();
   // Keyed inner component (EditTaskDialog pattern): a fresh form per open,
@@ -77,7 +88,12 @@ export function EnrollmentDialog({
         {created ? (
           <TokenScreen created={created} executors={executors} onDone={close} />
         ) : (
-          <EnrollmentForm key={formKey} onCreated={setCreated} onDone={close} />
+          <EnrollmentForm
+            key={formKey}
+            onCreated={setCreated}
+            onDone={close}
+            liveCount={liveCount}
+          />
         )}
         {/* The description stays stable across phases (Radix wants one). */}
         <DialogDescription className="sr-only">
@@ -92,9 +108,11 @@ export function EnrollmentDialog({
 function EnrollmentForm({
   onCreated,
   onDone,
+  liveCount,
 }: {
   onCreated: (created: EnrollmentCreatedResult) => void;
   onDone: () => void;
+  liveCount?: number;
 }) {
   const t = useT();
   const actions = useEnrollmentActions();
@@ -105,6 +123,8 @@ function EnrollmentForm({
   const harness = harnessChoice || defaultHarness;
   const [nameHint, setNameHint] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // AGW-11: the ≤3 live-token pre-flight (ENROLLMENT_MAX_LIVE parity).
+  const quotaReached = liveCount !== undefined && liveCount >= 3;
 
   const submit = (event: React.FormEvent): void => {
     event.preventDefault();
@@ -150,17 +170,37 @@ function EnrollmentForm({
           className="h-9 rounded-md border border-border bg-background px-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
         />
       </label>
-      <div className="mt-1 flex items-center justify-end gap-2">
+      <div className="mt-1 flex flex-wrap items-center justify-end gap-2">
+        {liveCount !== undefined ? (
+          <span
+            className={`mr-auto text-xs ${quotaReached ? "text-error" : "text-foreground-muted"}`}
+            aria-live="polite"
+          >
+            {quotaReached
+              ? t("agents.enrollment.quotaFull")
+              : t("agents.enrollment.quotaCount", { count: liveCount })}
+          </span>
+        ) : null}
         <Button type="button" variant="outline" size="sm" onClick={onDone}>
           {t("agents.sheet.cancel")}
         </Button>
-        <Button type="submit" size="sm" disabled={submitting}>
+        <Button type="submit" size="sm" disabled={submitting || quotaReached}>
           {submitting ? t("agents.enrollment.creating") : t("agents.enrollment.create")}
         </Button>
       </div>
     </form>
   );
 }
+
+/**
+ * PR #99 review P3-3: the CA fingerprint rides a COPY-PASTE shell command,
+ * so its shape is validated client-side before insertion — canonical
+ * ssh-keygen base64 (43 unpadded chars) or a hex64 digest, mirroring the
+ * board's normalize_fingerprint accept-list. Anything else omits the
+ * flag: the command degrades loudly-shorter, never injects a foreign
+ * string into the owner's shell.
+ */
+const CA_FINGERPRINT_RE = /^SHA256:(?:[A-Za-z0-9+/]{43}|[a-fA-F0-9]{64})$/;
 
 /** Phase 2 — the once-only token, the live TTL and the VPS bootstrap block. */
 function TokenScreen({
@@ -177,7 +217,6 @@ function TokenScreen({
   // The bootstrap command shows the minted hint or the first LIVE
   // dictionary entry (wave 3C review — no hardcoded harness constant).
   const defaultHarness = useDefaultHarness();
-  const [revealed, setRevealed] = useState(false);
   // Review P2-2: flash ONLY on a resolved write — clipboard absent or a
   // rejection is a visible failure (the token is shown once; a lying
   // «Скопировано» quietly loses it).
@@ -199,9 +238,17 @@ function TokenScreen({
   const origin = window.location.origin;
   const bootstrapName = row.name_hint || row.label || "vps-1";
   const bootstrapHarness = row.harness_hint || defaultHarness;
+  // AGW-11: the CA fingerprint from the mint answer turns the installer
+  // into a strict-CA run (--expect-fp). OPTIONAL until every deployed
+  // board carries the AGW-9 field — absent OR malformed = the command
+  // without the flag (no silent degradation, no unvalidated string in
+  // a paste-ready shell line; PR #99 review P3-3).
+  const expectFpRaw = created.ca_fingerprint?.trim() ?? "";
+  const expectFp = CA_FINGERPRINT_RE.test(expectFpRaw) ? expectFpRaw : "";
+  const expectFpArg = expectFp ? ` --expect-fp ${expectFp}` : "";
   const oneLinerArgs =
     `--url ${origin} --token ${created.token}` +
-    ` --name ${bootstrapName} --harness ${bootstrapHarness}`;
+    ` --name ${bootstrapName} --harness ${bootstrapHarness}${expectFpArg}`;
   // The outer -k is honest and bounded: the installer TEXT is public and
   // secret-free, the lab TLS is self-signed (the chicken-and-egg this
   // script breaks); everything inside rides the PINNED CA + fingerprint
@@ -209,8 +256,8 @@ function TokenScreen({
   const oneLiner = `curl -kfsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ${oneLinerArgs}`;
   const oneLinerMasked =
     `curl -kfsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ` +
-    `--url ${origin} --token ${created.token.slice(0, 4)}${"•".repeat(12)}` +
-    ` --name ${bootstrapName} --harness ${bootstrapHarness}`;
+    `--url ${origin} --token ${maskEnrollmentToken(created.token)}` +
+    ` --name ${bootstrapName} --harness ${bootstrapHarness}${expectFpArg}`;
   // A used token links to the row it minted (enrollment.used carries the
   // executor_id; the registry list query has it after the invalidation).
   const minted = row.executor_id
@@ -221,28 +268,21 @@ function TokenScreen({
     <div className="flex flex-col gap-3">
       <DialogDescription>{t("agents.enrollment.tokenOnce")}</DialogDescription>
 
-      {/* The token: masked until «Показать»; mono; copy beside, never inline
-       * in the text (no accidental selection leaks). */}
+      {/* The token: ALWAYS masked on screen (AGW-11 — the full plaintext
+       * exists only on the clipboard via «Копировать»); mono; copy beside,
+       * never inline in the text (no accidental selection leaks). */}
       <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-background px-2 py-1.5">
-        <code className="min-w-0 flex-1 truncate font-mono text-sm">
-          {revealed ? created.token : `${created.token.slice(0, 4)}${"•".repeat(12)}`}
-        </code>
-        <span className="sr-only">{t("agents.enrollment.tokenLabel")}</span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={() => setRevealed((value) => !value)}
-          aria-pressed={revealed}
+        {/* aria-label: a screen reader must not read the bullet mask as
+         * glyph soup — the row is labeled, the mask is visual only. */}
+        <code
+          className="min-w-0 flex-1 truncate font-mono text-sm"
+          aria-label={t("agents.enrollment.tokenLabel")}
         >
-          {revealed ? (
-            <EyeOff className="size-3.5" aria-hidden="true" />
-          ) : (
-            <Eye className="size-3.5" aria-hidden="true" />
-          )}
-          {revealed ? t("agents.enrollment.hide") : t("agents.enrollment.show")}
-        </Button>
+          {/* Copy-failure UNMASKS as the last resort: the token is
+           * one-time — losing it to a broken clipboard is worse than the
+           * shoulder-surfing window (the copyFailedToken text stays true). */}
+          {failed ? created.token : maskEnrollmentToken(created.token)}
+        </code>
         <Button
           type="button"
           variant="ghost"
@@ -306,8 +346,8 @@ function TokenScreen({
           {oneLinerMasked}
         </pre>
         <p className="px-3 pb-2 text-xs text-foreground-muted">
-          {t("agents.enrollment.oneLinerHint")}
-          {revealed ? null : ` ${t("agents.enrollment.tokenInCopyNote")}`}
+          {t("agents.enrollment.oneLinerHint")}{" "}
+          {t("agents.enrollment.tokenInCopyNote")}
         </p>
       </div>
 
@@ -340,7 +380,7 @@ function TokenScreen({
             {steps.map((step, index) => (
               <li key={index} className="flex items-start gap-2">
                 <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-foreground-secondary">
-                  {step}
+                  {step.split(created.token).join(maskEnrollmentToken(created.token))}
                 </pre>
                 <Button
                   type="button"

@@ -20,6 +20,15 @@ import type { EnrollmentItem, EnrollmentState } from "@/gateway/boardTypes";
 export const ENROLLMENT_TTL_MS = 15 * 60 * 1000;
 
 /**
+ * The on-screen mask of an mne_ token (AGW-11): the prefix stays readable
+ * (it identifies the CLASS), the material never renders. The clipboard
+ * copy is the only place the plaintext goes — the mask is display-only.
+ */
+export function maskEnrollmentToken(token: string): string {
+  return `${token.slice(0, 4)}${"•".repeat(12)}`;
+}
+
+/**
  * View state: wire state wins, except a `created` row whose TTL has passed
  * — the sweeper may not have fired/SSE may not have arrived yet, and
  * showing «ждёт подключения» over a dead token would be a lie.

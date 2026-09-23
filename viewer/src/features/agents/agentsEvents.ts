@@ -23,6 +23,7 @@ import { pushExecutionEvent, setFeedStreamState } from "./executionFeedStore";
  * | assignment.* (7 kinds) | agents.assignments.*                        |
  * | executor.* (5 kinds)   | agents.executors.* AND agents.assignments.* |
  * | harness.* (2 kinds)    | agents.harnesses.*                          |
+ * | provisioning.* (5)     | agents.provision.* (ok adds executors.*)    |
  *
  * executor.* also invalidates the assignment queue because queued rows
  * carry routing computed over the registry (Amd 2 §5): a presence
@@ -71,6 +72,22 @@ export function applyAgentsEventToCache(
     case "harness.removed":
       void queryClient.invalidateQueries({ queryKey: keys.agents.harnesses.all });
       break;
+    // AGW-11 (wave 4): provisioning frames are change HINTS for the
+    // connect card's job query (invalidation-only, like the rest of this
+    // bridge — the GET is the authoritative projection). `ok` also mints
+    // a pending registry row (belt-and-braces beside executor.registered,
+    // the at-most-once stream may drop frames); `repinned` fails live
+    // jobs of the identity server-side, so the jobs family syncs too.
+    case "provisioning.created":
+    case "provisioning.progress":
+    case "provisioning.failed":
+    case "provisioning.repinned":
+      void queryClient.invalidateQueries({ queryKey: keys.agents.provision.all });
+      break;
+    case "provisioning.ok":
+      void queryClient.invalidateQueries({ queryKey: keys.agents.provision.all });
+      void queryClient.invalidateQueries({ queryKey: keys.agents.executors.all });
+      break;
     default:
       // task / report / notification kinds — task-domain keys are the task
       // bridge's (taskEvents.ts) responsibility; agents keys stay untouched.
@@ -88,6 +105,9 @@ export function applyAgentsReconnectToCache(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: keys.agents.executors.all });
   void queryClient.invalidateQueries({ queryKey: keys.agents.enrollment.all });
   void queryClient.invalidateQueries({ queryKey: keys.agents.harnesses.all });
+  // AGW-11: a live provision job may have moved (or finished) while the
+  // stream was down — the connect card re-reads its terminal verdict.
+  void queryClient.invalidateQueries({ queryKey: keys.agents.provision.all });
 }
 
 /**

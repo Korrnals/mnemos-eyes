@@ -351,11 +351,17 @@ export interface EnrollmentItem {
   readonly executor_id: string;
 }
 
-/** Mint answer — board `EnrollmentCreatedOut`. The token rides HERE ONLY. */
+/**
+ * Mint answer — board `EnrollmentCreatedOut`. The token rides HERE ONLY.
+ * `ca_fingerprint` is the AGW-9 parallel slice (the board's CA fingerprint
+ * for the `--expect-fp` bootstrap flag): OPTIONAL until that slice lands —
+ * the mint screen renders the one-command WITHOUT the flag when absent.
+ */
 export interface EnrollmentCreatedResult {
   readonly ok: boolean;
   readonly enrollment: EnrollmentItem;
   readonly token: string;
+  readonly ca_fingerprint?: string;
 }
 
 /** Revoke answer — board `EnrollmentRevokedOut` (the fresh row; NO token). */
@@ -376,6 +382,94 @@ export interface EnrollmentCreateInput {
   readonly label?: string;
   readonly harness_hint?: string;
   readonly name_hint?: string;
+}
+
+// --- SSH provisioner (wave 4 AGW-11; design 2026-09-23-connect-provisioning) -
+
+/** How the board logs into the target over the install-time SSH channel. */
+export type ProvisionAuthKind = "key" | "password" | "alias";
+
+/** Job lifecycle — board `provision_jobs.state` CHECK set, verbatim. */
+export type ProvisionJobState =
+  | "queued"
+  | "connecting"
+  | "installing"
+  | "watching"
+  | "done"
+  | "failed";
+
+/**
+ * One provision job row — the GET /api/executors/provision/{id} `job`
+ * projection. Carries NO secret material (the ssh secret and the mne_
+ * token are transit-only server-side, never in a column or a frame);
+ * `steps` is the server's JSON array of step strings, `error_code` is the
+ * typed failure code the UI maps through the hint table.
+ */
+export interface ProvisionJobRow {
+  readonly id: string;
+  readonly host: string;
+  readonly port: number;
+  readonly auth_kind: ProvisionAuthKind | string;
+  /** Display fingerprint of the PUBLIC half of the key (never derived
+   * from a password server-side — CWE-759 fix); '' for alias auth. */
+  readonly key_fingerprint: string;
+  /** The pinned/presented HOST key fingerprint (canonical SHA256:base64);
+   * '' until strict mode seeded it or TOFU filled it at first connect. */
+  readonly host_key_fingerprint: string;
+  readonly harness_hint: string;
+  readonly board_url_for_host: string;
+  readonly enrollment_id: string;
+  readonly state: ProvisionJobState;
+  readonly error_code: string;
+  readonly steps: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+/** The enrollment leg of a job status read (used → executor_id is the win). */
+export interface ProvisionEnrollmentStatus {
+  readonly state: EnrollmentState | "";
+  readonly expires_at: string;
+  readonly executor_id: string;
+}
+
+/** GET /api/executors/provision/{job_id} answer (ui-token). */
+export interface ProvisionJobStatus {
+  readonly ok: boolean;
+  readonly job: ProvisionJobRow;
+  readonly enrollment: ProvisionEnrollmentStatus;
+}
+
+/** POST /api/executors/provision answer — 202; the mne_ token NEVER rides. */
+export interface ProvisionCreatedResult {
+  readonly ok: boolean;
+  readonly job_id: string;
+  readonly enrollment_id: string;
+  readonly state: ProvisionJobState;
+}
+
+/** SSH auth leg of the provision request (board `ProvisionAuth`). */
+export interface ProvisionAuthInput {
+  readonly kind: ProvisionAuthKind;
+  /** Password or private-key material (key auth) — transit-only. */
+  readonly secret?: string;
+  readonly passphrase?: string;
+}
+
+/**
+ * POST /api/executors/provision body (board `ProvisionBody`): anti-spray
+ * and charset gates are server-owned; the UI mirrors the host charset for
+ * immediate feedback, never as the enforcement boundary.
+ */
+export interface ProvisionCreateInput {
+  readonly name?: string;
+  readonly host: string;
+  readonly port?: number;
+  readonly auth: ProvisionAuthInput;
+  readonly harness_hint?: string;
+  readonly board_url_for_host?: string;
+  readonly expected_host_key_fingerprint?: string;
+  readonly reuse_enrollment_id?: string;
 }
 
 /**
