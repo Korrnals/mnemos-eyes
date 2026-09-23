@@ -146,6 +146,9 @@ class _FakeMnemosHandler(BaseHTTPRequestHandler):
             if "tags" in q:
                 self._reply(200, fake.listing_results)
             else:
+                if fake.fail_list:
+                    self._reply(500, {"detail": "fake mnemos: intentional failure"})
+                    return
                 offset = int(q.get("offset", ["0"])[0])
                 limit = int(q.get("limit", ["0"])[0])
                 window = (fake.memories_result[offset:offset + limit]
@@ -181,14 +184,16 @@ class _FakeMnemosHandler(BaseHTTPRequestHandler):
 
 
 class FakeMnemos:
-    """Loopback mnemos engine double. ``fail_memories`` / ``fail_search``
-    flip its write/search endpoints to 500 to exercise failure paths."""
+    """Loopback mnemos engine double. ``fail_memories`` / ``fail_search`` /
+    ``fail_list`` flip its write/search/listing endpoints to 500 to
+    exercise failure paths."""
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
         self.lock = threading.Lock()
         self.fail_memories = False
         self.fail_search = False
+        self.fail_list = False
         self.mem_count = 0
         # AGG-1: hits returned by POST /search (generic tags-filter callers);
         # default [] keeps legacy replies intact

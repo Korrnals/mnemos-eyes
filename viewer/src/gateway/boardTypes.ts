@@ -596,6 +596,12 @@ export interface MemoryPulseItem {
   readonly created_at: string;
   /** Provenance: the store that contributed the row (server-assigned). */
   readonly server: string;
+  /**
+   * Server-cut content fragment for the inline preview (≤400 chars, cut at
+   * a whitespace boundary); null when the memory has no body. Untrusted
+   * author content — render through TextEngine, never raw interpolation.
+   */
+  readonly content?: string | null;
 }
 
 export interface MemoryPulseServerNote {

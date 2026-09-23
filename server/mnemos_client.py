@@ -168,6 +168,34 @@ async def store_stats(server: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+# Pulse wire contract: items carry an optional content fragment for the
+# UI's TextEngine markdown rendering. <= 400 chars, cut at a whitespace
+# boundary; no trailing ellipsis (the UI clamps visually).
+PULSE_CONTENT_LIMIT = 400
+_WS_CHARS = " \t\r\n\f\v"
+
+
+def content_fragment(content: Any,
+                     limit: int = PULSE_CONTENT_LIMIT) -> str | None:
+    """Truncated content fragment for pulse items.
+
+    At most ``limit`` chars, cut at a whitespace boundary (never mid-word).
+    Absent/blank content maps to None — the wire field stays present as
+    null so both pulse paths (GET /memories and the /search fallback) keep
+    one shape.
+    """
+    text = str(content or "").strip()
+    if not text:
+        return None
+    if len(text) <= limit:
+        return text
+    # Last whitespace within limit+1, so a cut exactly AT limit is legal.
+    cut = max(text.rfind(ws, 0, limit + 1) for ws in _WS_CHARS)
+    if cut <= 0:  # no whitespace in the window (one huge word): hard cut
+        return text[:limit]
+    return text[:cut]
+
+
 async def memory_pulse(server: dict[str, Any], project: str = "",
                        limit: int = 12) -> dict[str, Any]:
     """Recent memories from ONE store (optionally per project); with stats."""
@@ -176,7 +204,12 @@ async def memory_pulse(server: dict[str, Any], project: str = "",
         params["project"] = project
     code, body = await fetch_json(server, "/memories", params)
     if code != 200 or not isinstance(body, list):
-        code2, body2 = await fetch_json(server, "/search", {"query": project or "vesmaro", "limit": limit})
+        # mnemos is POST-only for /search (see search() below) — a GET here
+        # never yields items against a real engine.
+        code2, body2 = await post_json_async(
+            server, "/search",
+            {"query": project or "vesmaro", "limit": limit}, timeout=15.0,
+        )
         if code2 != 200 or not isinstance(body2, list):
             return {"server": server["name"], "ok": False, "status": code, "detail": body,
                     "items": []}
@@ -191,6 +224,7 @@ async def memory_pulse(server: dict[str, Any], project: str = "",
             {
                 "id": i.get("id"),
                 "title": i.get("title") or (i.get("content", "")[:80]),
+                "content": content_fragment(i.get("content")),
                 "tags": i.get("tags", []),
                 "status": i.get("status"),
                 "created_at": i.get("created_at"),

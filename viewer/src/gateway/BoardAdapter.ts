@@ -1399,6 +1399,11 @@ function str(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
+/** Nullable string-tunnel: strings pass, anything absent/foreign is null. */
+function strOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
 function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -1429,6 +1434,9 @@ export function normalizePulse(payload: unknown): MemoryPulse {
         status: str(item.status),
         created_at: str(item.created_at),
         server: str(item.server, "?"),
+        // Server-cut preview fragment (≤400 chars; null when absent) —
+        // tunneled verbatim, the UI renders it through TextEngine.
+        content: strOrNull(item.content),
       };
     }),
     per_server: perServer.map((row): MemoryPulseServerNote => {

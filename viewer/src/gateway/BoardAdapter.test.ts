@@ -368,6 +368,9 @@ describe("BoardAdapter wire contract", () => {
         status: "published",
         created_at: "2026-09-19T10:00:00Z",
         server: "stub-store",
+        // Content fragment (server b1030b0): ≤400-char preview, null when
+        // the memory has no body — tunneled verbatim by normalizePulse.
+        content: "Shell plan fragment: converge the card rhythm first.",
       },
       {
         id: "mem-stub-002",
@@ -376,6 +379,7 @@ describe("BoardAdapter wire contract", () => {
         status: "processed",
         created_at: "2026-09-19T09:30:00Z",
         server: "stub-store",
+        content: null, // honest absence (no body on that memory)
       },
     ],
     per_server: [{ server: "stub-store", ok: true, items: 2, detail: null }],
