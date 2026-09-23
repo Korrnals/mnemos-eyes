@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router";
+import { Link, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useTheme, THEME_PREFERENCES } from "@/components/theme-provider";
 import { useDensity, DENSITIES } from "@/components/density-provider";
@@ -35,6 +35,7 @@ const HUB_SECTIONS = [
   { id: "navigation", titleKey: "settings.hub.navigationTitle" },
   { id: "execution", titleKey: "settings.hub.executionTitle" },
   { id: "automation", titleKey: "settings.hub.automationTitle" },
+  { id: "devices", titleKey: "settings.hub.devicesTitle" },
 ] as const;
 
 /** Owner: features/agents/executionPrefs.ts (the key stays private there). */
@@ -99,6 +100,7 @@ export function SettingsHubPage() {
       <div id="automation" className="scroll-mt-36">
         <AutomationSettingsSection />
       </div>
+      <DevicesLinkSection />
     </div>
   );
 }
@@ -301,6 +303,30 @@ function NavigationSection() {
           t("settings.hub.verdict.domains"),
         ]}
       />
+    </HubSection>
+  );
+}
+
+/**
+ * «Устройства»: a POINTER, not a copy (UI-23 §0 — the hub links, the
+ * domain page owns). Device access management (ADR 0012 Amendment §A.7 —
+ * revoke + per-device granule grants, the owner's «давать и забирать
+ * доступы») lives on /system/devices; the section routes there with one
+ * honest line about what is managed behind the link.
+ */
+function DevicesLinkSection() {
+  const t = useT();
+  return (
+    <HubSection id="devices" title={t("settings.hub.devicesTitle")}>
+      <p className="text-sm text-foreground-secondary">
+        {t("settings.hub.devicesHint")}
+      </p>
+      <Link
+        to="/system/devices"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-elevated px-3 py-1.5 text-sm font-medium transition-colors duration-instant hover:border-iris-bright/40 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+      >
+        {t("settings.hub.devicesCta")}
+      </Link>
     </HubSection>
   );
 }

@@ -41,9 +41,11 @@ import type {
   HookPatchInput,
   HookRule,
   HooksPage,
+  InboxEditInput,
   InboxRefreshResult,
   LaunchesPage,
   LaunchesParams,
+  DeviceGrantsResult,
   DeviceRevokedResult,
   DevicesPage,
   MemoryPulse,
@@ -73,6 +75,7 @@ import type {
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
+  TaskInboxEntry,
   TaskMemories,
   TaskMutationAck,
   TaskPatchInput,
@@ -161,6 +164,7 @@ import type {
  * CV-7 QR pairing + devices (ADR 0012; ui-token class EXCEPT the exchange leg):
  * - listDevices          GET    /api/devices                      (no token material)
  * - revokeDevice         DELETE /api/devices/{id}                 → 200 | 404
+ * - setDeviceGrants      PUT    /api/devices/{id}/grants          → 200 | 404/409/422 (§A.7)
  * - createPairing        POST   /api/pairing                      → 201 code+verify | 429/503
  * - getPairing           GET    /api/pairing/{id}                 (trusted side; verify)
  * - confirmPairing       POST   /api/pairing/{id}/confirm {allow} → 200 idempotent | 409/410
@@ -287,9 +291,17 @@ export interface BoardGateway extends MemoryGateway {
   /**
    * Adopt an inbox mirror row as a native task
    * (`POST /api/tasks/inbox/{memory_id}/adopt`). 409 on double adoption —
-   * the error body carries the existing `task_id`.
+   * the error body carries the existing `task_id`. Any pre-adoption edits
+   * (UI-25 overlay) win over the mirror fields and sync back to mnemos.
    */
   adoptInboxItem(memoryId: string): Promise<BoardTask>;
+  /**
+   * Correct a queue record BEFORE adoption
+   * (`PATCH /api/tasks/inbox/{memory_id}`, UI-25, ui-token). 409 once the
+   * row is adopted; 422 on an empty/garbage body. Answers the updated row
+   * with effective fields + the `edits` overlay.
+   */
+  patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry>;
   /** Force one synchronous inbox scan (`POST /api/tasks/inbox/refresh`). */
   refreshInbox(): Promise<InboxRefreshResult>;
 
@@ -824,6 +836,13 @@ export class BoardAdapter implements BoardGateway {
     );
   }
 
+  async patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry> {
+    return this.request<TaskInboxEntry>(
+      `/tasks/inbox/${encodeURIComponent(memoryId)}`,
+      { method: "PATCH", auth: true, body: patch },
+    );
+  }
+
   async refreshInbox(): Promise<InboxRefreshResult> {
     return this.request<InboxRefreshResult>("/tasks/inbox/refresh", {
       method: "POST",
@@ -1101,6 +1120,23 @@ export class BoardAdapter implements BoardGateway {
     return this.request<DeviceRevokedResult>(
       `/devices/${encodeURIComponent(deviceId)}`,
       { method: "DELETE", auth: true },
+    );
+  }
+
+  /**
+   * Set the per-device granule set (`PUT /api/devices/{id}/grants`,
+   * ui-token; Amendment §A.7). FULL replacement — the sent array IS the
+   * set (empty = every granule revoked, global reads stay open). Applies
+   * to the live session on the device's very next request; 404 unknown
+   * device, 409 not-active, 422 unknown granule names.
+   */
+  async setDeviceGrants(
+    deviceId: string,
+    grants: readonly string[],
+  ): Promise<DeviceGrantsResult> {
+    return this.request<DeviceGrantsResult>(
+      `/devices/${encodeURIComponent(deviceId)}/grants`,
+      { method: "PUT", body: { grants: [...grants] }, auth: true },
     );
   }
 

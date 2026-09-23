@@ -73,6 +73,10 @@ VALID_ENVS = frozenset({"cluster", "laptop", "local", "cloud", "unknown"})
 # BE-12: task priority dictionary. `normal` is both the API default and the
 # column DEFAULT, so pre-migration rows read `normal` with no backfill.
 TASK_PRIORITIES = frozenset({"critical", "high", "normal", "low"})
+# UI-25: owner-editable fields of a FUTURE task on an inbox mirror row
+# (pre-adoption corrections). Anything else inside the row's ``edits`` JSON
+# is bookkeeping (e.g. revision sync state) and is never overlaid.
+INBOX_EDITABLE_FIELDS = ("title", "summary", "priority", "project")
 # BE-12: content fields guarded by the 24h edit window. `status` is
 # deliberately NOT here: status changes are workflow transitions (column
 # moves, UI-8 «Вернуть в работу» → PATCH status), free at any task age —
@@ -254,15 +258,57 @@ def presence_from_last_seen(last_seen: str) -> str:
 PAIRING_TTL_S = 180.0                 # one TTL for code/QR/verify (§6)
 PAIRING_VERIFY_DIGITS = 4             # anti-mistake screen check (§3.5)
 DEVICE_MAX_ACTIVE = 5                 # ≤5 active device sessions (§5)
+# Owner override 2026-09-23 (ADR 0012 Amendment §A.7 — revocation-first):
+# ONE sliding window for every device class. The scope v1 short control
+# window (7 d) is RETIRED — the compromise answer is the instant kill-switch
+# (DELETE /api/devices/{id}) plus per-device granular grants, not an
+# auto-expiry clock that the owner cannot reason about. The hard 90-day cap
+# is unchanged.
 DEVICE_SLIDING_TTL_S = 30 * 86400.0   # sliding expiry while active (§5)
-# Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): control devices ride a
-# SHORTER sliding window — 7 days of inactivity lapses the session
-# (Security: a stolen mutation-capable phone must age out fast); the hard
-# 90-day cap is unchanged for both scopes.
-DEVICE_SLIDING_TTL_S_CONTROL = 7 * 86400.0
 DEVICE_HARD_TTL_S = 90 * 86400.0      # absolute cap regardless of activity
 DEVICE_TOKEN_PREFIX = "mnd_"
 DEVICE_SCOPES = ("read", "control")   # v0 read; v1 adds control (Amendment)
+# Per-device grants (ADR 0012 Amendment §A.7, owner directive 2026-09-23
+# «пользователь-администратор сам определяет кому сколько и куда»): the
+# MUTATION granules a device may exercise. Reads (the _DEVICE_READ_ROUTES
+# set in app.py) are open to every VALID device — no granule, global read
+# always; the hard-deny families stay closed regardless of grants. The
+# list is EXTENSIBLE by design: append here + add the route rows to
+# _DEVICE_GRANT_ROUTES in app.py; older rows simply never carry the new
+# name until the owner grants it.
+DEVICE_GRANTS = ("tasks", "reports", "inbox", "notifications")
+# Wire/storage forms of the grants set (device_sessions.grants column):
+# ''   — column default, "never provisioned": the boot migration fills
+#        control rows with the full set; anything else stays fail-closed
+#        read-only.
+# '[]' — EXPLICITLY empty: the owner revoked every granule; the boot
+#        migration must never re-grant it (the whole point of revoke-all).
+# Otherwise a JSON array in DEVICE_GRANTS canonical order (deduped).
+DEVICE_GRANTS_UNSET = ""
+DEVICE_GRANTS_EMPTY = "[]"
+
+
+def normalize_device_grants(
+        grants: list[str] | tuple[str, ...] | None) -> str:
+    """Canonical storage form of a grants set: dedupe + DEVICE_GRANTS order,
+    json-encoded. Unknown names are the CALLER's problem (the API validates;
+    the store normalizes whatever survives)."""
+    wanted = set(grants or [])
+    return json.dumps([g for g in DEVICE_GRANTS if g in wanted])
+
+
+def grants_from_stored(raw: str | None) -> list[str]:
+    """Parse the grants column into the public list. ''/'[]'/garbage all
+    answer [] — fail-closed to reads-only, never fail-open."""
+    if not raw or raw == DEVICE_GRANTS_EMPTY:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [g for g in DEVICE_GRANTS if g in parsed]
 PAIRING_STATES = frozenset({
     "created", "scanned", "confirmed", "issued", "expired", "revoked",
 })
@@ -724,7 +770,8 @@ CREATE TABLE IF NOT EXISTS task_inbox (
     specialist        TEXT NOT NULL DEFAULT '',
     source_created_at TEXT NOT NULL DEFAULT '',
     last_seen         TEXT NOT NULL,
-    adopted_task_id   TEXT
+    adopted_task_id   TEXT,
+    edits             TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS task_assignments (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -963,11 +1010,14 @@ CREATE INDEX IF NOT EXISTS idx_enrollment_token_hash ON enrollment_tokens (token
 -- response. expires_at is the SLIDING 30-day clock (refreshed on every
 -- validated request); hard_expires_at is the absolute 90-day cap that
 -- activity can never push out. last_seen mirrors last_seen_at (the raw
--- request stamp; naming parity with the executors registry).
+-- request stamp; naming parity with the executors registry). grants is the
+-- per-device JSON granule set (Amendment §A.7): '' = never provisioned
+-- (the boot migration fills control rows), '[]' = owner revoked all.
 CREATE TABLE IF NOT EXISTS device_sessions (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     scope           TEXT NOT NULL DEFAULT 'read',
+    grants          TEXT NOT NULL DEFAULT '',
     token_hash      TEXT NOT NULL,
     created_at      TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL DEFAULT '',
@@ -1063,6 +1113,7 @@ class Store:
         with self._conn() as db:
             db.executescript(_SCHEMA)
             self._migrate_device_scope_v1(db)
+            self._migrate_device_grants_v1(db)
             self._migrate(db)
             self._seed_if_empty(db)
             self._seed_harnesses(db)
@@ -1091,6 +1142,42 @@ class Store:
         if cur.rowcount:
             self._log(db, "device.scope-migrated", None,
                       {"migrated": cur.rowcount, "to": "control"})
+
+    def _migrate_device_grants_v1(self, db: sqlite3.Connection) -> None:
+        """Per-device grants migration (ADR 0012 Amendment §A.7, owner
+        directive 2026-09-23 «давать и забирать доступы к компонентам по
+        подключенным устройствам»): every ACTIVE control-scope row still on
+        the unprovisioned sentinel (grants='') gains the FULL granule set —
+        byte-for-byte the rights control had under the scope table, so the
+        owner-visible behavior of an already-paired phone does not change
+        under its feet. (Boot order: the v1 scope migration has ALREADY
+        flipped active read rows to control by the time this runs, so an
+        active row is control here by construction; revoked/expired rows
+        keep whatever they have — dead sessions are audit history, not
+        callers.)
+
+        '' vs '[]' is the load-bearing distinction: an owner who revoked
+        ALL granules (PUT /grants with []) leaves '[]', which this UPDATE
+        never matches — revoke-all survives every reboot. Idempotent:
+        second boot finds no '' control rows, writes nothing. Deliberately
+        NO SEED_VERSION bump (additive-evolution rule)."""
+        cols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(device_sessions)").fetchall()}
+        if "grants" not in cols:
+            # Additive ALTER for pre-grants databases (same rule as every
+            # _migrate column: DEFAULT '' covers the existing rows, the
+            # data migration below fills the live control ones).
+            db.execute(
+                "ALTER TABLE device_sessions "
+                "ADD COLUMN grants TEXT NOT NULL DEFAULT ''")
+        full = normalize_device_grants(DEVICE_GRANTS)
+        cur = db.execute(
+            "UPDATE device_sessions SET grants=? "
+            "WHERE state='active' AND scope='control' AND grants=?",
+            (full, DEVICE_GRANTS_UNSET))
+        if cur.rowcount:
+            self._log(db, "device.grants-migrated", None,
+                      {"migrated": cur.rowcount, "grants": DEVICE_GRANTS})
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, timeout=10)
@@ -1201,6 +1288,15 @@ class Store:
             "PRAGMA table_info(provision_host_pins)").fetchall()}
         if pcols and "port" not in pcols:
             db.execute("DROP TABLE provision_host_pins")
+        # UI-25: owner edits of an inbox row BEFORE adoption (title/summary/
+        # priority/project overlay as JSON; '' = unedited). Additive ALTER —
+        # the '' DEFAULT covers pre-UI-25 rows; no SEED_VERSION bump.
+        icols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(task_inbox)").fetchall()}
+        if "edits" not in icols:
+            db.execute(
+                "ALTER TABLE task_inbox "
+                "ADD COLUMN edits TEXT NOT NULL DEFAULT ''")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
@@ -3290,9 +3386,12 @@ class Store:
     @staticmethod
     def _device_public(row: sqlite3.Row) -> dict[str, Any]:
         """UI shape of a device session: token_hash NEVER leaves the store
-        (ADR §5 — the list must be safe to render on the trusted side)."""
+        (ADR §5 — the list must be safe to render on the trusted side);
+        grants rides as the parsed list (the owner panel's granule
+        toggles bind to it)."""
         return {
             "id": row["id"], "name": row["name"], "scope": row["scope"],
+            "grants": grants_from_stored(row["grants"]),
             "state": row["state"], "created_at": row["created_at"],
             "last_seen_at": row["last_seen_at"],
             "last_seen": row["last_seen"], "expires_at": row["expires_at"],
@@ -3548,30 +3647,35 @@ class Store:
                     "SELECT 1 FROM device_sessions WHERE id=?",
                     (device_id,)).fetchone():
                 device_id = "dev-" + secrets.token_hex(6)
-            # Scope v1 (ADR 0012 Amendment): the SLIDING window follows the
-            # pairing's scope — control 7 d, read 30 d; the hard 90-day cap
-            # is set below for both. An unknown scope value rides the read
-            # window (fail-safe, same as the guard's scope fallback).
+            # Owner override 2026-09-23 (Amendment §A.7): ONE sliding window
+            # (30 d) for every device — the 7-day control clock is retired
+            # (revocation-first: the kill-switch + granular grants are the
+            # compromise, not an auto-expiry). The hard 90-day cap is set
+            # below. Grants: control pairings START with the full granule
+            # set (the v1 semantic); read pairings start empty — the owner
+            # can still grant granules to either via PUT /api/devices/{id}/
+            # grants, and the boot migration backfills only the '' sentinel.
             scope = row["scope"] if row["scope"] == "control" else "read"
-            sliding = (DEVICE_SLIDING_TTL_S_CONTROL if scope == "control"
-                       else DEVICE_SLIDING_TTL_S)
+            grants = (normalize_device_grants(DEVICE_GRANTS) if scope == "control"
+                      else DEVICE_GRANTS_EMPTY)
             device = {
                 "id": device_id, "name": name, "scope": row["scope"],
+                "grants": grants,
                 "token_hash": token_hash, "created_at": now_s,
                 "last_seen_at": now_s,
-                "expires_at": _iso_in(sliding, now),
+                "expires_at": _iso_in(DEVICE_SLIDING_TTL_S, now),
                 "hard_expires_at": _iso_in(DEVICE_HARD_TTL_S, now),
                 "state": "active", "ua": (ua or "")[:200],
                 "ip": (ip or "")[:64], "last_seen": now_s,
             }
             db.execute(
                 """INSERT INTO device_sessions
-                       (id, name, scope, token_hash, created_at,
+                       (id, name, scope, grants, token_hash, created_at,
                         last_seen_at, expires_at, hard_expires_at, state,
                         ua, ip, last_seen)
-                       VALUES (:id, :name, :scope, :token_hash, :created_at,
-                        :last_seen_at, :expires_at, :hard_expires_at,
-                        :state, :ua, :ip, :last_seen)""",
+                       VALUES (:id, :name, :scope, :grants, :token_hash,
+                        :created_at, :last_seen_at, :expires_at,
+                        :hard_expires_at, :state, :ua, :ip, :last_seen)""",
                 device)
             self._log(db, "pairing.issued", None, {
                 "pairing_id": pairing_id, "device_id": device_id,
@@ -3583,8 +3687,12 @@ class Store:
 
     @staticmethod
     def _device_public_from(device: dict[str, Any]) -> dict[str, Any]:
-        """_device_public for a just-minted dict (no Row at hand)."""
-        return {k: v for k, v in device.items() if k != "token_hash"}
+        """_device_public for a just-minted dict (no Row at hand); the
+        grants value is still the stored JSON string here — parse it to
+        the public list shape."""
+        public = {k: v for k, v in device.items() if k != "token_hash"}
+        public["grants"] = grants_from_stored(public.get("grants"))
+        return public
 
     def list_devices(self) -> list[dict[str, Any]]:
         """All device sessions, public shape (no token hashes), oldest
@@ -3619,19 +3727,62 @@ class Store:
                     (device_id,)).fetchone()
         return self._device_public(row), transitioned
 
+    def set_device_grants(
+            self, device_id: str, grants: list[str],
+    ) -> tuple[dict[str, Any], bool] | None:
+        """Owner sets the per-device granule set (ADR 0012 Amendment §A.7):
+        FULL-REPLACEMENT semantics (PUT) — the sent list IS the new set,
+        canonicalized (dedupe + DEVICE_GRANTS order). Takes effect on the
+        LIVE session immediately: the very next request the device makes
+        is answered under the new set (the guard reads the row per
+        request); no re-pairing, no token re-issue.
+
+        Returns (public row, changed) with changed=False when the sent set
+        equals the stored one (idempotent repeat, no audit spam); None for
+        an unknown id. Non-active sessions answer (row, False) — the caller
+        turns that into 409 (granting to a dead session is a no-op, the
+        owner revokes or re-pairs instead). The audit event carries both
+        sets (fact only — no token material)."""
+        stored = normalize_device_grants(grants)
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM device_sessions WHERE id=?",
+                (device_id,)).fetchone()
+            if row is None:
+                return None
+            if row["grants"] == stored:
+                return self._device_public(row), False
+            if row["state"] != "active":
+                return self._device_public(row), False
+            cur = db.execute(
+                "UPDATE device_sessions SET grants=? WHERE id=?",
+                (stored, device_id))
+            if cur.rowcount != 1:  # unreachable under the lock; keep honest
+                return self._device_public(row), False
+            self._log(db, "device.grants", None, {
+                "device_id": device_id,
+                "previous": grants_from_stored(row["grants"]),
+                "grants": grants_from_stored(stored)})
+            row = db.execute(
+                "SELECT * FROM device_sessions WHERE id=?",
+                (device_id,)).fetchone()
+        return self._device_public(row), True
+
     def validate_device_token(
-        self, token: str, *, ua: str = "", ip: str = "",
+            self, token: str, *, ua: str = "", ip: str = "",
     ) -> dict[str, Any] | None:
         """Device-token check (ADR §5): sha256 the presented token, index
         lookup, constant-time compare. Revoked / hard-TTL-passed /
         sliding-TTL-lapsed tokens answer None (401 upstream) and are
         lazily flipped to state='expired' when the clock says so. A valid
-        active token slides expires_at forward — 7 d for control scope,
-        30 d for read (scope v1, ADR 0012 Amendment) — and ticks
+        active token slides expires_at forward — 30 d for every device
+        (owner override 2026-09-23, Amendment §A.7: the scope-differentiated
+        clock is retired, revocation is the kill-switch) — and ticks
         last_seen/ua/ip: one write per authenticated request, the
         executor presence-tick pattern. The sliding UPDATE deliberately
-        never touches the scope column: the row's scope is set at issue
-        (or by the v1 data migration) and nothing here may rewrite it."""
+        never touches the scope or grants columns: scope is set at issue
+        (or by the v1 data migration), grants are the owner's live set via
+        set_device_grants — nothing here may rewrite either."""
         if not token.startswith(DEVICE_TOKEN_PREFIX):
             return None
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -3655,13 +3806,11 @@ class Store:
                 return None
             if row["state"] != "active":
                 return None
-            sliding = (DEVICE_SLIDING_TTL_S_CONTROL
-                       if row["scope"] == "control" else DEVICE_SLIDING_TTL_S)
             db.execute(
                 """UPDATE device_sessions
                    SET last_seen_at=?, last_seen=?, expires_at=?, ua=?, ip=?
                    WHERE id=? AND state='active'""",
-                (now_s, now_s, _iso_in(sliding, now),
+                (now_s, now_s, _iso_in(DEVICE_SLIDING_TTL_S, now),
                  (ua or "")[:200], (ip or "")[:64], row["id"]))
             return self._device_public(row)
 
@@ -4723,7 +4872,9 @@ class Store:
     # refreshed ONLY for records their server actually returned, so a record
     # that vanished from mnemos simply ages out into "stale" instead of
     # being deleted — the mirror never destroys data. adopted_task_id is
-    # write-once from the adopt flow and survives re-scans.
+    # write-once from the adopt flow and survives re-scans. The ``edits``
+    # JSON (UI-25, owner corrections before adoption) survives re-scans the
+    # same way — it is an overlay the API merges over the base fields.
     INBOX_STALE_SECONDS = 30 * 60
     INBOX_REFRESHED_AT_KEY = "task_inbox_refreshed_at"
 
@@ -4784,24 +4935,60 @@ class Store:
             )
         return cur.rowcount > 0
 
+    def save_inbox_edits(self, memory_id: str, edits: dict[str, Any]) -> bool:
+        """Merge owner field edits into the row's ``edits`` JSON (UI-25).
+        Provided keys override, omitted keys keep their previous value;
+        bookkeeping keys (revision sync state) are preserved. False when the
+        row is gone."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT edits FROM task_inbox WHERE memory_id=?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            current = _loads(row["edits"]) if row["edits"] else {}
+            merged = {**current, **edits}
+            cur = db.execute(
+                "UPDATE task_inbox SET edits=? WHERE memory_id=?",
+                (json.dumps(merged, ensure_ascii=False), memory_id),
+            )
+        return cur.rowcount > 0
+
+    @staticmethod
+    def _inbox_overlay(edits_raw: str) -> dict[str, str]:
+        """Editable-field overlay of one row's edits JSON. Empty strings are
+        meaningful (an owner CLEARED the field) — only non-str junk drops."""
+        data = _loads(edits_raw) if edits_raw else {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            key: str(data[key]) for key in INBOX_EDITABLE_FIELDS
+            if isinstance(data.get(key), str)
+        }
+
     def inbox_refreshed_at(self) -> str:
         return self.get_meta(self.INBOX_REFRESHED_AT_KEY) or ""
 
     def list_inbox(self, scope: str = "all", project: str = "",
-                   include_adopted: bool = False) -> list[dict[str, Any]]:
+                   include_adopted: bool = False,
+                   memory_id: str | None = None) -> list[dict[str, Any]]:
         """Inbox projection for the API.
 
         Filters: ``scope`` is 'all' or one source server name (mirror rows
         know their server); ``project`` is an exact match; rows already
-        adopted into a native task are hidden unless include_adopted.
-        Dedup (unconditional): rows whose memory_id appears in ANY native
-        task's memory_ids — archived included, the bulk import included —
-        never leak back into the inbox. ``stale`` = last_seen older than
+        adopted into a native task are hidden unless include_adopted;
+        ``memory_id`` pins one row (UI-25 PATCH answer). Dedup
+        (unconditional): rows whose memory_id appears in ANY native task's
+        memory_ids — archived included, the bulk import included — never
+        leak back into the inbox. ``stale`` = last_seen older than
         INBOX_STALE_SECONDS, i.e. the source memory stopped coming back.
         """
         q = "SELECT * FROM task_inbox"
         where: list[str] = []
         params: list[Any] = []
+        if memory_id is not None:
+            where.append("memory_id=?")
+            params.append(memory_id)
         if scope and scope != "all":
             where.append("server=?")
             params.append(scope)
@@ -4822,20 +5009,25 @@ class Store:
         for r in rows:
             if r["memory_id"] in linked:
                 continue
+            # UI-25: the owner's pre-adoption edits are an overlay — the
+            # projection shows the EFFECTIVE fields plus the raw overlay
+            # (None when unedited) so clients can flag/prefill edits.
+            overlay = self._inbox_overlay(r["edits"])
             items.append({
                 "memory_id": r["memory_id"],
                 "server": r["server"],
-                "project": r["project"],
-                "title": r["title"],
-                "excerpt": r["excerpt"],
+                "project": overlay.get("project", r["project"]),
+                "title": overlay.get("title", r["title"]),
+                "excerpt": overlay.get("summary", r["excerpt"]),
                 "tags": _loads(r["tags"]),
-                "priority": r["priority"],
+                "priority": overlay.get("priority", r["priority"]),
                 "specialist": r["specialist"],
                 "created_at": r["source_created_at"],
                 "last_seen": r["last_seen"],
                 "stale": _age_seconds(r["last_seen"]) > self.INBOX_STALE_SECONDS,
                 "adopted": r["adopted_task_id"] is not None,
                 "adopted_task_id": r["adopted_task_id"],
+                "edits": overlay or None,
             })
         return items
 

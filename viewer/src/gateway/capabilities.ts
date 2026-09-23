@@ -13,6 +13,7 @@ import type {
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
+  TaskInboxEntry,
   TaskMemories,
   TaskMutationAck,
   TaskPatchInput,
@@ -28,6 +29,7 @@ import type {
   AutomationSettings,
   AutomationSettingsInput,
   AutomationStatus,
+  DeviceGrantsResult,
   DeviceRevokedResult,
   DevicesPage,
   ExecutionSettings,
@@ -37,6 +39,7 @@ import type {
   ExecutorsPage,
   HarnessCreateInput,
   HarnessesPage,
+  InboxEditInput,
   HarnessStateResult,
   EnrollmentCreateInput,
   EnrollmentCreatedResult,
@@ -155,6 +158,8 @@ export interface TaskMutationSource {
   archiveTask(taskId: string): Promise<TaskMutationAck>;
   unarchiveTask(taskId: string): Promise<TaskUnarchiveResult>;
   adoptInboxItem(memoryId: string): Promise<BoardTask>;
+  /** UI-25: owner corrections to an inbox row BEFORE adoption. */
+  patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry>;
   refreshInbox(): Promise<InboxRefreshResult>;
 }
 
@@ -406,6 +411,15 @@ export interface PairingSource {
   listDevices(signal?: AbortSignal): Promise<DevicesPage>;
   /** Revoke one device (`DELETE /api/devices/{id}`, ui-token; terminal). */
   revokeDevice(deviceId: string): Promise<DeviceRevokedResult>;
+  /**
+   * Set the per-device granule set (`PUT /api/devices/{id}/grants`,
+   * ui-token; Amendment §A.7) — FULL replacement, live on the next
+   * device request.
+   */
+  setDeviceGrants(
+    deviceId: string,
+    grants: readonly string[],
+  ): Promise<DeviceGrantsResult>;
   /** Start a pairing (`POST /api/pairing`, ui-token; 201 = code + verify). */
   createPairing(): Promise<PairingCreatedResult>;
   /** Trusted-side status (`GET /api/pairing/{id}`, ui-token; verify source). */
@@ -421,6 +435,8 @@ export type PairingGateway = MemoryGateway & PairingSource;
 export function isPairingSource(gateway: MemoryGateway): gateway is PairingGateway {
   return (
     typeof (gateway as Partial<PairingSource>).listDevices === "function" &&
+    typeof (gateway as Partial<PairingSource>).revokeDevice === "function" &&
+    typeof (gateway as Partial<PairingSource>).setDeviceGrants === "function" &&
     typeof (gateway as Partial<PairingSource>).createPairing === "function" &&
     typeof (gateway as Partial<PairingSource>).confirmPairing === "function" &&
     typeof (gateway as Partial<PairingSource>).cancelPairing === "function"

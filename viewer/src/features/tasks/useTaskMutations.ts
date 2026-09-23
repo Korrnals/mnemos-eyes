@@ -1,7 +1,13 @@
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
-import type { BoardTask, TaskCreateInput, TaskPatchInput } from "@/gateway/boardTypes";
+import type {
+  BoardTask,
+  InboxEditInput,
+  TaskCreateInput,
+  TaskInbox,
+  TaskPatchInput,
+} from "@/gateway/boardTypes";
 import { isTaskMutationSource } from "@/gateway/capabilities";
 import type { TaskMutationSource } from "@/gateway/capabilities";
 import type { MemoryGateway } from "@/gateway/MemoryGateway";
@@ -295,6 +301,39 @@ export function createTaskMutations(deps: TaskMutationDeps) {
   };
 
   /**
+   * UI-25 pre-adoption edit of an inbox row. The server answer (the updated
+   * row with effective fields) replaces the cached item in place — the card
+   * reflects the edit immediately, and «Принять в борд» then adopts the
+   * EDITED version (the adopt mutation reads the same cache key).
+   */
+  const editInboxItem = (memoryId: string, patch: InboxEditInput): void => {
+    run(
+      { errorTitleKey: "tasks.mutation.inboxEditFailed" },
+      async () => {
+        const updated = await mutations().patchInboxItem(memoryId, patch);
+        queryClient.setQueryData<TaskInbox>(
+          keys.tasks.inbox({ include_adopted: false }),
+          (prev) =>
+            prev
+              ? {
+                  ...prev,
+                  items: prev.items.map((row) =>
+                    row.memory_id === memoryId ? updated : row,
+                  ),
+                }
+              : prev,
+        );
+        invalidate(keys.tasks.inboxAll);
+        toast.push({
+          kind: "ok",
+          title: t("tasks.mutation.inboxEditSaved"),
+          detail: updated.title,
+        });
+      },
+    );
+  };
+
+  /**
    * Explicit inbox scan (`POST /api/tasks/inbox/refresh`). `onSettled` fires
    * when the scan finishes OR when the token gate defers it (panel up) —
    * callers drive their spinner from click to that point.
@@ -331,6 +370,7 @@ export function createTaskMutations(deps: TaskMutationDeps) {
     unarchiveTask,
     createTask,
     adoptInboxItem,
+    editInboxItem,
     refreshInbox,
   };
 }

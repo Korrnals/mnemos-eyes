@@ -361,8 +361,9 @@ class TestInboxGet:
         assert set(item) == {
             "memory_id", "server", "project", "title", "excerpt", "tags",
             "priority", "specialist", "created_at", "last_seen", "stale",
-            "adopted", "adopted_task_id",
+            "adopted", "adopted_task_id", "edits",
         }
+        assert item["edits"] is None  # UI-25: unedited rows carry no overlay
         assert item["created_at"] == "2026-09-01T00:00:00+00:00"
 
     def test_scope_filter_by_server(self, inbox_env, client):
@@ -444,3 +445,197 @@ class TestAdopt:
         r = client.post("/api/tasks/inbox/refresh", headers=auth)
         assert r.status_code == 429
         assert "rate limit" in r.json()["detail"]
+
+
+# ------------------------------------------- edit before adopt (UI-25)
+class TestInboxEdit:
+    def _seed(self, app_module, memory_id="m-edit"):
+        app_module.store.upsert_inbox_records([{
+            "memory_id": memory_id, "server": "qa-inbox", "project": "hysteria",
+            "title": "queue work item", "excerpt": "base excerpt",
+            "tags": ["task:queue", "project:hysteria", "severity:low"],
+            "priority": "low", "specialist": "@GCW: SRE/DevOps",
+            "source_created_at": "2026-09-01T00:00:00+00:00",
+        }], "x")
+        return memory_id
+
+    def test_patch_stores_overlay_and_get_projects_effective(
+            self, inbox_env, client, auth):
+        mid = self._seed(inbox_env)
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                         json={"title": "edited title", "priority": "high"})
+        assert r.status_code == 200, r.text
+        item = r.json()
+        assert item["title"] == "edited title"        # effective
+        assert item["priority"] == "high"             # effective
+        assert item["project"] == "hysteria"          # base untouched
+        assert item["excerpt"] == "base excerpt"      # base untouched
+        assert item["edits"] == {"title": "edited title", "priority": "high"}
+        # the projection (GET) carries the same overlay
+        listed = client.get("/api/tasks/inbox").json()["items"][0]
+        assert listed["title"] == "edited title"
+        assert listed["priority"] == "high"
+        assert listed["edits"]["title"] == "edited title"
+
+    def test_patch_partial_merges_over_previous_edits(
+            self, inbox_env, client, auth):
+        mid = self._seed(inbox_env)
+        assert client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                            json={"title": "v2"}).status_code == 200
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                         json={"project": "mnemos"})
+        assert r.status_code == 200, r.text
+        assert r.json()["edits"] == {"title": "v2", "project": "mnemos"}
+
+    def test_patch_summary_flows_into_excerpt_projection(
+            self, inbox_env, client, auth):
+        mid = self._seed(inbox_env)
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                         json={"summary": "owner spec text"})
+        assert r.status_code == 200, r.text
+        assert r.json()["excerpt"] == "owner spec text"
+
+    def test_patch_clearing_project_is_meaningful(self, inbox_env, client,
+                                                  auth):
+        """Empty string = the owner CLEARED the field (not 'no edit'): the
+        projection drops the project and the chip hides."""
+        mid = self._seed(inbox_env)
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                         json={"project": ""})
+        assert r.status_code == 200, r.text
+        assert r.json()["project"] == ""
+        assert r.json()["edits"] == {"project": ""}
+
+    def test_patch_unknown_404(self, inbox_env, client, auth):
+        r = client.patch("/api/tasks/inbox/no-such", headers=auth,
+                         json={"title": "x"})
+        assert r.status_code == 404
+
+    def test_patch_adopted_409(self, inbox_env, client, auth):
+        mid = self._seed(inbox_env)
+        first = client.post(f"/api/tasks/inbox/{mid}/adopt", headers=auth)
+        assert first.status_code == 201
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                         json={"title": "late edit"})
+        assert r.status_code == 409
+
+    def test_patch_empty_body_422(self, inbox_env, client, auth):
+        mid = self._seed(inbox_env)
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth, json={})
+        assert r.status_code == 422
+
+    def test_patch_bad_priority_422(self, inbox_env, client, auth):
+        mid = self._seed(inbox_env)
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                         json={"priority": "urgent"})
+        assert r.status_code == 422
+
+    def test_patch_title_cap_422(self, inbox_env, client, auth):
+        mid = self._seed(inbox_env)
+        r = client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                         json={"title": "x" * 201})
+        assert r.status_code == 422
+
+    def test_patch_requires_ui_token(self, inbox_env, client, no_board_token):
+        assert client.patch("/api/tasks/inbox/whatever",
+                            json={"title": "x"}).status_code == 503
+
+    def test_edits_survive_rescan(self, inbox_env, client, auth,
+                                  fake_mnemos):
+        """Re-scan refreshes the BASE fields but never clobbers the owner
+        overlay (same survival contract as adopted_task_id)."""
+        mid = self._seed(inbox_env)
+        assert client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                            json={"title": "edited"}).status_code == 200
+        fake_mnemos.listing_results = [
+            hit(mid, title="source renamed", tags=["task:queue",
+                                                   "severity:low"])]
+        assert client.post("/api/tasks/inbox/refresh",
+                           headers=auth).status_code == 200
+        item = client.get("/api/tasks/inbox").json()["items"][0]
+        assert item["title"] == "edited"      # overlay wins over new base
+        assert item["edits"] == {"title": "edited"}
+
+
+class TestAdoptWithEdits:
+    def _seed(self, app_module, memory_id="m-edit-adopt"):
+        app_module.store.upsert_inbox_records([{
+            "memory_id": memory_id, "server": "qa-inbox",
+            "project": "hysteria", "title": "base title",
+            "excerpt": "base excerpt",
+            "tags": ["task:queue", "project:hysteria", "severity:low",
+                     "owner:gcw-sre-devops"],
+            "priority": "low", "specialist": "@GCW: SRE/DevOps",
+            "source_created_at": "2026-09-01T00:00:00+00:00",
+        }], "x")
+        return memory_id
+
+    def test_adopt_uses_edited_fields_and_writes_revision(
+            self, inbox_env, client, auth, fake_mnemos):
+        mid = self._seed(inbox_env)
+        assert client.patch(
+            f"/api/tasks/inbox/{mid}", headers=auth,
+            json={"title": "edited title", "summary": "edited spec",
+                  "priority": "high", "project": "mnemos"},
+        ).status_code == 200
+        r = client.post(f"/api/tasks/inbox/{mid}/adopt", headers=auth)
+        assert r.status_code == 201, r.text
+        task = r.json()
+        assert task["title"] == "edited title"
+        assert task["summary"] == "edited spec"
+        assert task["project"] == "mnemos"
+        assert task["priority"] == "high"
+        assert task["specialists"] == ["@GCW: SRE/DevOps"]
+        # SEC-4 links: the source memory AND the edited revision
+        assert task["memory_ids"] == [mid, "fake-mem-1"]
+        # sync-back: exactly one revision POST, supersedes the original
+        bodies = fake_mnemos.memories_bodies()
+        assert len(bodies) == 1
+        body = bodies[0]
+        assert body["title"] == "edited title"
+        assert body["content"] == "edited spec"
+        assert body["metadata"]["supersedes"] == mid
+        assert "task:edit" in body["tags"]
+        assert "task:queue" in body["tags"]          # queue semantics kept
+        assert "project:mnemos" in body["tags"]      # edited project tag
+        assert "severity:high" in body["tags"]       # reverse-mapped priority
+        assert "project:hysteria" not in body["tags"]
+        assert "severity:low" not in body["tags"]
+        assert "owner:gcw-sre-devops" in body["tags"]  # untouched tags ride
+        # bookkeeping rides the edits JSON
+        import json as _json
+        edits = _json.loads(inbox_env.store.get_inbox_item(mid)["edits"])
+        assert edits["revision_memory_id"] == "fake-mem-1"
+
+    def test_adopt_without_edits_keeps_legacy_behavior(
+            self, inbox_env, client, auth, fake_mnemos):
+        """No edits → no mnemos write at all: adopt is byte-identical to the
+        pre-UI-25 contract (link-only, standard summary)."""
+        mid = self._seed(inbox_env)
+        r = client.post(f"/api/tasks/inbox/{mid}/adopt", headers=auth)
+        assert r.status_code == 201, r.text
+        task = r.json()
+        assert task["title"] == "base title"
+        assert task["project"] == "hysteria"
+        assert task["priority"] == "low"
+        assert task["memory_ids"] == [mid]
+        assert fake_mnemos.memories_bodies() == []
+        assert mid[:8] in task["summary"]
+
+    def test_adopt_with_edits_survives_mnemos_failure(
+            self, inbox_env, client, auth, fake_mnemos):
+        """Revision write fails → adopt STILL succeeds (the board task is
+        primary); the failure is recorded in the edits JSON bookkeeping."""
+        mid = self._seed(inbox_env)
+        assert client.patch(f"/api/tasks/inbox/{mid}", headers=auth,
+                            json={"title": "edited"}).status_code == 200
+        fake_mnemos.fail_memories = True
+        r = client.post(f"/api/tasks/inbox/{mid}/adopt", headers=auth)
+        assert r.status_code == 201, r.text
+        task = r.json()
+        assert task["title"] == "edited"
+        assert task["memory_ids"] == [mid]           # no revision to link
+        import json as _json
+        edits = _json.loads(inbox_env.store.get_inbox_item(mid)["edits"])
+        assert "intentional failure" in edits["revision_error"]
+        assert "revision_memory_id" not in edits

@@ -82,8 +82,8 @@ def upstream_repo(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
     _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "pipeline-test@example.invalid")
-    _git(repo, "config", "user.name", "Pipeline Test")
+    _git(repo, "config", "user.email", "153223100+Korrnals@users.noreply.github.com")
+    _git(repo, "config", "user.name", "Korrnals")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "docs: fake upstream snapshot")
     return {
@@ -458,8 +458,8 @@ def test_check_drift_detects_new_commits(tmp_path, config, upstream_repo) -> Non
     (moved / "docs/en/user/cli-reference.md").write_text(
         "# CLI reference\n\nEvery command. Updated.\n", encoding="utf-8"
     )
-    _git(moved, "config", "user.email", "pipeline-test@example.invalid")
-    _git(moved, "config", "user.name", "Pipeline Test")
+    _git(moved, "config", "user.email", "153223100+Korrnals@users.noreply.github.com")
+    _git(moved, "config", "user.name", "Korrnals")
     _git(moved, "commit", "-qam", "docs: upstream moved on")
 
     moved_cfg = copy.deepcopy(config)

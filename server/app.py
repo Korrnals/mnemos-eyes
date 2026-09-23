@@ -53,6 +53,7 @@ from .store import (
     REAP_QUEUED_AFTER_S,
     AutomationError,
     AutomationValidationError,
+    DEVICE_GRANTS,
     DEVICE_TOKEN_PREFIX,
     DeviceQuotaError,
     ENROLLMENT_MAX_LIVE,
@@ -79,6 +80,7 @@ from .store import (
     REPORT_KINDS,
     RuleNotFoundError,
     Store,
+    TASK_PRIORITIES,
     TASK_STATUSES,
     TaskLockedError,
     TaskNotAssignableError,
@@ -90,7 +92,8 @@ from . import provisioner as provisioning
 from . import provisioner as provisioner_mod
 from .task_inbox import _hits_of as _listing_hits_of
 from .task_inbox import background_refresher as inbox_background_refresher
-from .task_inbox import refresh_inbox
+from .task_inbox import field_edits, parse_edits, refresh_inbox
+from .task_inbox import revision_memory_body
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
 DB_PATH = DATA_DIR / "board.db"
@@ -661,7 +664,7 @@ COLUMN_RU = {
 # route on server-loaded /docs (F5/deep-link). Swagger stays reachable at
 # /api/docs; board mode keeps the historical /docs.
 _docs_url = "/api/docs" if ROOT_APP == "app" else "/docs"
-app = FastAPI(title="vesmaro-eyes", version="1.24.0", lifespan=lifespan,
+app = FastAPI(title="vesmaro-eyes", version="1.27.0", lifespan=lifespan,
               docs_url=_docs_url)
 
 
@@ -709,13 +712,18 @@ app.router.route_class = _UiCookieReissueRoute
 # Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): the table became
 # LOAD-BEARING per scope — (method, fnmatch-pattern) pairs. `read` is the
 # v0 GET table plus the reads-добавка (board/tags/archive/notifications/
-# assignments); `control` adds board mutations. New pairings default to
-# control (store layer); the v1 data migration flipped every active
-# read-scope session in place (Store._migrate_device_scope_v1).
+# assignments); `control` added board mutations. Owner override
+# 2026-09-23 (§A.7, revocation-first): the load-bearing rights split is
+# now the PER-DEVICE GRANTS set (store.device_sessions.grants), not the
+# scope column — the tables below decompose the old control scope into
+# granules (DEVICE_GRANTS in store.py). New pairings default to control
+# + the full granule set (store layer); the data migrations backfilled
+# active rows in place (Store._migrate_device_scope_v1 /
+# Store._migrate_device_grants_v1).
 #
-# HARD-DENY (never in any scope table — closed for devices ALWAYS; the
-# allow-list below is exhaustive, so anything outside it is already 403 —
-# this list documents the intent so nobody "fixes" the table later):
+# HARD-DENY (never in any scope/grant table — closed for devices ALWAYS;
+# the allow-list below is exhaustive, so anything outside it is already
+# 403 — this list documents the intent so nobody "fixes" the table later):
 #   pairing*, devices*, auth*        — pairing/device/token management is
 #                                      owner-only (a device must never be
 #                                      able to pair, list or revoke peers,
@@ -736,12 +744,16 @@ app.router.route_class = _UiCookieReissueRoute
 #   GET /api/agents/*, POST /api/task-drafts, GET /api/mnemos/search
 #                                    — outside both scopes in v1
 #
-# Semantics (QA matrix v1):
+# Semantics (QA matrix v1 + §A.7):
 #   - VALIDATE FIRST: an invalid/revoked/expired mnd_ token answers 401 on
 #     ANY route — an unauthenticated request gets no scope verdict (v0
 #     answered 403 for mutations; that ordering inverted the honest codes).
-#   - route not in the scope's table → 403: the token authenticates fine,
-#     the scope does not cover the route — 403, never 401.
+#   - GLOBAL READ always: a hit in _DEVICE_READ_ROUTES lets the request
+#     through for EVERY valid device (the owner's «глобальные read
+#     всегда») — grants gate MUTATIONS only.
+#   - mutation route → its granule must be in the device's grants; not
+#     there (or grants empty) → 403: the token authenticates fine, the
+#     owner has not granted this component — 403, never 401.
 #   - route allowed → the handler runs; _guard_write accepts the
 #     middleware's verdict via request.state.device (the choke point —
 #     no per-handler re-derivation).
@@ -766,35 +778,55 @@ _DEVICE_READ_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/assignments"),
 )
 
-_DEVICE_CONTROL_ROUTES: tuple[tuple[str, str], ...] = _DEVICE_READ_ROUTES + (
-    # board mutations (archcom compromise: tasks/reports/inbox/notifications;
-    # DELETE and everything on the hard-deny list stay closed)
-    ("POST", "/api/tasks"),
-    ("PATCH", "/api/tasks/*"),
-    ("POST", "/api/tasks/*/move"),
-    ("POST", "/api/tasks/*/archive"),
-    ("POST", "/api/tasks/*/unarchive"),
-    ("POST", "/api/tasks/*/reports"),
-    ("POST", "/api/tasks/inbox/refresh"),
-    ("POST", "/api/tasks/inbox/*/adopt"),
-    ("POST", "/api/notifications/read"),
-)
+# The old control scope, decomposed into per-device granules (§A.7). Each
+# key MUST exist in store.DEVICE_GRANTS (pinned by tests); appending a new
+# granule = add it there + add its rows here. fnmatch is whole-string, so
+# the exact "POST /api/tasks" row does NOT swallow the inbox/reports
+# sub-rows — every mutation belongs to EXACTLY one granule.
+_DEVICE_GRANT_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
+    # task mutations (board management proper; DELETE stays hard-denied)
+    "tasks": (
+        ("POST", "/api/tasks"),
+        ("PATCH", "/api/tasks/*"),
+        ("POST", "/api/tasks/*/move"),
+        ("POST", "/api/tasks/*/archive"),
+        ("POST", "/api/tasks/*/unarchive"),
+    ),
+    # reports — the device is the 4th leg of the composition
+    "reports": (
+        ("POST", "/api/tasks/*/reports"),
+    ),
+    # inbox pipeline (mirror queue refresh + adopt into the board)
+    "inbox": (
+        ("POST", "/api/tasks/inbox/refresh"),
+        ("POST", "/api/tasks/inbox/*/adopt"),
+    ),
+    # notification state (mark-read)
+    "notifications": (
+        ("POST", "/api/notifications/read"),
+    ),
+}
 
+# Legacy names kept for the 403 detail + the pairing scope record; NOT
+# consulted by the guard anymore (grants are the single source of truth).
 _DEVICE_SCOPE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "read": _DEVICE_READ_ROUTES,
-    "control": _DEVICE_CONTROL_ROUTES,
+    "control": _DEVICE_READ_ROUTES + tuple(
+        row for granule in DEVICE_GRANTS
+        for row in _DEVICE_GRANT_ROUTES[granule]),
 }
 
 
 @app.middleware("http")
 async def device_scope_guard(request: Request, call_next):
-    """Classify bearers by token prefix (ADR 0012 §5 + Amendment). Everything
-    not starting with ``Bearer mnd_`` rides the existing guards unchanged."""
+    """Classify bearers by token prefix (ADR 0012 §5 + Amendment §A.7).
+    Everything not starting with ``Bearer mnd_`` rides the existing guards
+    unchanged."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith(f"Bearer {DEVICE_TOKEN_PREFIX}"):
         return await call_next(request)
-    # Order (QA matrix v1): validate → scope. An invalid token is 401 on
-    # ANY route; only a VALID session earns a scope verdict.
+    # Order (QA matrix v1): validate → rights. An invalid token is 401 on
+    # ANY route; only a VALID session earns a rights verdict.
     device = store.validate_device_token(
         auth[len("Bearer "):].strip(),
         ua=request.headers.get("User-Agent", ""),
@@ -804,16 +836,24 @@ async def device_scope_guard(request: Request, call_next):
         return JSONResponse(
             status_code=401,
             content={"detail": "device token is invalid, expired or revoked"})
-    scope = device["scope"] if device["scope"] in _DEVICE_SCOPE_ROUTES else "read"
-    allowed = any(
-        request.method == method and fnmatch.fnmatch(request.url.path, pattern)
-        for method, pattern in _DEVICE_SCOPE_ROUTES[scope])
+    path = request.url.path
+    granted: frozenset[str] = frozenset(device.get("grants") or [])
+    allowed = (
+        any(request.method == method and fnmatch.fnmatch(path, pattern)
+            for method, pattern in _DEVICE_READ_ROUTES)
+        or any(
+            request.method == method and fnmatch.fnmatch(path, pattern)
+            for granule in granted
+            for method, pattern in _DEVICE_GRANT_ROUTES.get(granule, ())))
     if not allowed:
         return JSONResponse(
             status_code=403,
-            content={"detail": f"device scope '{scope}' does not cover this "
-                               "route (closed for devices: pairing/devices/"
-                               "auth management, agent loop, automation, "
+            content={"detail": f"device grants {sorted(granted)} do not "
+                               "cover this route (global reads are open "
+                               "to every valid device; mutations need a "
+                               "granule the owner granted; closed for "
+                               "devices always: pairing/devices/auth "
+                               "management, agent loop, automation, "
                                "memory-server config, task DELETE)"})
     # identity for downstream handlers/audit (task-history actor,
     # reports composition); nothing else reads it
@@ -1092,7 +1132,10 @@ class TaskDraftOut(_ApiModel):
 # Task inbox mirror (AGG-1). ``created_at`` is the SOURCE memory's creation
 # timestamp; ``stale`` means the record stopped coming back from its server
 # (last_seen older than Store.INBOX_STALE_SECONDS); ``adopted`` means a
-# native board task was created from it.
+# native board task was created from it. ``edits`` (UI-25) is the owner's
+# pre-adoption overlay (title/summary/priority/project; None = unedited) —
+# the sibling ``title``/``project``/``priority``/``excerpt`` fields already
+# carry the EFFECTIVE (overlay-applied) values.
 class TaskInboxItem(_ApiModel):
     memory_id: str
     server: str
@@ -1107,6 +1150,18 @@ class TaskInboxItem(_ApiModel):
     stale: bool
     adopted: bool
     adopted_task_id: str | None = None
+    edits: dict[str, str] | None = None
+
+
+class TaskInboxEditSpec(_ApiModel):
+    """Owner corrections to a queue record BEFORE adoption (UI-25). Partial:
+    omitted fields stay at their mirror/edited value. ``summary`` becomes
+    the native task's summary on adopt (and the revision record's content);
+    ``project``/``priority`` ride the task and the revision tags."""
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    summary: str | None = Field(default=None, max_length=4000)
+    priority: str | None = None
+    project: str | None = Field(default=None, max_length=80)
 
 
 class TaskInboxOut(_ApiModel):
@@ -4644,13 +4699,90 @@ async def tasks_inbox_refresh(request: Request) -> TaskInboxRefreshOut:
     return TaskInboxRefreshOut(**result)
 
 
+@app.patch("/api/tasks/inbox/{memory_id}")
+async def tasks_inbox_edit(memory_id: str, body: TaskInboxEditSpec,
+                           request: Request) -> TaskInboxItem:
+    """Owner corrections to a queue record BEFORE adoption (UI-25).
+
+    Stores the provided fields (title/summary/priority/project) as an
+    overlay on the mirror row (``edits`` JSON) — the mirror's base fields
+    stay as the source returned them, and GET /api/tasks/inbox projects the
+    EFFECTIVE values plus the overlay. 409 once the row is adopted (the
+    task exists; edit that instead); 404 unknown; 422 empty/garbage body."""
+    _guard_write(request, classes=("ui",))
+    rec = store.get_inbox_item(memory_id)
+    if rec is None:
+        raise HTTPException(404, "memory not found in task inbox")
+    if rec.get("adopted_task_id"):
+        raise HTTPException(409, "inbox record already adopted")
+    edits = body.model_dump(exclude_none=True)
+    if not edits:
+        raise HTTPException(422, "no fields to edit")
+    if "priority" in edits and edits["priority"] not in TASK_PRIORITIES:
+        raise HTTPException(
+            422, f"priority must be one of {sorted(TASK_PRIORITIES)}")
+    if not store.save_inbox_edits(memory_id, edits):
+        raise HTTPException(404, "memory not found in task inbox")
+    items = store.list_inbox(include_adopted=True, memory_id=memory_id)
+    if not items:
+        raise HTTPException(404, "memory not found in task inbox")
+    logging.getLogger("vesmaro.inbox").info(
+        "task-inbox edit saved: memory=%s fields=%s", memory_id, sorted(edits))
+    return TaskInboxItem(**items[0])
+
+
+async def _sync_inbox_edits_revision(
+        rec: dict[str, Any], edits: dict[str, str]) -> tuple[str | None, str | None]:
+    """Write the EDITED revision of a task:queue record back to mnemos
+    (UI-25 adopt-with-edits sync). Best-effort by design: the adopt contract
+    must not depend on a memory engine round-trip.
+
+    mnemos has no content-update over HTTP (no PATCH/PUT /memories route;
+    verified against prod 4.1.0 and the 4.3.0 source), so the honest
+    minimal mechanism is a NEW revision record via POST /memories on the
+    source server (``metadata.supersedes`` names the original; tags carry
+    the edited project:/severity: values plus a ``task:edit`` provenance
+    tag). Returns ``(revision_id, error)``: ``(None, None)`` = nothing to
+    sync (no field edits); ``(None, detail)`` = the engine kept the old
+    version — logged, notified and documented, never silently dropped.
+    """
+    if not edits:
+        return None, None
+    server_name = rec.get("server") or ""
+    try:
+        _, servers = get_scope_servers(server_name, active_only=True)
+    except HTTPException:
+        servers = []
+    if not servers:
+        detail = f"source server '{server_name}' is not active — revision not written"
+        logging.getLogger("vesmaro.inbox").warning(
+            "adopt sync: %s (memory=%s)", detail, rec.get("memory_id"))
+        return None, detail
+    body = revision_memory_body(rec, edits)
+    code, resp = await mnemos_client.post_json_async(servers[0], "/memories", body)
+    if code in (200, 201) and isinstance(resp, dict) and resp.get("id"):
+        revision_id = str(resp["id"])
+        logging.getLogger("vesmaro.inbox").info(
+            "adopt sync: revision %s written for memory=%s (supersedes)",
+            revision_id, rec.get("memory_id"))
+        return revision_id, None
+    detail = str(resp.get("detail") if isinstance(resp, dict) else resp)[:300]
+    logging.getLogger("vesmaro.inbox").warning(
+        "adopt sync: mnemos rejected the revision write (http=%s) for "
+        "memory=%s: %s", code, rec.get("memory_id"), detail)
+    return None, detail
+
+
 @app.post("/api/tasks/inbox/{memory_id}/adopt", status_code=201)
 async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
     """Adopt a mirrored task:queue record as a NATIVE board task.
 
     The memory content is never copied — the task links it via memory_ids
-    (SEC-4). 409 with the existing ``task_id`` on double adoption; 404 when
-    the mirror row is unknown."""
+    (SEC-4). Owner edits (UI-25 overlay) win over the mirror fields, and a
+    task created from edited fields links an EDITED revision memory written
+    back to the source store (best-effort; a failed sync is logged and
+    notified, never a failed adopt). 409 with the existing ``task_id`` on
+    double adoption; 404 when the mirror row is unknown."""
     _guard_write(request, classes=("ui",))
     rec = store.get_inbox_item(memory_id)
     if rec is None:
@@ -4663,22 +4795,32 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
                 "detail": "inbox record already adopted",
             },
         )
+    edits = field_edits(parse_edits(rec.get("edits")))
+    # Overlay semantics: a CLEARED summary ('') falls back to the standard
+    # provenance line — the adopt text is never empty on a board task.
+    revision_id, sync_error = await _sync_inbox_edits_revision(rec, edits)
+    if revision_id:
+        store.save_inbox_edits(memory_id, {"revision_memory_id": revision_id})
+    elif sync_error:
+        store.save_inbox_edits(memory_id, {"revision_error": sync_error})
     specialist = rec.get("specialist") or ""
     # store raises ValueError on a garbage env/priority in the mirror row —
     # surface as 422, never as a 500
     try:
         task = store.create_task({
-            "title": (rec.get("title") or f"task:queue {memory_id[:8]}")[:200],
-            "summary": (
+            "title": (edits.get("title")
+                      or rec.get("title")
+                      or f"task:queue {memory_id[:8]}")[:200],
+            "summary": edits.get("summary") or (
                 f"Принято из task:queue ({rec['server']}, память {memory_id[:8]}) "
                 "— полное описание в связанной памяти."
             ),
-            "project": rec.get("project", ""),
-            "priority": rec.get("priority", "normal"),
+            "project": edits.get("project", rec.get("project", "")),
+            "priority": edits.get("priority", rec.get("priority", "normal")),
             "env": "laptop",
             "agents": ["zcode"],
             "specialists": [specialist] if specialist else [],
-            "memory_ids": [memory_id],
+            "memory_ids": [memory_id] + ([revision_id] if revision_id else []),
             "mnemos_tags": ["task-queue-import"],
         }, actor=_device_actor(request))
     except ValueError as exc:
@@ -4692,6 +4834,12 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
         task["title"][:120], task["id"],
         {"kind": "task.created", "task": task},
     )
+    if sync_error:
+        _notify_and_broadcast(
+            "work", f"{task['id']}: правка НЕ синхронизирована в память",
+            sync_error[:200], task["id"],
+            {"kind": "task.updated", "task": task},
+        )
     return task
 
 
@@ -5500,10 +5648,13 @@ class PairingConfirmOut(_ApiModel):
 
 
 class DeviceOut(_ApiModel):
-    """Public device session — token_hash never leaves the store."""
+    """Public device session — token_hash never leaves the store. grants is
+    the live per-device granule set (Amendment §A.7) the owner panel's
+    toggles bind to."""
     id: str
     name: str
     scope: str
+    grants: list[str] = []
     state: str
     created_at: str
     last_seen_at: str = ""
@@ -5521,6 +5672,18 @@ class DevicesOut(_ApiModel):
 
 
 class DeviceRevokedOut(_ApiModel):
+    ok: bool
+    device: DeviceOut
+
+
+class DeviceGrantsBody(_ApiModel):
+    """FULL-REPLACEMENT granule set (PUT semantics). Unknown names → 422
+    (the granule dictionary is server-owned — the viewer mirrors it for
+    labels, never for validation)."""
+    grants: list[str] = Field(default_factory=list)
+
+
+class DeviceGrantsOut(_ApiModel):
     ok: bool
     device: DeviceOut
 
@@ -5780,6 +5943,40 @@ async def revoke_device(device_id: str, request: Request) -> DeviceRevokedOut:
             "system", "Устройство отключено",
             f"device-сессия «{row['name']}» ({device_id}) отозвана", None,
             {"kind": "pairing.revoked", "device_id": device_id})
+    return {"ok": True, "device": row}
+
+
+@app.put("/api/devices/{device_id}/grants")
+async def set_device_grants(device_id: str, body: DeviceGrantsBody,
+                            request: Request) -> DeviceGrantsOut:
+    """Owner sets the per-device granule set (ui-token; Amendment §A.7,
+    owner directive «пользователь-администратор сам определяет кому
+    сколько и куда разрешений выдать и забрать»). FULL replacement (PUT):
+    the sent list IS the set — [] revokes every granule (reads stay open,
+    global-read always). Idempotent 200 on an unchanged set; applies to
+    the LIVE session immediately (the guard reads grants per request —
+    the device's very next call runs under the new set). 404 unknown
+    device; 409 not-active (granting to a dead session is meaningless —
+    revoke/re-pair instead); 422 unknown granule names."""
+    _guard_ui_write(request)
+    unknown = sorted(set(body.grants) - set(DEVICE_GRANTS))
+    if unknown:
+        raise HTTPException(
+            422, f"unknown device grants: {', '.join(unknown)} "
+                 f"(known: {', '.join(DEVICE_GRANTS)})")
+    result = store.set_device_grants(device_id, body.grants)
+    if result is None:
+        raise HTTPException(404, f"device {device_id} not found")
+    row, changed = result
+    if row["state"] != "active":
+        raise HTTPException(
+            409, f"device {device_id} is {row['state']} — grants apply to "
+                 "active sessions only (revoke it or pair a new one)")
+    if changed:
+        _notify_and_broadcast(
+            "system", "Доступы устройства изменены",
+            f"«{row['name']}» ({device_id}): гранулы "
+            f"{row['grants'] or '— ничего —'}")
     return {"ok": True, "device": row}
 
 
