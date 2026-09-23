@@ -541,13 +541,16 @@ export const MOCK_INBOX: TaskInbox = {
       title: "Спроектировать PWA-минимум для /app",
       excerpt: "manifest + theme-color + иконки 192/512 + passthrough SW…",
       tags: ["project:vesmaro", "task:queue"],
-      priority: "normal",
+      // UI-25: pre-adoption owner edit — the row fields already carry the
+      // EFFECTIVE projection (priority raised); `edits` names the overlay.
+      priority: "high",
       specialist: "",
       created_at: "2026-09-17T16:30:00+00:00",
       last_seen: "2026-09-19T09:00:00+00:00",
       stale: false,
       adopted: false,
       adopted_task_id: null,
+      edits: { priority: "high" },
     },
     {
       memory_id: "d41b22c4-6b55-4cc8-8e1f-7a8b3c4d5e6f",

@@ -1580,6 +1580,32 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/tasks/inbox/{memory_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        /**
+         * Tasks Inbox Edit
+         * @description Owner corrections to a queue record BEFORE adoption (UI-25).
+         *
+         *     Stores the provided fields (title/summary/priority/project) as an
+         *     overlay on the mirror row (``edits`` JSON) — the mirror's base fields
+         *     stay as the source returned them, and GET /api/tasks/inbox projects the
+         *     EFFECTIVE values plus the overlay. 409 once the row is adopted (the
+         *     task exists; edit that instead); 404 unknown; 422 empty/garbage body.
+         */
+        readonly patch: operations["tasks_inbox_edit_api_tasks_inbox__memory_id__patch"];
+        readonly trace?: never;
+    };
     readonly "/api/tasks/inbox/{memory_id}/adopt": {
         readonly parameters: {
             readonly query?: never;
@@ -1594,8 +1620,11 @@ export interface paths {
          * @description Adopt a mirrored task:queue record as a NATIVE board task.
          *
          *     The memory content is never copied — the task links it via memory_ids
-         *     (SEC-4). 409 with the existing ``task_id`` on double adoption; 404 when
-         *     the mirror row is unknown.
+         *     (SEC-4). Owner edits (UI-25 overlay) win over the mirror fields, and a
+         *     task created from edited fields links an EDITED revision memory written
+         *     back to the source store (best-effort; a failed sync is logged and
+         *     notified, never a failed adopt). 409 with the existing ``task_id`` on
+         *     double adoption; 404 when the mirror row is unknown.
          */
         readonly post: operations["tasks_inbox_adopt_api_tasks_inbox__memory_id__adopt_post"];
         readonly delete?: never;
@@ -3963,6 +3992,25 @@ export interface components {
         } & {
             readonly [key: string]: unknown;
         };
+        /**
+         * TaskInboxEditSpec
+         * @description Owner corrections to a queue record BEFORE adoption (UI-25). Partial:
+         *     omitted fields stay at their mirror/edited value. ``summary`` becomes
+         *     the native task's summary on adopt (and the revision record's content);
+         *     ``project``/``priority`` ride the task and the revision tags.
+         */
+        readonly TaskInboxEditSpec: {
+            /** Title */
+            readonly title?: string | null;
+            /** Summary */
+            readonly summary?: string | null;
+            /** Priority */
+            readonly priority?: string | null;
+            /** Project */
+            readonly project?: string | null;
+        } & {
+            readonly [key: string]: unknown;
+        };
         /** TaskInboxItem */
         readonly TaskInboxItem: {
             /** Memory Id */
@@ -3991,6 +4039,10 @@ export interface components {
             readonly adopted: boolean;
             /** Adopted Task Id */
             readonly adopted_task_id?: string | null;
+            /** Edits */
+            readonly edits?: {
+                readonly [key: string]: string;
+            } | null;
         } & {
             readonly [key: string]: unknown;
         };
@@ -6663,6 +6715,41 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["TaskInboxRefreshOut"];
+                };
+            };
+        };
+    };
+    readonly tasks_inbox_edit_api_tasks_inbox__memory_id__patch: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly memory_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["TaskInboxEditSpec"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["TaskInboxItem"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

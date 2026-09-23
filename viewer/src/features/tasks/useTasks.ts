@@ -196,6 +196,23 @@ export function useTaskInbox(params: InboxParams = {}) {
 }
 
 /**
+ * UI-25: the full task:queue memory card behind an inbox row, fetched only
+ * when the owner expands the record (the mirror carries a 300-char excerpt
+ * by design, SEC-4). Reuses the shared memory-detail key so the expanded
+ * card and the memory surfaces stay one cache entry.
+ */
+export function useInboxMemory(memoryId: string, enabled: boolean) {
+  const gateway = useGateway();
+  return useQuery({
+    queryKey: keys.memories.detail(memoryId),
+    queryFn: ({ signal }) => gateway.getMemory(memoryId, false, signal),
+    enabled: enabled && memoryId.length > 0,
+    staleTime: STALE_TIMES.taskInbox,
+    gcTime: GC_TIMES.taskInbox,
+  });
+}
+
+/**
  * Per-task report counts for the list-page badge. The board wire carries no
  * report count, so this derives what the CLIENT knows: the count key fed by
  * SSE `report` events and by visited detail pages (the effect below syncs

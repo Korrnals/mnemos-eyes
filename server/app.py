@@ -79,6 +79,7 @@ from .store import (
     REPORT_KINDS,
     RuleNotFoundError,
     Store,
+    TASK_PRIORITIES,
     TASK_STATUSES,
     TaskLockedError,
     TaskNotAssignableError,
@@ -88,7 +89,8 @@ from .store import (
 )
 from .task_inbox import _hits_of as _listing_hits_of
 from .task_inbox import background_refresher as inbox_background_refresher
-from .task_inbox import refresh_inbox
+from .task_inbox import field_edits, parse_edits, refresh_inbox
+from .task_inbox import revision_memory_body
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
 DB_PATH = DATA_DIR / "board.db"
@@ -1120,7 +1122,10 @@ class TaskDraftOut(_ApiModel):
 # Task inbox mirror (AGG-1). ``created_at`` is the SOURCE memory's creation
 # timestamp; ``stale`` means the record stopped coming back from its server
 # (last_seen older than Store.INBOX_STALE_SECONDS); ``adopted`` means a
-# native board task was created from it.
+# native board task was created from it. ``edits`` (UI-25) is the owner's
+# pre-adoption overlay (title/summary/priority/project; None = unedited) —
+# the sibling ``title``/``project``/``priority``/``excerpt`` fields already
+# carry the EFFECTIVE (overlay-applied) values.
 class TaskInboxItem(_ApiModel):
     memory_id: str
     server: str
@@ -1135,6 +1140,18 @@ class TaskInboxItem(_ApiModel):
     stale: bool
     adopted: bool
     adopted_task_id: str | None = None
+    edits: dict[str, str] | None = None
+
+
+class TaskInboxEditSpec(_ApiModel):
+    """Owner corrections to a queue record BEFORE adoption (UI-25). Partial:
+    omitted fields stay at their mirror/edited value. ``summary`` becomes
+    the native task's summary on adopt (and the revision record's content);
+    ``project``/``priority`` ride the task and the revision tags."""
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    summary: str | None = Field(default=None, max_length=4000)
+    priority: str | None = None
+    project: str | None = Field(default=None, max_length=80)
 
 
 class TaskInboxOut(_ApiModel):
@@ -4389,13 +4406,90 @@ async def tasks_inbox_refresh(request: Request) -> TaskInboxRefreshOut:
     return TaskInboxRefreshOut(**result)
 
 
+@app.patch("/api/tasks/inbox/{memory_id}")
+async def tasks_inbox_edit(memory_id: str, body: TaskInboxEditSpec,
+                           request: Request) -> TaskInboxItem:
+    """Owner corrections to a queue record BEFORE adoption (UI-25).
+
+    Stores the provided fields (title/summary/priority/project) as an
+    overlay on the mirror row (``edits`` JSON) — the mirror's base fields
+    stay as the source returned them, and GET /api/tasks/inbox projects the
+    EFFECTIVE values plus the overlay. 409 once the row is adopted (the
+    task exists; edit that instead); 404 unknown; 422 empty/garbage body."""
+    _guard_write(request, classes=("ui",))
+    rec = store.get_inbox_item(memory_id)
+    if rec is None:
+        raise HTTPException(404, "memory not found in task inbox")
+    if rec.get("adopted_task_id"):
+        raise HTTPException(409, "inbox record already adopted")
+    edits = body.model_dump(exclude_none=True)
+    if not edits:
+        raise HTTPException(422, "no fields to edit")
+    if "priority" in edits and edits["priority"] not in TASK_PRIORITIES:
+        raise HTTPException(
+            422, f"priority must be one of {sorted(TASK_PRIORITIES)}")
+    if not store.save_inbox_edits(memory_id, edits):
+        raise HTTPException(404, "memory not found in task inbox")
+    items = store.list_inbox(include_adopted=True, memory_id=memory_id)
+    if not items:
+        raise HTTPException(404, "memory not found in task inbox")
+    logging.getLogger("vesmaro.inbox").info(
+        "task-inbox edit saved: memory=%s fields=%s", memory_id, sorted(edits))
+    return TaskInboxItem(**items[0])
+
+
+async def _sync_inbox_edits_revision(
+        rec: dict[str, Any], edits: dict[str, str]) -> tuple[str | None, str | None]:
+    """Write the EDITED revision of a task:queue record back to mnemos
+    (UI-25 adopt-with-edits sync). Best-effort by design: the adopt contract
+    must not depend on a memory engine round-trip.
+
+    mnemos has no content-update over HTTP (no PATCH/PUT /memories route;
+    verified against prod 4.1.0 and the 4.3.0 source), so the honest
+    minimal mechanism is a NEW revision record via POST /memories on the
+    source server (``metadata.supersedes`` names the original; tags carry
+    the edited project:/severity: values plus a ``task:edit`` provenance
+    tag). Returns ``(revision_id, error)``: ``(None, None)`` = nothing to
+    sync (no field edits); ``(None, detail)`` = the engine kept the old
+    version — logged, notified and documented, never silently dropped.
+    """
+    if not edits:
+        return None, None
+    server_name = rec.get("server") or ""
+    try:
+        _, servers = get_scope_servers(server_name, active_only=True)
+    except HTTPException:
+        servers = []
+    if not servers:
+        detail = f"source server '{server_name}' is not active — revision not written"
+        logging.getLogger("vesmaro.inbox").warning(
+            "adopt sync: %s (memory=%s)", detail, rec.get("memory_id"))
+        return None, detail
+    body = revision_memory_body(rec, edits)
+    code, resp = await mnemos_client.post_json_async(servers[0], "/memories", body)
+    if code in (200, 201) and isinstance(resp, dict) and resp.get("id"):
+        revision_id = str(resp["id"])
+        logging.getLogger("vesmaro.inbox").info(
+            "adopt sync: revision %s written for memory=%s (supersedes)",
+            revision_id, rec.get("memory_id"))
+        return revision_id, None
+    detail = str(resp.get("detail") if isinstance(resp, dict) else resp)[:300]
+    logging.getLogger("vesmaro.inbox").warning(
+        "adopt sync: mnemos rejected the revision write (http=%s) for "
+        "memory=%s: %s", code, rec.get("memory_id"), detail)
+    return None, detail
+
+
 @app.post("/api/tasks/inbox/{memory_id}/adopt", status_code=201)
 async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
     """Adopt a mirrored task:queue record as a NATIVE board task.
 
     The memory content is never copied — the task links it via memory_ids
-    (SEC-4). 409 with the existing ``task_id`` on double adoption; 404 when
-    the mirror row is unknown."""
+    (SEC-4). Owner edits (UI-25 overlay) win over the mirror fields, and a
+    task created from edited fields links an EDITED revision memory written
+    back to the source store (best-effort; a failed sync is logged and
+    notified, never a failed adopt). 409 with the existing ``task_id`` on
+    double adoption; 404 when the mirror row is unknown."""
     _guard_write(request, classes=("ui",))
     rec = store.get_inbox_item(memory_id)
     if rec is None:
@@ -4408,22 +4502,32 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
                 "detail": "inbox record already adopted",
             },
         )
+    edits = field_edits(parse_edits(rec.get("edits")))
+    # Overlay semantics: a CLEARED summary ('') falls back to the standard
+    # provenance line — the adopt text is never empty on a board task.
+    revision_id, sync_error = await _sync_inbox_edits_revision(rec, edits)
+    if revision_id:
+        store.save_inbox_edits(memory_id, {"revision_memory_id": revision_id})
+    elif sync_error:
+        store.save_inbox_edits(memory_id, {"revision_error": sync_error})
     specialist = rec.get("specialist") or ""
     # store raises ValueError on a garbage env/priority in the mirror row —
     # surface as 422, never as a 500
     try:
         task = store.create_task({
-            "title": (rec.get("title") or f"task:queue {memory_id[:8]}")[:200],
-            "summary": (
+            "title": (edits.get("title")
+                      or rec.get("title")
+                      or f"task:queue {memory_id[:8]}")[:200],
+            "summary": edits.get("summary") or (
                 f"Принято из task:queue ({rec['server']}, память {memory_id[:8]}) "
                 "— полное описание в связанной памяти."
             ),
-            "project": rec.get("project", ""),
-            "priority": rec.get("priority", "normal"),
+            "project": edits.get("project", rec.get("project", "")),
+            "priority": edits.get("priority", rec.get("priority", "normal")),
             "env": "laptop",
             "agents": ["zcode"],
             "specialists": [specialist] if specialist else [],
-            "memory_ids": [memory_id],
+            "memory_ids": [memory_id] + ([revision_id] if revision_id else []),
             "mnemos_tags": ["task-queue-import"],
         }, actor=_device_actor(request))
     except ValueError as exc:
@@ -4437,6 +4541,12 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
         task["title"][:120], task["id"],
         {"kind": "task.created", "task": task},
     )
+    if sync_error:
+        _notify_and_broadcast(
+            "work", f"{task['id']}: правка НЕ синхронизирована в память",
+            sync_error[:200], task["id"],
+            {"kind": "task.updated", "task": task},
+        )
     return task
 
 

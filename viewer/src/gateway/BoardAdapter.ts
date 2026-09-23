@@ -41,6 +41,7 @@ import type {
   HookPatchInput,
   HookRule,
   HooksPage,
+  InboxEditInput,
   InboxRefreshResult,
   LaunchesPage,
   LaunchesParams,
@@ -74,6 +75,7 @@ import type {
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
+  TaskInboxEntry,
   TaskMemories,
   TaskMutationAck,
   TaskPatchInput,
@@ -289,9 +291,17 @@ export interface BoardGateway extends MemoryGateway {
   /**
    * Adopt an inbox mirror row as a native task
    * (`POST /api/tasks/inbox/{memory_id}/adopt`). 409 on double adoption —
-   * the error body carries the existing `task_id`.
+   * the error body carries the existing `task_id`. Any pre-adoption edits
+   * (UI-25 overlay) win over the mirror fields and sync back to mnemos.
    */
   adoptInboxItem(memoryId: string): Promise<BoardTask>;
+  /**
+   * Correct a queue record BEFORE adoption
+   * (`PATCH /api/tasks/inbox/{memory_id}`, UI-25, ui-token). 409 once the
+   * row is adopted; 422 on an empty/garbage body. Answers the updated row
+   * with effective fields + the `edits` overlay.
+   */
+  patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry>;
   /** Force one synchronous inbox scan (`POST /api/tasks/inbox/refresh`). */
   refreshInbox(): Promise<InboxRefreshResult>;
 
@@ -823,6 +833,13 @@ export class BoardAdapter implements BoardGateway {
     return this.request<BoardTask>(
       `/tasks/inbox/${encodeURIComponent(memoryId)}/adopt`,
       { method: "POST", auth: true },
+    );
+  }
+
+  async patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry> {
+    return this.request<TaskInboxEntry>(
+      `/tasks/inbox/${encodeURIComponent(memoryId)}`,
+      { method: "PATCH", auth: true, body: patch },
     );
   }
 

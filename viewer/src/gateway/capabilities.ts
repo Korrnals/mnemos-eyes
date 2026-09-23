@@ -13,6 +13,7 @@ import type {
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
+  TaskInboxEntry,
   TaskMemories,
   TaskMutationAck,
   TaskPatchInput,
@@ -38,6 +39,7 @@ import type {
   ExecutorsPage,
   HarnessCreateInput,
   HarnessesPage,
+  InboxEditInput,
   HarnessStateResult,
   EnrollmentCreateInput,
   EnrollmentCreatedResult,
@@ -156,6 +158,8 @@ export interface TaskMutationSource {
   archiveTask(taskId: string): Promise<TaskMutationAck>;
   unarchiveTask(taskId: string): Promise<TaskUnarchiveResult>;
   adoptInboxItem(memoryId: string): Promise<BoardTask>;
+  /** UI-25: owner corrections to an inbox row BEFORE adoption. */
+  patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry>;
   refreshInbox(): Promise<InboxRefreshResult>;
 }
 
