@@ -87,6 +87,10 @@ spec:
                  and rolls back the same way — no image rebuild. */}}
             - name: VESMARO_ROOT_APP
               value: {{ default "board" .Values.rootApp | quote }}
+            {{- if .Values.pollerBootstrap.caFile.enabled }}
+            - name: VESMARO_TLS_CA_FILE
+              value: /etc/vesmaro/tls/ca.crt
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -125,6 +129,11 @@ spec:
               mountPath: /config
               readOnly: true
             {{- end }}
+            {{- if .Values.pollerBootstrap.caFile.enabled }}
+            - name: tls-ca
+              mountPath: /etc/vesmaro/tls
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -133,4 +142,13 @@ spec:
         - name: memories-config
           configMap:
             name: {{ include "vesmaro-eyes.fullname" . }}-memories
+        {{- end }}
+        {{- if .Values.pollerBootstrap.caFile.enabled }}
+        - name: tls-ca
+          secret:
+            secretName: {{ default .Values.ingress.tls.secretName .Values.pollerBootstrap.caFile.existingSecret }}
+            items:
+              # PUBLIC material only — the private key never leaves the secret.
+              - key: tls.crt
+                path: ca.crt
         {{- end }}
