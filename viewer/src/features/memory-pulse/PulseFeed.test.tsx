@@ -38,6 +38,17 @@ const ITEMS: MemoryPulseItem[] = [
   },
 ];
 
+const PLAIN_FRAGMENT = "Decision fragment, first line.\nSecond line stays verbatim.";
+const WITH_CONTENT: MemoryPulseItem = {
+  id: "m-3",
+  title: "Fragmented",
+  tags: ["topic:gateway"],
+  status: "published",
+  created_at: "2026-09-19T08:00:00Z",
+  server: "store-a",
+  content: PLAIN_FRAGMENT,
+};
+
 describe("PulseFeed", () => {
   it("renders every item with its provenance badge, status and detail link", () => {
     const html = renderFeed(<PulseFeed items={ITEMS} />);
@@ -86,6 +97,38 @@ describe("PulseFeed", () => {
     // present: pulse is a contemplative surface (concept §3.3).
     expect(html).not.toMatch(/min-h-row(?!-)/);
     expect(html).toContain("space-y-list-gap");
+  });
+
+  it("renders a plain content fragment under the title in BOTH cuts, top-aligned", () => {
+    const full = renderFeed(<PulseFeed items={[WITH_CONTENT]} />);
+    const compact = renderFeed(<PulseFeed items={[WITH_CONTENT]} compact />);
+    for (const html of [full, compact]) {
+      // Plain path: the legacy pre-wrap div renders the fragment verbatim.
+      expect(html).toContain("whitespace-pre-wrap");
+      expect(html).toContain("Decision fragment, first line.");
+      expect(html).toContain("Second line stays verbatim.");
+      // A fragment turns the row into a title+body block → top-aligned chrome.
+      expect(html).toContain("items-start");
+    }
+    // Compact drops tags, never the fragment (Overview keeps the preview).
+    expect(full).toContain("topic:gateway");
+    expect(compact).not.toContain("topic:gateway");
+    // Fragment-less rows keep the centered single line.
+    const bare = renderFeed(<PulseFeed items={ITEMS} />);
+    expect(bare).toContain("items-center");
+    expect(bare).not.toContain("items-start");
+  });
+
+  it("honest absence: null or empty fragment renders nothing extra", () => {
+    const silent: MemoryPulseItem = { ...WITH_CONTENT, id: "m-4", content: null };
+    const empty: MemoryPulseItem = { ...WITH_CONTENT, id: "m-5", content: "" };
+    for (const item of [silent, empty]) {
+      const html = renderFeed(<PulseFeed items={[item]} />);
+      expect(html).not.toContain("whitespace-pre-wrap");
+      expect(html).not.toContain("Decision fragment");
+      // Centered single-line row (no body block → no top-align shift).
+      expect(html).toContain("items-center");
+    }
   });
 });
 

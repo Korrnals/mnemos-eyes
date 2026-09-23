@@ -110,6 +110,18 @@ const DEFAULT_LAUNCH_LIMIT = 50;
 /** Launch journal page cap (server `_AUTOMATION_PAGE_CAP` mirror). */
 const LAUNCH_PAGE_CAP = 200;
 
+/**
+ * Pulse preview overrides (mock-only). The shared corpus stays plain prose
+ * so every index/count assertion keeps holding; the pulse mapping decorates
+ * two rows instead, to exercise every TextEngine path in dev and dev-test:
+ * mem-0004 carries a small markdown fragment (heading + list → lazy
+ * renderer chunk), mem-0005 carries no fragment at all (honest absence).
+ */
+const MOCK_PULSE_CONTENT_OVERRIDES: Readonly<Record<string, string | null>> = {
+  "mem-0004": "# Decision log\n\n- namespaced tags only\n- `topic:` slugs reviewed weekly",
+  "mem-0005": null,
+};
+
 /** BE-12 content window: tasks older than this are 423-locked without force. */
 const LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -498,6 +510,12 @@ export class MockAdapter implements MemoryGateway {
         status: memory.status,
         created_at: memory.created_at ?? "",
         server: scope || "mock-store",
+        // Server-contract mirror: ≤400-char fragment (plain corpus prose or
+        // a documented mock override — see MOCK_PULSE_CONTENT_OVERRIDES).
+        content:
+          memory.id !== undefined && memory.id in MOCK_PULSE_CONTENT_OVERRIDES
+            ? MOCK_PULSE_CONTENT_OVERRIDES[memory.id]
+            : pulseContentFragment(memory.content),
       }));
     return {
       ok: scope !== "mock-store-paused",
@@ -2131,6 +2149,25 @@ function byCreatedDesc(a: Memory, b: Memory): number {
 
 function compareCreated(a?: Memory, b?: Memory): number {
   return (b?.created_at ?? "").localeCompare(a?.created_at ?? "");
+}
+
+/** Pulse fragment cap (server `content_fragment` mirror): ≤400 chars. */
+const PULSE_FRAGMENT_MAX = 400;
+
+/**
+ * Mock mirror of the server's `content_fragment()`: the pulse row preview is
+ * a ≤400-char cut at a whitespace boundary (hard cut only when the window
+ * holds no whitespace); blank or absent content maps to null — the UI shows
+ * honest absence, never an empty shell.
+ */
+function pulseContentFragment(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length <= PULSE_FRAGMENT_MAX) return trimmed;
+  const window = trimmed.slice(0, PULSE_FRAGMENT_MAX);
+  const boundary = window.lastIndexOf(" ");
+  return (boundary > 0 ? window.slice(0, boundary) : window).trimEnd();
 }
 
 function round(value: number, decimals: number): number {
