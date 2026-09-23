@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 # vesmaro-eyes poller bootstrap — the ONE-COMMAND onboarding (wave 3D).
 #
-#   curl -fsSL https://<board>/api/poller/bootstrap.sh | sudo bash -s -- \
+#   curl -kfsSL https://<board>/api/poller/bootstrap.sh | sudo bash -s -- \
 #     --url https://<board> --token mne_… [--name vps-1] [--harness zcode]
+#
+# The OUTER -k is honest and bounded: the installer TEXT is public and
+# secret-free, and the lab TLS is self-signed — the shell does not trust
+# it yet (that is the chicken-and-egg this script exists to break). The
+# content rides TLS to the board it names; EVERYTHING the script does
+# afterwards (artifacts, registration, the poller itself) uses the
+# PINNED lab CA fetched through it, with the sha256 fingerprint printed
+# for the out-of-band owner check. Paranoid two-step (fetch, READ, then
+# bash) — see REMOTE-EXECUTOR.md, Путь 1.
 #
 # What it does, in order: parse/sanity args → preflight (python ≥ 3.10,
 # systemd, curl, openssl) → fetch the lab CA (ONE -k retry for the CA ONLY,
@@ -103,12 +112,14 @@ if [[ -s "$CA_FILE" ]]; then
   step "TLS: using the pre-placed CA at $CA_FILE (no -k window at all)"
 else
   step "TLS: fetching the lab CA from the board"
-  if ! curl -fsSL --cacert "$CA_FILE" "$BOARD_URL/api/poller/artifacts/ca.crt" \
+  # First attempt is the honest system-trust one (machines that already
+  # trust the lab CA take a zero-(-k) path); --cacert on a not-yet-existing
+  # file would fail LOCALLY (exit 77) before any connection, so it is used
+  # only from the second attempt on. ONE retry with -k, STRICTLY for the
+  # CA fetch — a certificate is public material, and everything AFTER this
+  # point (artifacts, registration, the poller itself) rides the PINNED CA.
+  if ! curl -fsSL "$BOARD_URL/api/poller/artifacts/ca.crt" \
         -o "$CA_FILE" 2>/dev/null; then
-    # Expected on first contact: the lab cert is self-signed, this shell
-    # does not trust it yet. ONE retry with -k, STRICTLY for the CA fetch —
-    # a certificate is public material, and everything AFTER this point
-    # (artifacts, registration, the poller itself) rides the PINNED CA.
     echo "   no system trust for the lab cert — one -k retry for the CA ONLY"
     curl -fsSL -k "$BOARD_URL/api/poller/artifacts/ca.crt" -o "$CA_FILE" \
       || die "could not download the CA even with -k — is --url reachable from this machine?" 3
@@ -137,11 +148,17 @@ step "registering the executor on the board"
 UPDATE_MODE=0
 EXEC_ID="" SECRET=""
 HTTP_BODY=$(mktemp)
+# The body is built by python3 (already validated by the preflight): raw
+# shell interpolation would mangle any quote into a misleading 422.
+REG_BODY=$(python3 -c 'import json, sys
+print(json.dumps({"name": sys.argv[1], "harness": sys.argv[2],
+                  "host": sys.argv[3], "transport": "local-poll"}))' \
+  "$EXEC_NAME" "$HARNESS" "$HOST_NAME")
 HTTP_CODE=$(curl "${CURL_CA[@]}" -fsS -o "$HTTP_BODY" -w '%{http_code}' \
   -X POST "$BOARD_URL/api/executors" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"name\":\"$EXEC_NAME\",\"harness\":\"$HARNESS\",\"host\":\"$HOST_NAME\",\"transport\":\"local-poll\"}" \
+  -d "$REG_BODY" \
   || true)
 if [[ "$HTTP_CODE" == "201" ]]; then
   EXEC_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["executor"]["id"])' < "$HTTP_BODY")
@@ -166,6 +183,10 @@ fi
 rm -f "$HTTP_BODY"
 
 if [[ "$UPDATE_MODE" -eq 1 ]]; then
+  MARKER_URL=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("board_url", ""))' "$MARKER_FILE")
+  if [[ -n "$MARKER_URL" && "$MARKER_URL" != "$BOARD_URL" ]]; then
+    die "this install was bootstrapped against $MARKER_URL, but --url is $BOARD_URL — keeping the old executor_secret would mean an eternal 401. Rotate instead: revoke + delete the executor on the board, then re-run with a NEW token" 4
+  fi
   EXEC_ID=$(python3 -c 'import json; print(json.load(open("'"$MARKER_FILE"'"))["executor_id"])')
   PRESERVE_AWL=$(awk '/^allowlist:/{p=1} p' "$YAML_FILE" || true)
 fi
@@ -179,11 +200,16 @@ UNIT_DL=$(mktemp)
 curl "${CURL_CA[@]}" -fsSL "$BOARD_URL/api/poller/artifacts/vesmaro-assignment-poller.service" -o "$UNIT_DL" \
   || die "could not download the systemd unit" 3
 # Adapt the repo unit to THIS machine: run as the invoking sudo user (not a
-# hardcoded laptop user), config at /etc/vesmaro, state under $STATE_DIR.
+# hardcoded laptop user), config at /etc/vesmaro, state under $STATE_DIR —
+# and the ExecStart poller path to where THIS script put the artifact
+# ($POLLER_PY): the repo unit names the laptop layout
+# (/opt/mnemos-eyes/scripts/...), nobody creates that scripts/ dir here —
+# an unpatched ExecStart is a guaranteed 203/EXEC at first start.
 RUN_USER="${SUDO_USER:-root}"
 sed -e "s|^User=.*|User=$RUN_USER|" \
     -e "s|--config [^ ]*|--config $YAML_FILE|" \
     -e "s|^ReadWritePaths=.*|ReadWritePaths=$STATE_DIR|" \
+    -e "s|/opt/mnemos-eyes/scripts/assignment_poller.py|$POLLER_PY|" \
     "$UNIT_DL" > "$UNIT_FILE"
 rm -f "$UNIT_DL"
 chmod 0644 "$UNIT_FILE"
