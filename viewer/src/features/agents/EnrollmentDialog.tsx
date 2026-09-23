@@ -135,7 +135,11 @@ function EnrollmentForm({
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t("agents.enrollment.harness")}
-        <HarnessSelect id="enroll-harness" value={harness} onChange={setHarnessChoice} />
+        <HarnessSelect
+          id="enroll-harness"
+          value={harness}
+          onChange={setHarnessChoice}
+        />
       </label>
       <label className="flex flex-col gap-1 text-sm font-medium">
         {t("agents.enrollment.nameHint")}
@@ -187,6 +191,26 @@ function TokenScreen({
     name: row.name_hint || row.label || "executor",
     harness: row.harness_hint || defaultHarness,
   });
+  // Wave 3D: the ONE-COMMAND path (design §D). The bootstrap script is
+  // served by the board itself (open read, no secrets inside — the token
+  // travels as a CLI ARGUMENT, never a URL: ADR 0012 §9). On screen the
+  // token stays MASKED like the row above (shoulder-surfing discipline);
+  // the clipboard copy is a deliberate act and carries the FULL token.
+  const origin = window.location.origin;
+  const bootstrapName = row.name_hint || row.label || "vps-1";
+  const bootstrapHarness = row.harness_hint || defaultHarness;
+  const oneLinerArgs =
+    `--url ${origin} --token ${created.token}` +
+    ` --name ${bootstrapName} --harness ${bootstrapHarness}`;
+  // The outer -k is honest and bounded: the installer TEXT is public and
+  // secret-free, the lab TLS is self-signed (the chicken-and-egg this
+  // script breaks); everything inside rides the PINNED CA + fingerprint
+  // check. See REMOTE-EXECUTOR.md Путь 1.
+  const oneLiner = `curl -kfsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ${oneLinerArgs}`;
+  const oneLinerMasked =
+    `curl -kfsSL ${origin}/api/poller/bootstrap.sh | sudo bash -s -- ` +
+    `--url ${origin} --token ${created.token.slice(0, 4)}${"•".repeat(12)}` +
+    ` --name ${bootstrapName} --harness ${bootstrapHarness}`;
   // A used token links to the row it minted (enrollment.used carries the
   // executor_id; the registry list query has it after the invalidation).
   const minted = row.executor_id
@@ -254,8 +278,8 @@ function TokenScreen({
           : t(`agents.enrollment.state.${state}` as TranslationKey)}
       </p>
 
-      {/* The VPS bootstrap block — REMOTE-EXECUTOR.md §4б/§4в as copyable
-       * steps; board_url stays a placeholder (the owner's VPN fact). */}
+      {/* Wave 3D: the ONE COMMAND. --url must be the address THIS machine
+       * resolves — the overlay address may differ from the browser's. */}
       <div className="rounded-md border border-border-subtle bg-well">
         <div className="flex items-center gap-2 px-3 py-1.5">
           <p className="text-sm font-medium text-foreground-secondary">
@@ -266,42 +290,77 @@ function TokenScreen({
             variant="ghost"
             size="sm"
             className="ml-auto h-7 px-2 text-xs"
-            onClick={() => copy("all", buildBootstrapScript(steps))}
+            onClick={() => copy("one-liner", oneLiner)}
           >
-            {copied === "all" ? (
+            {copied === "one-liner" ? (
               <Check className="size-3.5" aria-hidden="true" />
             ) : (
               <Copy className="size-3.5" aria-hidden="true" />
             )}
-            {copied === "all"
+            {copied === "one-liner"
               ? t("agents.enrollment.copied")
-              : t("agents.enrollment.copyAll")}
+              : t("agents.enrollment.copy")}
           </Button>
         </div>
-        <ol className="space-y-2 border-t border-border-subtle px-3 py-2">
-          {steps.map((step, index) => (
-            <li key={index} className="flex items-start gap-2">
-              <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-foreground-secondary">
-                {step}
-              </pre>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-6 shrink-0 px-1.5 text-xs"
-                aria-label={t("agents.enrollment.copyStepAria", { step: index + 1 })}
-                onClick={() => copy(`step-${index}`, step)}
-              >
-                {copied === `step-${index}` ? (
-                  <Check className="size-3.5" aria-hidden="true" />
-                ) : (
-                  <Copy className="size-3.5" aria-hidden="true" />
-                )}
-              </Button>
-            </li>
-          ))}
-        </ol>
+        <pre className="overflow-x-auto whitespace-pre-wrap break-all border-t border-border-subtle px-3 py-2 font-mono text-xs text-foreground-secondary">
+          {oneLinerMasked}
+        </pre>
+        <p className="px-3 pb-2 text-xs text-foreground-muted">
+          {t("agents.enrollment.oneLinerHint")}
+          {revealed ? null : ` ${t("agents.enrollment.tokenInCopyNote")}`}
+        </p>
       </div>
+
+      {/* The honest manual path (REMOTE-EXECUTOR.md §3-§4) — diagnostics
+       * and air-gapped installs; collapsed, never deleted. */}
+      <details className="rounded-md border border-border-subtle">
+        <summary className="cursor-pointer px-3 py-1.5 text-sm text-foreground-secondary">
+          {t("agents.enrollment.manualToggle")}
+        </summary>
+        <div className="border-t border-border-subtle bg-well">
+          <div className="flex items-center justify-end px-3 py-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => copy("all", buildBootstrapScript(steps))}
+            >
+              {copied === "all" ? (
+                <Check className="size-3.5" aria-hidden="true" />
+              ) : (
+                <Copy className="size-3.5" aria-hidden="true" />
+              )}
+              {copied === "all"
+                ? t("agents.enrollment.copied")
+                : t("agents.enrollment.copyAll")}
+            </Button>
+          </div>
+          <ol className="space-y-2 border-t border-border-subtle px-3 py-2">
+            {steps.map((step, index) => (
+              <li key={index} className="flex items-start gap-2">
+                <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-foreground-secondary">
+                  {step}
+                </pre>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 shrink-0 px-1.5 text-xs"
+                  aria-label={t("agents.enrollment.copyStepAria", { step: index + 1 })}
+                  onClick={() => copy(`step-${index}`, step)}
+                >
+                  {copied === `step-${index}` ? (
+                    <Check className="size-3.5" aria-hidden="true" />
+                  ) : (
+                    <Copy className="size-3.5" aria-hidden="true" />
+                  )}
+                </Button>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </details>
 
       <p className="text-xs text-foreground-muted">
         {t("agents.enrollment.afterRegister")}

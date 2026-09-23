@@ -122,6 +122,20 @@ ingress:
   labels: {}
   annotations: {}
 
+pollerBootstrap:
+  # Wave 3D: GET /api/poller/artifacts/ca.crt serves the lab CA so the
+  # one-command bootstrap can PIN it on the VPS (the self-signed leaf cert
+  # IS its own anchor). The cert is public material (tls.key is NOT
+  # mounted); it lives in the k8s TLS secret that gen-tls-secret.sh
+  # creates BEFORE the first install — this mounts its PUBLIC tls.crt into
+  # the container. With enabled: false (or the secret absent at install
+  # time) the route answers an honest 503 and the bootstrap falls back to
+  # the manual CA path (REMOTE-EXECUTOR.md §3).
+  caFile:
+    enabled: true
+    # Empty -> ingress.tls.secretName (the same cert terminates on traefik).
+    existingSecret: ""
+
 persistence:
   # Empty -> chart-managed PVC named "<fullname>-data"
   # (vesmaro-eyes-data for the canonical release name, which matches the

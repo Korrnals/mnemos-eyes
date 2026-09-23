@@ -3679,6 +3679,122 @@ async def delete_harness(name: str, request: Request) -> OkOut:
     return {"ok": True}
 
 
+# ------------------------------------- poller bootstrap (wave 3D, design §D)
+# The ONE-COMMAND onboarding: the board serves its own installer and the
+# runtime artifacts it needs, straight from the packaged files — always in
+# sync with the RUNNING board (no version skew; the snapshot-discipline
+# answer to installer staleness). All four routes are OPEN READS (the
+# script and the artifacts carry NO secret material — the enrollment token
+# travels as a command ARGUMENT typed on the VPS, never in a URL:
+# ADR 0012 §9). Cache-Control: no-store rides the global /api/* middleware.
+#
+#   bootstrap.sh   — deploy/poller/bootstrap.sh in the repo;
+#   poller.py      — scripts/assignment_poller.py in the repo;
+#   the unit       — deploy/poller/vesmaro-assignment-poller.service;
+#   ca.crt         — the lab CA (the self-signed leaf cert IS its own
+#                    anchor). It is PUBLIC material, but it does not live in
+#                    the image: TLS terminates on the ingress (traefik) and
+#                    the cert lives in the k8s secret `vesmaro-eyes-tls`.
+#                    The chart mounts the PUBLIC tls.crt into the container
+#                    (see values `pollerBootstrap.caFile`) and points
+#                    VESMARO_TLS_CA_FILE at it. Without the mount the route
+#                    answers an HONEST 503 with the fix in the message —
+#                    fail-closed, never a guess.
+#
+# Resolution order for the packaged dir: VESMARO_POLLER_DIR (the image
+# keeps /app/poller) first; the repo layout second (dev/tests run from a
+# checkout where the artifacts live under scripts/ and deploy/poller/).
+_POLLER_DIR_ENV = "VESMARO_POLLER_DIR"
+_TLS_CA_FILE_ENV = "VESMARO_TLS_CA_FILE"
+
+
+def _poller_artifact(filename: str) -> Path | None:
+    """Resolve a served bootstrap artifact to an existing file, or None."""
+    env_dir = os.environ.get(_POLLER_DIR_ENV, "").strip()
+    candidates: list[Path] = []
+    if env_dir:
+        candidates.append(Path(env_dir) / filename)
+    else:  # dev/tests: the repo layout
+        repo = Path(__file__).resolve().parents[1]
+        candidates.append(repo / "deploy" / "poller" / filename)
+        if filename == "assignment_poller.py":
+            candidates.append(repo / "scripts" / filename)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _serve_artifact(filename: str, media_type: str) -> Response:
+    path = _poller_artifact(filename)
+    if path is None:
+        raise HTTPException(
+            404,
+            f"bootstrap artifact {filename!r} is not packaged on this board "
+            f"(set {_POLLER_DIR_ENV} to the packaged dir)",
+        )
+    return Response(content=path.read_bytes(), media_type=media_type)
+
+
+@app.get("/api/poller/bootstrap.sh")
+async def poller_bootstrap_script() -> Response:
+    """The one-command installer (open read). Served from the packaged
+    file — the script carries NO secrets: the enrollment token arrives as
+    a CLI argument on the VPS, everything else rides pinned TLS."""
+    return _serve_artifact("bootstrap.sh", "text/x-shellscript; charset=utf-8")
+
+
+@app.get("/api/poller/artifacts/poller.py")
+async def poller_artifact_poller_py() -> Response:
+    """The poller itself, always fresh from the RUNNING board — installer
+    re-run doubles as upgrade (no version skew between board and poller)."""
+    return _serve_artifact("assignment_poller.py", "text/x-python; charset=utf-8")
+
+
+@app.get("/api/poller/artifacts/vesmaro-assignment-poller.service")
+async def poller_artifact_unit() -> Response:
+    """The systemd system unit (the bootstrap adapts User/config paths to
+    the target machine with sed — the artifact stays verbatim in the repo)."""
+    return _serve_artifact(
+        "vesmaro-assignment-poller.service", "text/plain; charset=utf-8"
+    )
+
+
+@app.get("/api/poller/artifacts/ca.crt")
+async def poller_artifact_ca() -> Response:
+    """The lab CA for pinning (open read — a certificate is public
+    material). 503 while the CA file is not mounted: the chart ships the
+    optional mount (values `pollerBootstrap.caFile`); the honest refusal
+    names the fix instead of serving a guess."""
+    ca_file = os.environ.get(_TLS_CA_FILE_ENV, "").strip()
+    if not ca_file:
+        raise HTTPException(
+            503,
+            f"the lab CA is not mounted into this container — mount the "
+            f"PUBLIC tls.crt of the board TLS secret and point "
+            f"{_TLS_CA_FILE_ENV} at it (chart values "
+            f"pollerBootstrap.caFile; see deploy/poller/REMOTE-EXECUTOR.md)",
+        )
+    path = Path(ca_file)
+    if not path.is_file():
+        raise HTTPException(
+            503,
+            f"{_TLS_CA_FILE_ENV}={ca_file} does not exist — fix the mount "
+            f"or unset the variable (fail-closed: no CA, no download)",
+        )
+    data = path.read_bytes()
+    # A mispointed variable must not leak an arbitrary file to anonymous
+    # readers: only a PEM certificate is servable here.
+    if not data.lstrip().startswith(b"-----BEGIN CERTIFICATE-----"):
+        raise HTTPException(
+            503,
+            f"{_TLS_CA_FILE_ENV}={ca_file} is not a PEM certificate — "
+            f"refusing to serve it (fail-closed: this route serves "
+            f"certificates only)",
+        )
+    return Response(content=data, media_type="application/x-x509-ca-cert")
+
+
 # ------------------------------------- execution settings (ARCH-9, Amd 2 §5)
 _PROJECT_SCOPE_RE = re.compile(r"^project:[a-z0-9][a-z0-9_-]{0,63}$")
 

@@ -30,7 +30,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     VESMARO_DATA=/data \
     VESMARO_WEB=/app/web \
-    VESMARO_APP_DIR=/app/app
+    VESMARO_APP_DIR=/app/app \
+    VESMARO_POLLER_DIR=/app/poller
 
 WORKDIR /app
 
@@ -40,6 +41,15 @@ RUN pip install --no-cache-dir -r /app/server/requirements.txt
 COPY server/ /app/server/
 COPY web/ /app/web/
 COPY --from=viewer-builder /build/dist/ /app/app/
+# Poller bootstrap artifacts (wave 3D): the board serves its own installer
+# (GET /api/poller/*) from these packaged files — always in sync with the
+# running board. The lab CA is NOT here: it mounts from the k8s TLS secret
+# (chart values pollerBootstrap.caFile -> VESMARO_TLS_CA_FILE).
+COPY scripts/assignment_poller.py /app/poller/assignment_poller.py
+COPY deploy/poller/bootstrap.sh \
+     deploy/poller/vesmaro-assignment-poller.service \
+     deploy/poller/poller.example.yaml \
+     /app/poller/
 
 # Runs as uid 0 inside the container: under rootless podman/k8s this maps to
 # the host uid (k8s securityContext pins runAsUser=1000), and on bind mounts
