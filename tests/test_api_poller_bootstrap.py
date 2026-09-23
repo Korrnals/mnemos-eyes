@@ -19,6 +19,7 @@ QA matrix (each test names its line):
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -89,6 +90,40 @@ class TestPackagedDirOverride:
         r = client.get("/api/poller/bootstrap.sh")
         assert r.status_code == 200
         assert r.content == marker.read_bytes()
+
+
+# ------------------------------------------------- installer sha256 (AGW-9)
+class TestBootstrapSha256:
+    """Out-of-band verification of the installer TEXT (АРХКОМ-8 В1): the
+    digest must match the EXACT bytes /api/poller/bootstrap.sh serves —
+    same resolution order, so the hash can never describe another file."""
+
+    def test_sha256_matches_served_script_bytes(self, client):
+        r = client.get("/api/poller/artifacts/bootstrap.sh.sha256")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/plain")
+        assert r.text.strip() == hashlib.sha256(BOOTSTRAP_SH.read_bytes()).hexdigest()
+
+    def test_sha256_tracks_the_packaged_dir_not_the_repo(self, client,
+                                                         monkeypatch,
+                                                         tmp_path):
+        packaged = tmp_path / "bootstrap.sh"
+        packaged.write_bytes(b"#!/bin/sh\n# a DIFFERENT packaged copy\n")
+        monkeypatch.setenv("VESMARO_POLLER_DIR", str(tmp_path))
+        r = client.get("/api/poller/artifacts/bootstrap.sh.sha256")
+        assert r.status_code == 200
+        assert r.text.strip() == hashlib.sha256(packaged.read_bytes()).hexdigest()
+
+    def test_sha256_404_with_empty_packaged_dir(self, client, monkeypatch,
+                                                tmp_path):
+        monkeypatch.setenv("VESMARO_POLLER_DIR", str(tmp_path))
+        r = client.get("/api/poller/artifacts/bootstrap.sh.sha256")
+        assert r.status_code == 404
+        assert "VESMARO_POLLER_DIR" in r.json()["detail"]
+
+    def test_sha256_open_read_no_bearer(self, client):
+        assert client.get(
+            "/api/poller/artifacts/bootstrap.sh.sha256").status_code == 200
 
 
 # ---------------------------------------------------------------- ca.crt

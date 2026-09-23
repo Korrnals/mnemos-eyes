@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import fnmatch
+import hashlib
 import hmac
 import json
 import logging
@@ -1536,6 +1537,11 @@ class EnrollmentCreatedOut(_ApiModel):
     ok: bool
     enrollment: EnrollmentOut
     token: str                         # the ONLY place mne_… ever appears
+    # AGW-9 (АРХКОМ-8 В1): the lab-CA fingerprint in the board canon
+    # (SHA256:base64 over DER, provisioner parity). The UI embeds it into
+    # the bootstrap command as --expect-fp. Advisory like the hints: ''
+    # when the CA is not mounted (the front then omits the anchor flag).
+    ca_fingerprint: str = ""
 
 
 class EnrollmentListOut(_ApiModel):
@@ -3633,6 +3639,47 @@ async def list_executors() -> ExecutorListOut:
 # the parametric /api/executors/{executor_id} routes — same-prefix paths must
 # not depend on FastAPI match order. Fail-closed 503 while the ui token is
 # not configured (the _guard_ui_write pattern): no owner, no minting.
+
+# AGW-9: the lab-CA fingerprint for the enrollment response — SAME canon as
+# provisioner.fingerprint_of_bytes (SHA256:base64 over DER), computed over
+# the SAME certificate /api/poller/artifacts/ca.crt serves (the
+# VESMARO_TLS_CA_FILE mount). Lazy + cached by (path, mtime, size) so cert
+# rotation re-computes and tests can repoint the env per-case. '' whenever
+# the CA is unknown (unmounted/missing/not PEM) — the field is advisory:
+# the mint itself must not fail on display data.
+_CA_FINGERPRINT_CACHE: dict[str, str] = {}
+
+
+def _board_ca_fingerprint() -> str:
+    ca_file = os.environ.get(_TLS_CA_FILE_ENV, "").strip()
+    if not ca_file:
+        return ""
+    path = Path(ca_file)
+    try:
+        stat = path.stat()
+        cache_key = f"{path}|{stat.st_mtime_ns}|{stat.st_size}"
+    except OSError:
+        return ""
+    if _CA_FINGERPRINT_CACHE.get("key") == cache_key:
+        return _CA_FINGERPRINT_CACHE.get("fp", "")
+    fingerprint = ""
+    data = path.read_bytes()
+    if data.lstrip().startswith(b"-----BEGIN CERTIFICATE-----"):
+        body = b"".join(
+            line for line in data.splitlines()
+            if line and not line.startswith(b"-----"))
+        try:
+            der = base64.b64decode(body, validate=True)
+        except Exception:
+            der = b""
+        if der:
+            fingerprint = provisioning.fingerprint_of_bytes(der)
+    _CA_FINGERPRINT_CACHE.clear()
+    _CA_FINGERPRINT_CACHE["key"] = cache_key
+    _CA_FINGERPRINT_CACHE["fp"] = fingerprint
+    return fingerprint
+
+
 @app.post("/api/executors/enrollment", status_code=201)
 async def create_enrollment(body: EnrollmentCreateBody,
                             request: Request) -> EnrollmentCreatedOut:
@@ -3643,7 +3690,9 @@ async def create_enrollment(body: EnrollmentCreateBody,
     (pairing-create pattern); live tokens capped at ENROLLMENT_MAX_LIVE →
     409 with NO auto-revoke (the owner chooses, device-quota principle).
     422 unknown harness_hint (the hint feeds the bootstrap command — a
-    bogus hint would mislead the remote leg)."""
+    bogus hint would mislead the remote leg). ``ca_fingerprint`` rides
+    along (AGW-9): the UI bakes it into the bootstrap command as
+    --expect-fp, the installer then fail-closes on a wrong CA."""
     _guard_ui_write(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _enrollment_create_limiter.acquire(client_ip):
@@ -3664,7 +3713,8 @@ async def create_enrollment(body: EnrollmentCreateBody,
     _broadcast({"kind": "enrollment.created",
                 "enrollment_id": row["enrollment_id"],
                 "label": row["label"]})
-    return {"ok": True, "enrollment": row, "token": token}
+    return {"ok": True, "enrollment": row, "token": token,
+            "ca_fingerprint": _board_ca_fingerprint()}
 
 
 @app.get("/api/executors/enrollment")
@@ -4168,6 +4218,26 @@ async def poller_bootstrap_script() -> Response:
     file — the script carries NO secrets: the enrollment token arrives as
     a CLI argument on the VPS, everything else rides pinned TLS."""
     return _serve_artifact("bootstrap.sh", "text/x-shellscript; charset=utf-8")
+
+
+@app.get("/api/poller/artifacts/bootstrap.sh.sha256")
+async def poller_bootstrap_script_sha256() -> Response:
+    """SHA256 (hex) of the EXACT installer bytes the sibling route serves
+    (AGW-9, АРХКОМ-8 В1): out-of-band verification of the installer TEXT
+    for the paranoid two-step (fetch, verify, read, run). Same resolution
+    order as /api/poller/bootstrap.sh — the hash can never describe a
+    different file than the one downloadable next to it. Open read: a
+    digest of a secret-free script is not secret material."""
+    path = _poller_artifact("bootstrap.sh")
+    if path is None:
+        raise HTTPException(
+            404,
+            f"bootstrap artifact 'bootstrap.sh' is not packaged on this "
+            f"board (set {_POLLER_DIR_ENV} to the packaged dir)",
+        )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return Response(content=digest + "\n",
+                    media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/poller/artifacts/poller.py")

@@ -14,12 +14,16 @@
 # bash) — see REMOTE-EXECUTOR.md, Путь 1.
 #
 # What it does, in order: parse/sanity args → preflight (python ≥ 3.10,
-# systemd, curl, openssl) → fetch the lab CA (ONE -k retry for the CA ONLY,
-# fingerprint printed for the out-of-band check; a pre-placed
-# /etc/vesmaro/lab-ca.crt short-circuits the -k path) → venv + deps →
-# artifacts over PINNED TLS → register with the enrollment token → write
-# 0600 env + yaml (allowlist is an honest fail-closed SEED — edit it) →
-# systemd system unit → verdict.
+# systemd, curl, openssl) → fetch the lab CA (ONE -k retry for the CA ONLY)
+# → TRUST ANCHOR (AGW-9, АРХКОМ-8 В1): the CA fingerprint is verified
+# against --expect-fp / VESMARO_EXPECT_FP silently (mismatch = abort,
+# downloaded CA discarded), or printed for an out-of-band owner check with
+# a STRICT /dev/tty prompt (stdin is the curl pipe); no anchor and no tty
+# = abort. A pre-placed /etc/vesmaro/lab-ca.crt short-circuits the -k
+# path (placement IS the out-of-band act) but still must match --expect-fp
+# when one is given → venv + deps → artifacts over PINNED TLS → register
+# with the enrollment token → write 0600 env + yaml (allowlist is an
+# honest fail-closed SEED — edit it) → systemd system unit → verdict.
 #
 # Honesty rules (ADR 0009 §9, A3):
 # - outbound-only: the script never opens ports, the board never pings in;
@@ -43,19 +47,23 @@ set -euo pipefail
 
 # ----------------------------------------------------------------- config
 BOARD_URL="" TOKEN="" EXEC_NAME="" HARNESS="zcode" HOST_NAME=""
+EXPECT_FP="${VESMARO_EXPECT_FP:-}"   # --expect-fp wins over the env synonym
 BASE_DIR="/opt/mnemos-eyes"
 VENV_DIR="$BASE_DIR/venv"
 POLLER_PY="$BASE_DIR/assignment_poller.py"
 ENV_FILE="/etc/vesmaro/poller.env"
 YAML_FILE="/etc/vesmaro/poller.yaml"
 MARKER_FILE="/etc/vesmaro/poller-bootstrap.json"
-CA_FILE="/etc/vesmaro/lab-ca.crt"
+# VESMARO_CA_FILE: non-standard CA location knob (also keeps the test
+# contour off /etc) — the pre-placed path reads the same variable.
+CA_FILE="${VESMARO_CA_FILE:-/etc/vesmaro/lab-ca.crt}"
 UNIT_FILE="/etc/systemd/system/vesmaro-assignment-poller.service"
 STATE_DIR="/var/lib/vesmaro-eyes"
 
 usage() {
   cat <<'USAGE'
 Usage: bootstrap.sh --url <board-url> --token mne_… [--name NAME] [--harness NAME] [--host HOST]
+                    [--expect-fp SHA256:<fingerprint>]
 
   --url      board base URL as seen FROM THIS MACHINE (VPN overlay address
              if that is what resolves here — may differ from the LAN one)
@@ -64,6 +72,14 @@ Usage: bootstrap.sh --url <board-url> --token mne_… [--name NAME] [--harness N
   --name     executor name (default: this hostname)
   --harness  harness id from the board's harness dictionary (default: zcode)
   --host     declared host string (default: this hostname)
+  --expect-fp  TRUST ANCHOR (AGW-9): the expected lab-CA fingerprint in the
+             board canon (SHA256:base64, what the enrollment screen shows
+             as ca_fingerprint; a bare hex64 or sha256:-prefixed form is
+             accepted too). Given → the fetched/pre-placed CA is verified
+             SILENTLY; mismatch = abort, downloaded CA discarded.
+             Env synonym: VESMARO_EXPECT_FP. Without an anchor the script
+             prints the fingerprint and asks you to type the owner-confirmed
+             value on /dev/tty (no tty + no anchor = abort).
 
 Re-run behaviour: with an already-spent token and an existing install the
 script takes the UPDATE path (fresh artifacts, your allowlist preserved).
@@ -75,6 +91,39 @@ USAGE
 die() { echo "bootstrap: $1" >&2; exit "${2:-1}"; }
 step() { echo "== $1"; }
 
+# --------------------------------------------------- fingerprint helpers
+# The board canon (server/provisioner.py fingerprint_of_bytes — the
+# ssh-keygen standard): 'SHA256:' + UNPADDED base64 of sha256(DER).
+# Computed over the DER form, never over the PEM text.
+ca_fingerprint() {
+  local b64
+  b64=$(openssl x509 -in "$1" -outform DER 2>/dev/null \
+    | openssl dgst -sha256 -binary \
+    | openssl base64 -A) || return 1
+  # '=' appears in base64 ONLY as trailing padding — strip at the first.
+  printf 'SHA256:%s' "${b64%%=*}"
+}
+
+# Canonical form of an owner-supplied fingerprint (provisioner
+# normalize_fingerprint parity): SHA256:base64(43), sha256:/SHA256: hex64
+# or bare hex64 — the hex digest is re-ENCODED, never re-hashed. Prints
+# the canon form; exits non-zero on garbage. python3 is guaranteed here
+# by the preflight (the anchor runs after it).
+normalize_fp() {
+  python3 - "$1" <<'PY'
+import base64, re, sys
+fp = re.sub(r"\s+", "", (sys.argv[1] if len(sys.argv) > 1 else ""))
+body = fp[7:] if fp[:7].lower() == "sha256:" else fp
+if re.fullmatch(r"[A-Za-z0-9+/]{43}", body):
+    print("SHA256:" + body)
+elif re.fullmatch(r"[a-fA-F0-9]{64}", body):
+    print("SHA256:" + base64.b64encode(
+        bytes.fromhex(body.lower())).decode().rstrip("="))
+else:
+    sys.exit(2)
+PY
+}
+
 # ------------------------------------------------------------ parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -83,6 +132,7 @@ while [[ $# -gt 0 ]]; do
     --name) EXEC_NAME="${2:-}"; shift 2 ;;
     --harness) HARNESS="${2:-}"; shift 2 ;;
     --host) HOST_NAME="${2:-}"; shift 2 ;;
+    --expect-fp) EXPECT_FP="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
@@ -92,6 +142,12 @@ done
 [[ -n "$TOKEN" ]] || { echo "--token is required (mne_…, minted on the board)" >&2; usage; exit 2; }
 [[ "$TOKEN" =~ ^mne_[A-Za-z0-9_-]+$ ]] || die "--token must look like mne_… (got a different shape) — mint a one-time enrollment token on the board" 2
 [[ "$BOARD_URL" =~ ^https:// ]] || die "--url must be https:// (the board is never plain HTTP)" 2
+# Shape-check the anchor NOW (before any network): SHA256:base64(43) or a
+# hex64, with an optional case-insensitive sha256: prefix. Full
+# normalization happens in the TLS section (python3 is preflight-gated).
+if [[ -n "$EXPECT_FP" && ! "$EXPECT_FP" =~ ^([Ss][Hh][Aa]256:)?([A-Za-z0-9+/]{43}|[a-fA-F0-9]{64})[[:space:]]*$ ]]; then
+  die "--expect-fp must be SHA256:<base64> or a <hex64> digest (the board's enrollment screen prints the canon form) — got a different shape" 2
+fi
 HOST_NAME="${HOST_NAME:-$(hostname 2>/dev/null || echo unknown-host)}"
 EXEC_NAME="${EXEC_NAME:-$HOST_NAME}"
 
@@ -108,29 +164,90 @@ echo "   url=$BOARD_URL name=$EXEC_NAME harness=$HARNESS host=$HOST_NAME"
 # ------------------------------------------------------------- lab CA pin
 # A pre-placed CA short-circuits the network fetch entirely (the strictest
 # path: the owner copied it out-of-band per REMOTE-EXECUTOR.md §3).
+CA_SRC="pre-placed"
 if [[ -s "$CA_FILE" ]]; then
   step "TLS: using the pre-placed CA at $CA_FILE (no -k window at all)"
 else
   step "TLS: fetching the lab CA from the board"
+  CA_SRC=""
   # First attempt is the honest system-trust one (machines that already
   # trust the lab CA take a zero-(-k) path); --cacert on a not-yet-existing
   # file would fail LOCALLY (exit 77) before any connection, so it is used
   # only from the second attempt on. ONE retry with -k, STRICTLY for the
   # CA fetch — a certificate is public material, and everything AFTER this
   # point (artifacts, registration, the poller itself) rides the PINNED CA.
-  if ! curl -fsSL "$BOARD_URL/api/poller/artifacts/ca.crt" \
+  if curl -fsSL "$BOARD_URL/api/poller/artifacts/ca.crt" \
         -o "$CA_FILE" 2>/dev/null; then
+    CA_SRC="system-trust"
+  else
     echo "   no system trust for the lab cert — one -k retry for the CA ONLY"
     curl -fsSL -k "$BOARD_URL/api/poller/artifacts/ca.crt" -o "$CA_FILE" \
       || die "could not download the CA even with -k — is --url reachable from this machine?" 3
-    openssl x509 -in "$CA_FILE" -noout -text 2>/dev/null | grep -q "CA:TRUE" \
-      || { rm -f "$CA_FILE"; die "downloaded cert is not a CA (basicConstraints) — refusing to pin it" 3; }
-    FPR=$(openssl x509 -in "$CA_FILE" -noout -fingerprint -sha256 | cut -d= -f2)
-    echo "   CA fingerprint (SHA256): $FPR"
-    echo "   >>> VERIFY this fingerprint with the board owner over a personal"
-    echo " >>> channel before continuing — everything below pins THIS CA."
+    CA_SRC="-k"
   fi
+  # Whatever TLS carried it, this file becomes THE pin — only a real CA
+  # gets pinned (a served leaf/EE cert would break every later handshake).
+  openssl x509 -in "$CA_FILE" -noout -text 2>/dev/null | grep -q "CA:TRUE" \
+    || { rm -f "$CA_FILE"; die "downloaded cert is not a CA (basicConstraints) — refusing to pin it" 3; }
   chmod 0644 "$CA_FILE"
+fi
+
+# ------------------------------------------- trust anchor (AGW-9, АРХКОМ-8 В1)
+# The pinned CA must BE the board's CA. Fingerprint canon = the board's
+# (SHA256:base64 over DER, provisioner parity). Hierarchy, fail-closed:
+#   (1) --expect-fp / VESMARO_EXPECT_FP given → SILENT verify; mismatch =
+#       abort, a DOWNLOADED CA is discarded (a pre-placed one stays on
+#       disk — it is the owner's file — but the install still aborts);
+#   (2) no anchor → the fingerprint is printed for the out-of-band owner
+#       check and confirmed by TYPING it on /dev/tty (stdin is the curl
+#       pipe); empty answer / EOF / mismatch = abort (CA discarded);
+#   (3) no anchor and no /dev/tty = abort — an unattended install must
+#       carry the anchor explicitly, never skip the check.
+# The pre-placed path skips the interactive prompt (placement IS the
+# out-of-band act) but never skips an explicit --expect-fp.
+if ! CA_FP="$(ca_fingerprint "$CA_FILE")" || [[ -z "$CA_FP" ]]; then
+  die "could not compute the fingerprint of $CA_FILE — not a readable certificate (aborting before anything is pinned)" 3
+fi
+if [[ -n "$EXPECT_FP" ]]; then
+  if ! EXPECTED_FP="$(normalize_fp "$EXPECT_FP")"; then
+    die "--expect-fp could not be normalized (internal shape check passed, normalization failed) — aborting" 2
+  fi
+  if [[ "$CA_FP" != "$EXPECTED_FP" ]]; then
+    [[ "$CA_SRC" == "pre-placed" ]] || rm -f "$CA_FILE"
+    die "CA fingerprint MISMATCH: expected $EXPECTED_FP, got $CA_FP — refusing to pin a CA the anchor does not name ($CA_SRC CA discarded; check --expect-fp or the board's certificate)" 3
+  fi
+  echo "   CA fingerprint verified against the anchor: $CA_FP"
+else
+  echo "   CA fingerprint (canon):   $CA_FP"
+  echo "   CA fingerprint (openssl): SHA256:$(openssl x509 -in "$CA_FILE" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
+  if [[ "$CA_SRC" == "pre-placed" ]]; then
+    echo "   (pre-placed CA — placement was the out-of-band act, no prompt)"
+  else
+    echo "   >>> VERIFY this fingerprint with the board owner over a personal"
+    echo "   >>> channel, then TYPE it below to continue — everything below pins THIS CA."
+    # NB: a permission test ([[ -r /dev/tty ]]) LIES in a session without a
+    # controlling terminal (the check passes, open() then fails ENXIO) —
+    # the honest probe is the open itself. The { } block keeps the error
+    # suppression TEMPORARY: a bare `exec 3</dev/tty 2>/dev/null` would
+    # silence the shell's stderr FOREVER on success (found by the pty
+    # harness — every later die() line would have vanished).
+    if ! { exec 3</dev/tty; } 2>/dev/null; then
+      rm -f "$CA_FILE"
+      die "no --expect-fp and no usable /dev/tty — the CA fingerprint cannot be confirmed out-of-band. Re-run with --expect-fp SHA256:<fp> (env VESMARO_EXPECT_FP; the board's enrollment screen prints it as ca_fingerprint), or pre-place the CA at $CA_FILE (REMOTE-EXECUTOR.md §3)" 3
+    fi
+    CONFIRM=""
+    if ! read -r CONFIRM <&3; then
+      exec 3<&-
+      rm -f "$CA_FILE"
+      die "could not read the fingerprint confirmation from /dev/tty — aborting (downloaded CA discarded)" 3
+    fi
+    exec 3<&-
+    if ! CONFIRM_FP="$(normalize_fp "$CONFIRM")" || [[ "$CONFIRM_FP" != "$CA_FP" ]]; then
+      rm -f "$CA_FILE"
+      die "fingerprint confirmation does not match — aborting (downloaded CA discarded). Type the fingerprint exactly as the board owner gives it; empty Enter is a refusal" 3
+    fi
+    echo "   fingerprint confirmed by the operator — pinning THIS CA"
+  fi
 fi
 CURL_CA=(--cacert "$CA_FILE")
 
