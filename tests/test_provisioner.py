@@ -32,6 +32,9 @@ QA matrix:
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import inspect
 import json
 import shlex
 
@@ -106,10 +109,16 @@ def fake_provisioner(app_module, monkeypatch):
 
     async def fake_connect(facts: JobFacts, policy):
         # the REAL contract arity (P1-2): the transport decides the host
-        # key via a policy exposing validate(host, addr, port, key) — the
-        # SSHClient.validate_host_public_key signature asyncssh calls
+        # key via a policy exposing validate(host, addr, port, key) —
+        # the SSHClient.validate_host_public_key signature asyncssh calls;
+        # a policy False is what asyncssh turns into HostKeyNotVerifiable,
+        # which the real transport maps to the typed mismatch error
         connect_calls.append(facts)
-        policy.validate(facts.host, "127.0.0.1", facts.port, FakeKey())
+        if not policy.validate(facts.host, "127.0.0.1", facts.port, FakeKey()):
+            raise prov.ProvisioningError(
+                "host_key_mismatch",
+                f"host key {policy.presented_fingerprint} does not match "
+                f"the pinned/expected {policy.expected}")
         if flags.get("simulate_registration"):
             conn_holder["conn"].registration = {"enrollment_id": facts.enrollment_id}
         return conn_holder["conn"]
@@ -375,6 +384,90 @@ class TestInputValidation:
         assert shlex.quote("x; reboot") in cmd
         assert shlex.quote("z; rm -rf /") in cmd
         assert shlex.quote("https://b.example/evil $(calc)") in cmd
+
+
+# ------------------------------------------------- fingerprints (P1-3/P2-2)
+class TestFingerprints:
+    """One canonical format everywhere (ssh-keygen SHA256:unpadded-b64);
+    zero secret derivations in the DB or the API."""
+
+    def test_strict_hex_owner_input_normalized(self, client, ui_auth,
+                                               fake_provisioner):
+        # the owner may paste hex64 (or ssh-keygen base64) — both land in
+        # the job row in the ONE canonical form the worker compares
+        canonical = prov.fingerprint_of_bytes(b"fake-host-key")
+        assert canonical == "SHA256:" + base64.b64encode(
+            hashlib.sha256(b"fake-host-key").digest()).decode().rstrip("=")
+        hex_fp = hashlib.sha256(b"fake-host-key").hexdigest()
+        r = _provision(client, ui_auth, host="strict-hex-1",
+                       expected_host_key_fingerprint=hex_fp)
+        assert r.status_code == 202, r.text
+        row = _poll_until(lambda: _job(client, ui_auth,
+                                       r.json()["job_id"], state="done"))
+        assert row["host_key_fingerprint"] == canonical
+
+    def test_strict_mismatch_fails_typed(self, client, ui_auth):
+        r = _provision(client, ui_auth, host="strict-mm-1",
+                       expected_host_key_fingerprint=FP_B)
+        job_id = r.json()["job_id"]
+        row = _poll_until(lambda: _job(client, ui_auth, job_id,
+                                       state="failed"))
+        assert row["error_code"] == "host_key_mismatch"
+
+    def test_garbage_fingerprint_rejected_422(self, client, ui_auth):
+        r = _provision(client, ui_auth,
+                       expected_host_key_fingerprint="SHA256:zzz-not-b64")
+        assert r.status_code == 422
+
+    def test_password_has_zero_secret_derivations(self, client, ui_auth,
+                                                  monkeypatch):
+        monkeypatch.setenv("VESMARO_PROVISION_PASSWORD_AUTH", "1")
+        pw = "hunter2-super-secret"
+        derived_b64 = "SHA256:" + base64.b64encode(
+            hashlib.sha256(pw.encode()).digest()).decode().rstrip("=")
+        derived_hex = hashlib.sha256(pw.encode()).hexdigest()
+        r = _provision(client, ui_auth, host="pw-fp-1",
+                       auth={"kind": "password", "secret": pw})
+        assert r.status_code == 202, r.text
+        row = _poll_until(lambda: _job(client, ui_auth,
+                                       r.json()["job_id"], state="done"))
+        assert row["key_fingerprint"] == "password"
+        blob = json.dumps(row)
+        assert derived_b64 not in blob and derived_hex not in blob
+        assert pw not in blob
+
+
+# ------------------------------------------- asyncssh contract smoke (P1-2)
+class TestAsyncsshContract:
+    """The transport contract against the INSTALLED asyncssh — the exact
+    mistake class the review caught (1-arg validator as known_hosts=).
+    Skipped where asyncssh is not installed."""
+
+    def test_validate_host_public_key_arity(self):
+        asyncssh = pytest.importorskip("asyncssh")
+        params = list(inspect.signature(
+            asyncssh.SSHClient.validate_host_public_key).parameters)
+        assert params == ["self", "host", "addr", "port", "key"]
+        assert issubclass(asyncssh.PermissionDenied, Exception)
+        assert issubclass(asyncssh.HostKeyNotVerifiable, Exception)
+
+    def test_trust_nothing_matcher_shape(self):
+        pytest.importorskip("asyncssh")
+        trusted, ca, revoked = prov._trust_nothing("h", "127.0.0.1", 22)
+        assert (trusted, ca, revoked) == ([], [], [])
+
+    def test_fingerprint_formula_matches_asyncssh(self):
+        asyncssh = pytest.importorskip("asyncssh")
+        key = asyncssh.generate_private_key("ssh-ed25519")
+        assert (prov.fingerprint_of_bytes(key.public_data)
+                == key.get_fingerprint())
+
+    def test_public_key_fingerprint_best_effort(self):
+        asyncssh = pytest.importorskip("asyncssh")
+        key = asyncssh.generate_private_key("ssh-ed25519")
+        material = key.export_private_key().decode()
+        assert prov.public_key_fingerprint(material) == key.get_fingerprint()
+        assert prov.public_key_fingerprint("definitely not a key") == ""
 
 
 # ---------------------------------------------------------------- anti-spray

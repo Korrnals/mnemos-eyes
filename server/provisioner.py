@@ -42,11 +42,13 @@ Security invariants implemented here:
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import time
 from dataclasses import dataclass
@@ -137,9 +139,59 @@ def read_board_ca() -> bytes:
         return b""
 
 
+_FP_CANON_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+_FP_HEX_RE = re.compile(r"^(?:SHA256:)?([a-fA-F0-9]{64})$")
+
+
+def fingerprint_of_bytes(data: bytes) -> str:
+    """The ssh-keygen standard host/key fingerprint: 'SHA256:' +
+    UNPADDED base64 of sha256(blob) — byte-for-byte what `ssh-keygen -lf`
+    prints (verified equal to asyncssh SSHKey.get_fingerprint())."""
+    return ("SHA256:"
+            + base64.b64encode(hashlib.sha256(data).digest()).decode().rstrip("="))
+
+
+def normalize_fingerprint(fp: str) -> str:
+    """Canonical form of an owner-supplied fingerprint (P1-3: the worker
+    used to compute hex while the route accepted ssh-keygen base64 — a
+    split brain that made owner-strict mode a guaranteed false mismatch
+    and TOFU pins un-enterable). Accepts the standard SHA256:base64,
+    'SHA256:<hex64>' and a bare hex64; anything else → '' (reject). The
+    hex form IS the sha256 digest — it is re-encoded, never re-hashed."""
+    fp = (fp or "").strip()
+    if _FP_CANON_RE.match(fp):
+        return fp
+    hex_match = _FP_HEX_RE.match(fp)
+    if hex_match:
+        return ("SHA256:" + base64.b64encode(
+            bytes.fromhex(hex_match.group(1).lower())).decode().rstrip("="))
+    return ""
+
+
 def host_key_fingerprint(key) -> str:
-    """sha256 of the ssh host key in the standard SHA256:b64 form."""
-    return f"SHA256:{hashlib.sha256(key.as_bytes()).digest().hex()}"  # type: ignore[attr-defined]
+    """The presented host key's fingerprint in the canonical ssh-keygen
+    form — computed over the key's wire blob (asyncssh exposes it as
+    public_data; the test fake stands in with as_bytes)."""
+    data = getattr(key, "public_data", None)
+    if data is None:
+        data = key.as_bytes()  # type: ignore[attr-defined]
+    return fingerprint_of_bytes(data)
+
+
+def public_key_fingerprint(private_material: str, passphrase: str = "") -> str:
+    """Display fingerprint of the PUBLIC half of a private key (the job
+    row material the UI shows). Best-effort: '' when the material cannot
+    be parsed or asyncssh is unavailable — the route must never fail on
+    display data. NEVER derives anything from a password (P2-2,
+    CWE-759: the old code stored sha256(password) unsalted and returned
+    it to the owner)."""
+    try:
+        import asyncssh  # noqa: PLC0415 — deliberate lazy import
+        key = asyncssh.import_private_key(
+            private_material, passphrase=(passphrase or None))
+    except Exception:  # noqa: BLE001 — display material, never fatal
+        return ""
+    return fingerprint_of_bytes(key.public_data)
 
 
 class HostKeyPolicy:

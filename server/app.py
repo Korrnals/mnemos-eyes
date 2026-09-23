@@ -3832,7 +3832,6 @@ _provision_limiter = RateLimiter(
 _PROVISION_COOLDOWN_S = 90.0     # per host:port
 _PROVISION_ACTIVE_CAP = 2        # global active jobs
 _PROVISION_BOARD_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d{1,5})?$")
-_PROVISION_KEY_FP_RE = re.compile(r"^(SHA256:[A-Za-z0-9+/]{43}|[a-f0-9]{64})$")
 
 
 def _created_ts(iso: str) -> float:
@@ -3848,14 +3847,6 @@ def _provisioner_enabled() -> bool:
 
 def _provision_password_auth() -> bool:
     return os.environ.get("VESMARO_PROVISION_PASSWORD_AUTH", "0") == "1"
-
-
-def _key_fingerprint_of(secret: str) -> str:
-    """Best-effort public fingerprint for the job row (NEVER the key)."""
-    import base64
-    import hashlib
-    digest = hashlib.sha256(secret.encode("utf-8")).digest()
-    return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
 
 
 @app.post("/api/executors/provision", status_code=202)
@@ -3894,11 +3885,17 @@ async def provision_executor(body: ProvisionBody,
         raise HTTPException(
             422, f"unknown harness: {harness_hint}; "
                  f"known: {sorted(store.harness_names())}")
-    if (body.expected_host_key_fingerprint
-            and not _PROVISION_KEY_FP_RE.match(
-                body.expected_host_key_fingerprint.strip())):
-        raise HTTPException(422, "expected_host_key_fingerprint must be "
-                                 "SHA256:base64 or hex sha256")
+    # P1-3: both owner-supplied forms (ssh-keygen base64 AND hex64)
+    # normalize to the canonical form the worker compares against — one
+    # format everywhere (job row, pins, audit).
+    expected_fp = ""
+    if body.expected_host_key_fingerprint.strip():
+        expected_fp = provisioner_mod.normalize_fingerprint(
+            body.expected_host_key_fingerprint)
+        if not expected_fp:
+            raise HTTPException(
+                422, "expected_host_key_fingerprint must be SHA256:base64 "
+                     "(ssh-keygen form) or hex sha256")
 
     host = body.host.strip()
     if live := store.active_job_for_host(host, body.port):
@@ -3959,14 +3956,22 @@ async def provision_executor(body: ProvisionBody,
             raise HTTPException(422, str(exc)) from exc
         enrollment_id = row["enrollment_id"]
 
-    key_fp = (_key_fingerprint_of(body.auth.secret) if body.auth.kind == "key"
-              else ("alias:" + host if body.auth.kind == "alias" else
-                    _key_fingerprint_of(body.auth.secret)))
+    # P2-2 (CWE-759): ZERO derivations of the ssh secret in the DB or the
+    # API. The old code stored unsalted sha256(password) and returned it
+    # to the owner. For key auth the fingerprint of the PUBLIC half is
+    # display material (useful, comparable with ssh-keygen -lf).
+    if body.auth.kind == "password":
+        key_fp = "password"
+    elif body.auth.kind == "alias":
+        key_fp = "alias:" + host
+    else:
+        key_fp = provisioner_mod.public_key_fingerprint(
+            body.auth.secret, body.auth.passphrase)
     job = store.create_provision_job(
         host=host, port=body.port, auth_kind=body.auth.kind,
         key_fingerprint=key_fp, harness_hint=harness_hint,
         board_url_for_host=board_url, enrollment_id=enrollment_id,
-        expected_host_key_fingerprint=body.expected_host_key_fingerprint.strip())
+        expected_host_key_fingerprint=expected_fp)
     provisioning.remember(job["id"], enrollment_id, mne_token)
     provisioning.get(store, _broadcast).start_job(provisioner_mod.JobFacts(
         job_id=job["id"], host=host, port=body.port, auth_kind=body.auth.kind,
@@ -3976,7 +3981,7 @@ async def provision_executor(body: ProvisionBody,
         username="", harness_hint=harness_hint,
         enrollment_id=enrollment_id, executor_name=name, board_url=board_url,
         bootstrap_token=provisioner_mod.Redacted(mne_token),
-        expected_host_key_fingerprint=body.expected_host_key_fingerprint.strip()))
+        expected_host_key_fingerprint=expected_fp))
     _notify_and_broadcast(
         "system", f"Подключение {host}:{body.port} запущено",
         f"provision job {job['id']} ({body.auth.kind})",
@@ -4011,9 +4016,13 @@ async def provision_repin(host: str, body: HostRepinBody,
     old→new pair in the audit (provisioning.host_key_repinned). Use after
     a deliberate host reinstall — never to silence a mismatch."""
     _guard_ui_write(request)
-    fp = body.fingerprint.strip()
-    if not _PROVISION_KEY_FP_RE.match(fp):
-        raise HTTPException(422, "fingerprint must be SHA256:base64 or hex sha256")
+    # P1-3: same normalization as strict mode — hex64 input becomes the
+    # canonical ssh-keygen form before it lands in the pin table.
+    fp = provisioner_mod.normalize_fingerprint(body.fingerprint)
+    if not fp:
+        raise HTTPException(
+            422, "fingerprint must be SHA256:base64 (ssh-keygen form) or "
+                 "hex sha256")
     old = store.get_host_pin(host)
     store.set_host_pin(host, fp)
     store.log_board_event("provisioning.host_key_repinned", {
