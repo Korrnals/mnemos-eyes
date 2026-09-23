@@ -12,12 +12,16 @@
 #   4. history gate   — helm history: the latest revision must be
 #                       `deployed` (never stack an upgrade on a failed /
 #                       pending-upgrade release). --skip-history-gate is
-#                       REPAIR-ONLY;
+#                       REPAIR/ROLLBACK-ONLY;
 #   5. values gate    — helm get values (live) vs deploy/chart/.../values.yaml
 #                       (git) on NON-SECRET keys: a hand-edited live release
 #                       (stale --set, a diagnostics window left on) refuses
 #                       the deploy. Secret-class keys are compared by KEY
-#                       PRESENCE only — values never printed;
+#                       PRESENCE only — values never printed. A non-secret
+#                       drift can be waived ONLY by an explicit audited
+#                       escape: `deploy --allow-drift "<reason>"` (secret-
+#                       class drift is NEVER waivable — see P2-A deadlock
+#                       note below);
 #   6. build + push   — distrobox-host-exec podman (tag resolved from the
 #                       chart values / appVersion);
 #   7. helm upgrade   — -f values.yaml --set image.tag --set rootApp=app
@@ -27,16 +31,33 @@
 #                       back to the repo (audit trail travels with main).
 #
 # Subcommands:
-#   deploy                     build + upgrade (default)
+#   deploy [--allow-drift "<reason>"]
+#                              build + upgrade (default). --allow-drift is
+#                              the POST-ROLLBACK ESCAPE: after `rollback
+#                              <rev>` the live release legitimately carries
+#                              the OLD revision's values (image.tag,
+#                              rootApp), so the next deploy would deadlock
+#                              on the values gate (repair cannot build the
+#                              image, committing the stale values would
+#                              defeat the gate). The flag waives ONLY the
+#                              non-secret drift refusal; every other gate
+#                              still runs; the reason is MANDATORY and
+#                              lands in the JOURNAL line;
 #   verify                     dry run of gates 1-5, no deploy, no journal
-#   rollback <rev>             same gates, helm rollback instead of upgrade
+#   rollback <rev> [--skip-history-gate]
+#                              same gates, helm rollback instead of
+#                              upgrade. --skip-history-gate is explicitly
+#                              allowed here: rolling back IS the sane
+#                              recovery when the latest revision is
+#                              failed/pending (rollback targets a KNOWN
+#                              good revision; deploy/verify never skip);
 #   repair [--skip-history-gate]
 #                              one-shot realignment: helm upgrade with the
 #                              CURRENT app tag from the FRESH main chart
 #                              (no image rebuild — the tag must already
-#                              exist in the registry); the only subcommand
-#                              allowed to skip the history gate (use it to
-#                              recover a failed/pending release)
+#                              exist in the registry); also allowed to
+#                              skip the history gate (recover a failed/
+#                              pending release)
 #
 # Env knobs (ops/test overrides, VESMARO_DEPLOY_ prefix):
 #   GIT / HELM / SYNC_VERSION / PODMAN_HOST / LOCK / JOURNAL / ACTOR / PYTHON
@@ -49,11 +70,17 @@ CHART_DIR="$REPO_ROOT/deploy/chart/vesmaro-eyes"
 VALUES_FILE="$CHART_DIR/values.yaml"
 CHART_YAML="$CHART_DIR/Chart.yaml"
 JOURNAL="${VESMARO_DEPLOY_JOURNAL:-$REPO_ROOT/deploy/JOURNAL.md}"
-LOCK_PATH="${VESMARO_DEPLOY_LOCK:-/run/vesmaro-deploy.lock}"
 GIT_BIN="${VESMARO_DEPLOY_GIT:-git}"
 HELM_BIN="${VESMARO_DEPLOY_HELM:-helm}"
 SYNC_VERSION="${VESMARO_DEPLOY_SYNC_VERSION:-$REPO_ROOT/scripts/sync-version.sh}"
 PODMAN_HOST="${VESMARO_DEPLOY_PODMAN_HOST:-distrobox-host-exec podman}"
+# NB (distrobox): the default LOCK below lives in /run, which is
+# NAMESPACE-LOCAL per distrobox container — two different containers (or
+# container vs host) each see their OWN /run and the flock does NOT
+# serialize deploys between them. Run every deploy from the SAME
+# container (or point LOCK at a shared path) — the gate only holds
+# within one PID/mount namespace.
+LOCK_PATH="${VESMARO_DEPLOY_LOCK:-/run/vesmaro-deploy.lock}"
 
 # python for yaml/json parsing: the repo venv when present, else python3
 # (must import yaml for the values gate).
@@ -70,18 +97,50 @@ fi
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/deploy.sh [deploy|verify|rollback <rev>|repair] [--skip-history-gate]
+Usage: scripts/deploy.sh [deploy|verify|rollback <rev>|repair] [flags]
 
   deploy    build + push the image, helm upgrade --atomic, JOURNAL entry
+            --allow-drift "<reason>"  waive a NON-SECRET values drift
+            (post-rollback realign; reason is mandatory, lands in JOURNAL;
+            secret-class drift and every other gate still refuse)
   verify    gates 1-5 only (preflight, version, lock, history, values)
   rollback  helm rollback <rev> through the same gates + JOURNAL entry
+            --skip-history-gate allowed (recover from failed/pending)
   repair    helm upgrade with the current app tag from the fresh main
-            chart (no rebuild); --skip-history-gate allowed HERE only
+            chart (no rebuild); --skip-history-gate allowed HERE too
 USAGE
 }
 
 die() { echo "deploy: $1" >&2; exit "${2:-1}"; }
 log() { echo "== $1"; }
+
+# ------------------------------------------------------- cleanup + traps
+# ONE trap owns everything that must not outlive the process: gate tmp
+# files (a RETURN trap never fires on the die/exit paths inside a
+# function — the mktemp'd live-values file used to leak there) and the
+# deploy-lock fd on signals too (not just EXIT).
+declare -a TMP_CLEANUP=()
+cleanup() {
+  local f
+  for f in ${TMP_CLEANUP[@]+"${TMP_CLEANUP[@]}"}; do
+    if [[ -n "$f" ]]; then rm -f -- "$f"; fi
+  done
+  # release the deploy lock fd if we hold it (acquire_lock opened fd 9)
+  if { true >&9; } 2>/dev/null; then exec 9>&-; fi
+}
+trap cleanup EXIT
+# On a signal: clean up AND STOP — a handler that only closed the fd
+# would let the deploy keep running with the lock already released.
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# Subcommand state (mutated by argv parsing when executed; inert
+# defaults when the script is sourced for unit tests).
+CMD="deploy"
+ROLLBACK_REV=""
+SKIP_HISTORY=0
+ALLOW_DRIFT=0
+DRIFT_REASON=""
 
 
 # ------------------------------------------------------------------ gates
@@ -115,7 +174,7 @@ acquire_lock() {
     holder="$(lock_holder)" || true
     die "another deploy holds $LOCK_PATH${holder:+ (holder: $holder)} — refusing to run concurrently" 1
   fi
-  trap 'exec 9>&-' EXIT
+  # fd 9 is released by the global cleanup() trap (EXIT/INT/TERM).
 }
 
 # Best-effort holder identification: pid + process name only (never a
@@ -145,6 +204,13 @@ lock_holder() {
 # The image tag the deploy pins: values.yaml image.tag (sync-version keeps
 # it equal to Chart appVersion); empty falls back to appVersion per the
 # chart contract. Never empty at the end.
+#
+# NB: the first sed anchors on EXACTLY two leading spaces + `tag:` —
+# it matches values.yaml's `image.tag` and nothing else ONLY while that
+# key stays at that indent. A re-indented/renamed block silently stops
+# matching and we fall through to appVersion (which sync-version keeps
+# equal, so the damage is bounded — but if you ever nest image.* deeper,
+# revisit this parser instead of trusting the fallback).
 resolve_image_tag() {
   local tag
   tag="$(sed -n 's/^  tag: *"\?\([^"#]*\)"\?.*/\1/p' "$VALUES_FILE" | head -1)"
@@ -152,6 +218,19 @@ resolve_image_tag() {
     tag="$(sed -n 's/^appVersion: *"\?\([^"#]*\)"\?.*/\1/p' "$CHART_YAML" | head -1)"
   fi
   [[ -n "$tag" ]] || die "cannot resolve the image tag (values image.tag / Chart appVersion)" 1
+  printf '%s' "$tag"
+}
+
+# The image tag a SPECIFIC live revision runs — for the rollback JOURNAL
+# line: after `helm rollback` the live release carries the TARGET
+# revision's tag, and resolve_image_tag() (git values) would lie in the
+# audit trail. Same 2-space-indent sed caveat as resolve_image_tag
+# (`helm get values` emits image.tag at exactly that indent).
+live_tag_at_revision() {  # $1 = revision number
+  local tag
+  tag="$("$HELM_BIN" get values "$RELEASE" -n "$NAMESPACE" \
+      --revision "$1" --output yaml 2>/dev/null \
+      | sed -n 's/^  tag: *"\?\([^"#]*\)"\?.*/\1/p' | head -1)"
   printf '%s' "$tag"
 }
 
@@ -185,7 +264,7 @@ gate_helm_history() {
   local rev status
   read -r rev status <<<"$last"
   if [[ "$status" != "deployed" ]]; then
-    die "latest helm revision $rev is '$status' (not deployed) — deploying on top of a broken release is refused. Recover via: scripts/deploy.sh repair --skip-history-gate (then investigate)" 1
+    die "latest helm revision $rev is '$status' (not deployed) — deploying on top of a broken release is refused. Recover via: scripts/deploy.sh rollback <last-good-rev> --skip-history-gate, or scripts/deploy.sh repair --skip-history-gate (then investigate)" 1
   fi
   echo "   latest revision $rev: deployed"
 }
@@ -193,28 +272,42 @@ gate_helm_history() {
 # Non-secret keys the live release must agree on with git (values.yaml +
 # the deploy intent: rootApp=app and image.tag=<resolved tag> per RUNBOOK
 # §11 — the wrapper always passes both explicitly). Drift on ANY of them
-# = refuse. Secret-class keys: KEY PRESENCE only, values never compared
-# and never printed.
+# = refuse — waivable ONLY by `deploy --allow-drift "<reason>"` (the
+# post-rollback escape: the live release then legitimately carries the
+# old revision's values). Secret-class keys: KEY PRESENCE only, values
+# never compared and never printed — NEVER waivable (exit 3).
+# Exit codes of the python half: 0 = match, 1 = non-secret drift
+# (waivable), 3 = secret-class drift (never), 4 = unexpected error
+# (never — a parse crash must not be mistakable for waivable drift).
 gate_values_drift() {
   log "gate 5/5 values drift: live release vs git (non-secret keys)"
-  local live_yaml tag repo
+  local live_yaml tag repo rc
   live_yaml="$(mktemp)"
-  # NB: a plain RETURN trap SURVIVES the function and fires again on the
-  # NEXT return with the local already gone (set -u → unbound variable)
-  # — it removes itself after the one shot.
-  trap 'rm -f "$live_yaml"; trap - RETURN' RETURN
+  # removed on EVERY exit path (die included) by the global cleanup()
+  # trap — a RETURN trap does not fire on the die/exit paths.
+  TMP_CLEANUP+=("$live_yaml")
   if ! "$HELM_BIN" get values "$RELEASE" -n "$NAMESPACE" --output yaml > "$live_yaml" 2>/dev/null; then
     die "helm get values failed — is the release $RELEASE/$NAMESPACE real?" 1
   fi
   tag="$(resolve_image_tag)"
   repo="$(image_repository)"
-  "${PY[@]}" - "$live_yaml" "$VALUES_FILE" "$tag" "$repo" <<'PYDRIFT' \
-    || die "values drift detected (details above) — realign the live release (scripts/deploy.sh repair) or commit the intended values" 1
+  rc=0
+  "${PY[@]}" - "$live_yaml" "$VALUES_FILE" "$tag" "$repo" <<'PYDRIFT' || rc=$?
 import sys, yaml
 
 live_path, file_path, image_tag, image_repo = sys.argv[1:5]
-live = yaml.safe_load(open(live_path)) or {}
-file = yaml.safe_load(open(file_path)) or {}
+
+def load(path):
+    try:
+        return yaml.safe_load(open(path)) or {}
+    except Exception:
+        return None  # unparseable = NOT waivable drift (exit 4 below)
+
+live = load(live_path)
+file = load(file_path)
+if live is None or file is None:
+    print("values drift check: cannot parse the live or git values yaml", file=sys.stderr)
+    sys.exit(4)
 
 def dig(d, path):
     cur = d
@@ -269,19 +362,38 @@ for path, expected in non_secret_expected.items():
     elif got != expected:
         drift.append(f"{path}: live={got!r} git={expected!r}")
 
+secret_drift = []
 for path in secret_class:
     _, in_live = dig(live, path)
     _, in_file = dig(file, path)
     if in_file and not in_live:
-        drift.append(f"{path}: defined in git values, absent in live release (key name only — value not compared)")
+        secret_drift.append(f"{path}: defined in git values, absent in live release (key name only — value not compared)")
 
 if drift:
-    print("values drift (NON-SECRET keys only):", file=sys.stderr)
+    print("values drift (NON-SECRET keys):", file=sys.stderr)
     for line in drift:
         print(f"  - {line}", file=sys.stderr)
+if secret_drift:
+    print("values drift (SECRET-CLASS keys, presence only — NEVER waivable):", file=sys.stderr)
+    for line in secret_drift:
+        print(f"  - {line}", file=sys.stderr)
+if secret_drift:
+    sys.exit(3)
+if drift:
     sys.exit(1)
 print("   live values match git + deploy intent (non-secret keys)")
 PYDRIFT
+  case "$rc" in
+    0) ;;
+    1)
+      if [[ "$ALLOW_DRIFT" -eq 1 ]]; then
+        log "gate 5/5 values drift: WAIVED (--allow-drift) — non-secret keys only, reason recorded in JOURNAL"
+      else
+        die "values drift detected (details above) — realign the live release (scripts/deploy.sh repair), commit the intended values, or waive explicitly: scripts/deploy.sh deploy --allow-drift \"<reason>\"" 1
+      fi ;;
+    3) die "values drift on SECRET-CLASS keys (details above) — --allow-drift does NOT cover this; realign the release first" 1 ;;
+    *) die "values drift check failed unexpectedly (rc=$rc) — refusing" 1 ;;
+  esac
 }
 
 run_gates() {
@@ -289,7 +401,7 @@ run_gates() {
   gate_version_drift
   acquire_lock
   if [[ "$SKIP_HISTORY" -eq 1 ]]; then
-    log "gate 4/5 helm history: SKIPPED (--skip-history-gate, repair only)"
+    log "gate 4/5 helm history: SKIPPED (--skip-history-gate, repair/rollback only)"
   else
     gate_helm_history
   fi
@@ -297,9 +409,9 @@ run_gates() {
 }
 
 # ---------------------------------------------------------------- journal
-journal_append() {  # $1 action, $2 rev_before, $3 rev_after, $4 image_tag
-  local action="$1" rev_before="$2" rev_after="$3" image_tag="$4"
-  local head chart_ver actor when
+journal_append() {  # $1 action, $2 rev_before, $3 rev_after, $4 image_tag, [$5 note]
+  local action="$1" rev_before="$2" rev_after="$3" image_tag="$4" note="${5:-}"
+  local head chart_ver actor when line
   head="$("$GIT_BIN" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   chart_ver="$(chart_version)"
   actor="${VESMARO_DEPLOY_ACTOR:-$(id -un 2>/dev/null || echo unknown)@$(hostname -s 2>/dev/null || echo unknown)}"
@@ -307,9 +419,15 @@ journal_append() {  # $1 action, $2 rev_before, $3 rev_after, $4 image_tag
   if [[ ! -f "$JOURNAL" ]]; then
     printf '# vesmaro-eyes deploy JOURNAL — append-only audit trail (AGW-10)\n# date | actor | action | helm rev before>after | image tag | chart version | HEAD\n' > "$JOURNAL"
   fi
-  printf '%s | %s | %s | rev %s>%s | image %s | chart %s | HEAD %s\n' \
+  # the note is single-line by construction (newlines squashed at argv
+  # parse) — the journal stays one-entry-per-line parseable
+  line="$(printf '%s | %s | %s | rev %s>%s | image %s | chart %s | HEAD %s' \
     "$when" "$actor" "$action" "$rev_before" "$rev_after" \
-    "${image_tag:-none}" "${chart_ver:-unknown}" "$head" >> "$JOURNAL"
+    "${image_tag:-none}" "${chart_ver:-unknown}" "$head")"
+  if [[ -n "$note" ]]; then
+    line="$line | $note"
+  fi
+  printf '%s\n' "$line" >> "$JOURNAL"
   # The journal travels with the repo — but only when it lives inside it
   # (the test contour points the knob at a tmp file).
   case "$(readlink -f "$JOURNAL")" in
@@ -358,14 +476,20 @@ helm_upgrade_atomic() {
 
 do_deploy() {
   run_gates
-  local rev_before tag
+  local rev_before
   rev_before="$(rev_now)"
   build_and_push
   helm_upgrade_atomic
   local rev_after
   rev_after="$(rev_now)"
   log "deployed: rev $rev_before>$rev_after"
-  journal_append deploy "$rev_before" "$rev_after" "$(resolve_image_tag)"
+  # drift waiver note: the audit trail must show WHY the values gate
+  # was skipped, in the JOURNAL line itself
+  local note=""
+  if [[ "$ALLOW_DRIFT" -eq 1 ]]; then
+    note="allow-drift: $DRIFT_REASON"
+  fi
+  journal_append deploy "$rev_before" "$rev_after" "$(resolve_image_tag)" "$note"
 }
 
 do_rollback() {
@@ -376,10 +500,18 @@ do_rollback() {
   "$HELM_BIN" rollback "$RELEASE" "$ROLLBACK_REV" -n "$NAMESPACE" \
     --wait --timeout 5m \
     || die "helm rollback failed" 1
-  local rev_after
+  local rev_after tag_after
   rev_after="$(rev_now)"
   log "rolled back: rev $rev_before>$rev_after (target revision $ROLLBACK_REV)"
-  journal_append rollback "$rev_before" "$rev_after" "$(resolve_image_tag)"
+  # the journal tag must reflect WHAT THE RELEASE NOW RUNS: the target
+  # revision's live tag, NOT git's resolve_image_tag() (they diverge
+  # exactly when a rollback is worth journaling)
+  tag_after="$(live_tag_at_revision "$rev_after")"
+  if [[ -z "$tag_after" ]]; then
+    log "WARNING: could not read the live tag of rev $rev_after — journaling the git tag as a fallback"
+    tag_after="$(resolve_image_tag)"
+  fi
+  journal_append rollback "$rev_before" "$rev_after" "$tag_after"
 }
 
 do_repair() {
@@ -400,13 +532,19 @@ do_repair() {
 # any of them; executing it directly parses argv and dispatches.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
-  CMD="deploy"
-  ROLLBACK_REV=""
-  SKIP_HISTORY=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       deploy|verify|rollback|repair) CMD="$1" ;;
       --skip-history-gate) SKIP_HISTORY=1 ;;
+      --allow-drift)
+        # the waiver reason is MANDATORY and must be non-empty — an
+        # anonymous drift waiver is unauditable
+        if [[ $# -lt 2 || -z "$2" ]]; then
+          die "--allow-drift needs a non-empty reason: scripts/deploy.sh deploy --allow-drift \"<reason>\"" 2
+        fi
+        ALLOW_DRIFT=1
+        DRIFT_REASON="$2"
+        shift ;;
       -h|--help) usage; exit 0 ;;
       *) if [[ "$CMD" == "rollback" && "$1" =~ ^[0-9]+$ && -z "$ROLLBACK_REV" ]]; then
            ROLLBACK_REV="$1"
@@ -416,8 +554,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     esac
     shift
   done
-  if [[ "$SKIP_HISTORY" -eq 1 && "$CMD" != "repair" ]]; then
-    die "--skip-history-gate is allowed for the repair subcommand ONLY" 2
+  # keep the journal one-entry-per-line even if the reason tries not to be
+  DRIFT_REASON="${DRIFT_REASON//$'\n'/ }"
+  DRIFT_REASON="${DRIFT_REASON//$'\r'/ }"
+  if [[ "$ALLOW_DRIFT" -eq 1 && "$CMD" != "deploy" ]]; then
+    die "--allow-drift is allowed for the deploy subcommand ONLY" 2
+  fi
+  if [[ "$SKIP_HISTORY" -eq 1 && "$CMD" != "repair" && "$CMD" != "rollback" ]]; then
+    die "--skip-history-gate is allowed for the repair and rollback subcommands ONLY" 2
   fi
   if [[ "$CMD" == "rollback" && -z "$ROLLBACK_REV" ]]; then
     die "rollback needs a revision number: scripts/deploy.sh rollback <rev>" 2

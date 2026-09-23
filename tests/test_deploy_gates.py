@@ -10,16 +10,21 @@ QA matrix:
 - version gate: sync-version --check failure refuses;
 - lock: free lock acquires, a held lock refuses (holder identified);
 - history gate: deployed passes; failed / pending-upgrade refuse with
-  the repair hint; --skip-history-gate is repair-only (arg error);
+  the repair/rollback hint; --skip-history-gate is repair+rollback-only
+  (deploy/verify: arg error; rollback on a failed release: passes);
 - values gate: live==git+intent passes; rootApp fallback / stale tag /
   diagnostics-window keys / missing keys refuse; secret-class values are
-  never printed (key names only);
+  never printed (key names only); --allow-drift waives NON-SECRET drift
+  only (deploy subcommand, mandatory reason journaled; secret-class and
+  every other gate still refuse);
 - tag resolution: values image.tag, appVersion fallback;
-- journal: append-only line format, header on create;
+- journal: append-only line format, header on create; the git
+  add/commit/push branch exercised with a real tmp git repo;
 - subcommands: verify (gates only, no helm upgrade), deploy (podman
   build+push with the resolved tag, helm upgrade --atomic -f values
   --set image.tag --set rootApp=app, journal), rollback (helm rollback
-  <rev> + journal), repair (no podman, skip-history allowed).
+  <rev> + journal with the TARGET revision's live tag, not git's),
+  repair (no podman, skip-history allowed).
 """
 
 from __future__ import annotations
@@ -103,7 +108,20 @@ class FakeWorld:
             echo "helm $*" >> "$S/helm.log"
             case "$1" in
               history) cat "$S/hist.json" ;;
-              get) cat "$S/live.yaml" ;;
+              get)
+                # `get values ... --revision N` serves a per-revision
+                # snapshot when the test planted one (live-rev-N.yaml),
+                # else the current live.yaml
+                rev=""; prev=""
+                for a in "$@"; do
+                  if [[ "$prev" == "--revision" ]]; then rev="$a"; fi
+                  prev="$a"
+                done
+                if [[ -n "$rev" && -f "$S/live-rev-$rev.yaml" ]]; then
+                  cat "$S/live-rev-$rev.yaml"
+                else
+                  cat "$S/live.yaml"
+                fi ;;
               upgrade)
                 python3 - "$S/hist.json" <<'PYB'
             import json, sys
@@ -350,6 +368,62 @@ class TestJournal:
                 if "|" in l and not l.startswith("#")]
         assert len(data) == 2
 
+    def test_note_suffix_appended_to_line(self, world):
+        world.run_function(
+            'journal_append deploy 7 8 2.0.0 "allow-drift: post-rollback realign"')
+        line = (world.state / "JOURNAL.md").read_text().strip().splitlines()[-1]
+        assert line.endswith('| allow-drift: post-rollback realign')
+
+    def test_journal_committed_and_pushed_when_inside_repo(self, world, tmp_path):
+        """The git add/commit/push branch of journal_append (the journal
+        travels with the repo) — one-shot with a REAL tmp git repo and a
+        REPO_ROOT override; the stub git cannot execute it."""
+        repo = tmp_path / "repo"
+        (repo / "deploy").mkdir(parents=True)
+        origin = tmp_path / "origin.git"
+
+        def git(*args: str, cwd=None, git_dir=None) -> subprocess.CompletedProcess:
+            cmd = ["git"]
+            if git_dir:
+                cmd += ["--git-dir", str(git_dir)]
+            else:
+                cmd += ["-C", str(cwd or repo)]
+            return subprocess.run(cmd + list(args), capture_output=True,
+                                  text=True, check=True)
+
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+        # isolate from machine-global hooks (identity guards etc.) — the
+        # tmp repo must behave identically on every machine
+        git("config", "core.hooksPath", "")
+        git("config", "user.email", "deploy-test@example.com")
+        git("config", "user.name", "deploy-test")
+        (repo / "README.md").write_text("tmp repo\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "init")
+        git("remote", "add", "origin", str(origin))
+        git("push", "-q", "origin", "main")
+
+        env = world.env(VESMARO_DEPLOY_JOURNAL=str(repo / "deploy" / "JOURNAL.md"))
+        env["VESMARO_DEPLOY_GIT"] = "git"          # REAL git for this one
+        r = subprocess.run(
+            ["bash", "-c",
+             f"cd '{repo}' && source '{DEPLOY_SH}' "
+             f"&& REPO_ROOT='{repo}' journal_append deploy 5 6 1.2.3"],
+            capture_output=True, text=True, timeout=60, env=env)
+        assert r.returncode == 0, r.stderr
+
+        journal = repo / "deploy" / "JOURNAL.md"
+        assert "| deploy | rev 5>6 | image 1.2.3 |" in journal.read_text()
+        # committed: the working tree is clean afterwards
+        assert git("status", "--porcelain").stdout == ""
+        subject = git("log", "-1", "--format=%s").stdout.strip()
+        assert subject == "chore(deploy): journal — deploy rev 5>6 image 1.2.3"
+        # pushed: the bare origin advanced to the journal commit
+        head = git("rev-parse", "HEAD").stdout.strip()
+        pushed = git("rev-parse", "main", git_dir=origin).stdout.strip()
+        assert pushed == head
+
 
 # ------------------------------------------------------------ subcommands
 class TestSubcommands:
@@ -393,12 +467,39 @@ class TestSubcommands:
         assert world.logs()["podman.log"] == ""
 
     def test_rollback(self, world):
+        # post-rollback the live release carries the TARGET revision's
+        # tag — the JOURNAL line must record that live tag, not git's
+        # resolve_image_tag() (which would lie in the audit trail)
+        (world.state / "live-rev-40.yaml").write_text(
+            'image:\n  tag: "1.31.0"\n')
         r = world.run_subcommand("rollback", "39")
         assert r.returncode == 0, r.stderr
         assert re.search(r"rollback vesmaro-eyes 39 -n kube-agents "
                          r"--wait --timeout 5m", world.logs()["helm.log"])
-        assert "| rollback |" in (world.state / "JOURNAL.md").read_text()
+        journal = (world.state / "JOURNAL.md").read_text()
+        assert "| rollback |" in journal
+        assert "| rollback | rev 40>40 | image 1.31.0 |" in journal
+        assert f"image {_resolved_tag()} |" not in journal
         assert world.logs()["podman.log"] == ""   # rollback builds nothing
+
+    def test_rollback_tag_falls_back_when_live_rev_has_no_tag(self, world):
+        # a revision snapshot without a parsable image.tag → warning +
+        # fallback to the git tag (still better than journaling nothing)
+        (world.state / "live-rev-40.yaml").write_text("rootApp: board\n")
+        r = world.run_subcommand("rollback", "39")
+        assert r.returncode == 0, r.stderr
+        assert "WARNING" in r.stdout
+        journal = (world.state / "JOURNAL.md").read_text()
+        assert f"| rollback | rev 40>40 | image {_resolved_tag()} |" in journal
+
+    def test_rollback_with_skip_history_gate_on_failed_release(self, world):
+        world.set_history((39, "deployed"), (40, "failed"))
+        r = world.run_subcommand("rollback", "39", "--skip-history-gate")
+        assert r.returncode == 0, r.stderr
+        assert "SKIPPED" in r.stdout
+        assert re.search(r"rollback vesmaro-eyes 39 -n kube-agents "
+                         r"--wait --timeout 5m", world.logs()["helm.log"])
+        assert "| rollback |" in (world.state / "JOURNAL.md").read_text()
 
     def test_repair_skips_history_and_rebuilds_nothing(self, world):
         world.set_history((39, "deployed"), (40, "failed"))
@@ -414,11 +515,58 @@ class TestSubcommands:
         assert r.returncode == 1
         assert "upgrade" not in world.logs()["helm.log"]
 
-    def test_skip_history_gate_is_repair_only(self, world):
+    def test_skip_history_gate_is_repair_and_rollback_only(self, world):
         for args in (("deploy", "--skip-history-gate"),
-                     ("verify", "--skip-history-gate"),
-                     ("rollback", "39", "--skip-history-gate")):
+                     ("verify", "--skip-history-gate")):
             assert world.run_subcommand(*args).returncode == 2
 
     def test_rollback_requires_rev(self, world):
         assert world.run_subcommand("rollback").returncode == 2
+
+    # ------------------------------------------- deploy --allow-drift (P2-A)
+    def test_deploy_allow_drift_passes_and_journals_reason(self, world):
+        # the post-rollback deadlock scenario: live carries the old
+        # revision's values (stale tag + legacy rootApp)
+        world.set_live(rootApp="board", **{"image.tag": "1.31.0"})
+        reason = "post-rollback realign: live carries rev 39 values (AGW-10 P2-A)"
+        r = world.run_subcommand("deploy", "--allow-drift", reason)
+        assert r.returncode == 0, r.stderr
+        assert "WAIVED" in r.stdout
+        helm = world.logs()["helm.log"]
+        assert "upgrade" in helm                       # realigns live to git
+        assert "--set rootApp=app" in helm
+        assert f"push {_image_repo()}:{_resolved_tag()}" in world.logs()["podman.log"]
+        journal = (world.state / "JOURNAL.md").read_text()
+        assert f"allow-drift: {reason}" in journal     # reason is audited
+        assert "| deploy | rev 40>41 |" in journal
+
+    def test_deploy_allow_drift_requires_nonempty_reason(self, world):
+        assert world.run_subcommand("deploy", "--allow-drift", "").returncode == 2
+        assert world.run_subcommand("deploy", "--allow-drift").returncode == 2
+        assert not (world.state / "JOURNAL.md").exists()
+
+    def test_allow_drift_is_deploy_only(self, world):
+        for args in (("verify", "--allow-drift", "why"),
+                     ("rollback", "39", "--allow-drift", "why"),
+                     ("repair", "--allow-drift", "why")):
+            assert world.run_subcommand(*args).returncode == 2
+
+    def test_deploy_allow_drift_does_not_cover_secret_class(self, world):
+        live = yaml.safe_load((world.state / "live.yaml").read_text())
+        del live["mnemos"]["cluster"]["existingSecret"]
+        (world.state / "live.yaml").write_text(yaml.safe_dump(live))
+        r = world.run_subcommand("deploy", "--allow-drift", "try to waive secrets")
+        assert r.returncode == 1
+        assert "SECRET-CLASS" in r.stderr
+        assert "upgrade" not in world.logs()["helm.log"]
+        assert world.logs()["podman.log"] == ""
+        assert not (world.state / "JOURNAL.md").exists()
+
+    def test_deploy_allow_drift_does_not_cover_broken_history(self, world):
+        # the waiver is values-gate-ONLY: every other gate still refuses
+        world.set_history((39, "deployed"), (40, "failed"))
+        world.set_live(rootApp="board")
+        r = world.run_subcommand("deploy", "--allow-drift", "cannot waive this")
+        assert r.returncode == 1
+        assert "upgrade" not in world.logs()["helm.log"]
+        assert world.logs()["podman.log"] == ""

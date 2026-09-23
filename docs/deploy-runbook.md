@@ -14,8 +14,10 @@
 
 ```bash
 scripts/deploy.sh deploy                 # обычный деплой (дефолт)
+scripts/deploy.sh deploy --allow-drift "<причина>"   # деплой с прощением
+                                          # не-секретного дрейфа values
 scripts/deploy.sh verify                 # сухой прогон гейтов 1-5
-scripts/deploy.sh rollback <rev>         # откат на ревизию
+scripts/deploy.sh rollback <rev> [--skip-history-gate]   # откат на ревизию
 scripts/deploy.sh repair [--skip-history-gate]   # выправка состояния
 ```
 
@@ -32,16 +34,19 @@ scripts/deploy.sh repair [--skip-history-gate]   # выправка состоя
    освобождается по выходу (trap).
 4. **История helm**: последняя ревизия релиза обязана быть
    `deployed`. Деплой поверх `failed`/`pending-upgrade` запрещён —
-   сначала repair. `--skip-history-gate` разрешён ТОЛЬКО подкоманде
-   `repair`.
+   сначала rollback/repair. `--skip-history-gate` разрешён ТОЛЬКО
+   подкомандам `repair` и `rollback`.
 5. **Дрейф values**: live-значения релиза (`helm get values`) против
    git (`values.yaml` + намерение деплоя: `rootApp=app`,
    `image.tag=<текущий>`) по НЕ-секретным ключам (rootApp, image.tag,
    pollerBootstrap.caFile.enabled, networkPolicy.*, uiToken.enabled,
    memoryHostsAllowlist, ingress.* и др.). Расхождение = отказ:
-   чинить надо состояние, а не протаскивать. Секретные ключи
-   (existingSecret-ссылки) сверяются только по наличию ключа —
-   значения не сравниваются и не печатаются.
+   чинить надо состояние, а не протаскивать. Единственный
+   аудируемый обход — `deploy --allow-drift "<причина>"` (см.
+   «Откат»): прощает ТОЛЬКО не-секретный дрейф, все остальные гейты
+   работают как обычно. Секретные ключи (existingSecret-ссылки)
+   сверяются только по наличию ключа — значения не сравниваются и не
+   печатаются; их дрейф не прощается вовсе.
 
 После гейтов `deploy` строит и пушит образ
 (`distrobox-host-exec podman`, тег из values/appVersion), делает
@@ -64,13 +69,50 @@ scripts/deploy.sh repair [--skip-history-gate]   # выправка состоя
 
 ```bash
 scripts/deploy.sh rollback <rev>
+# если последняя ревизия failed/pending-upgrade (после отвалившегося
+# --atomic) — откат на последнюю хорошую с явным пропуском гейта истории:
+scripts/deploy.sh rollback <rev> --skip-history-gate
 ```
 
-Те же гейты (включая историю: откат по исправному релизу), затем
-`helm rollback <rev> --wait --timeout 5m`, строка в JOURNAL.
-Номер ревизии — `helm history vesmaro-eyes -n kube-agents`.
+Те же гейты, затем `helm rollback <rev> --wait --timeout 5m`, строка в
+JOURNAL. `--skip-history-gate` для rollback разрешён явно: откат на
+ИЗВЕСТНУЮ хорошую ревизию — штатное восстановление при сломанной
+истории (`deploy` и `verify` флаг по-прежнему не принимают). Номер
+ревизии — `helm history vesmaro-eyes -n kube-agents`.
 Откат не строит образ (только переключает релиз на существующую
-ревизию).
+ревизию). Тег в JOURNAL-строке берётся из live-значений целевой
+ревизии (`helm get values --revision`), а не из git — журнал фиксирует,
+что реально крутится, а не что в main.
+
+### Жизнь после отката: `deploy --allow-drift "<причина>"`
+
+После `rollback <rev>` live-релиз законно несёт values СТАРОЙ
+ревизии (прошлый `image.tag`, прошлый `rootApp`) — следующий обычный
+`deploy` увидит дрейф против git и откажет. Это не тупик:
+
+- `repair` не пересобирает образ — нужного тега может не быть в
+  registry, а «закоммитить старые значения в git» ломает сам смысл
+  гейта 5;
+- поэтому единственный аудируемый обход — явный флаг:
+
+```bash
+scripts/deploy.sh deploy --allow-drift "выравниваю прод после rollback 41->39: live нёс tag 1.31.0/rootApp=board"
+```
+
+Правила флага:
+
+- прощает ТОЛЬКО отказ по разошедшимся не-секретным ключам; все
+  остальные гейты (preflight, версия, лок, история) работают как
+  обычно;
+- дрейф секретных ключей (пропавший existingSecret и т.п.) не
+  прощается никогда;
+- причина ОБЯЗАНА быть непустой и пишется в JOURNAL-строку
+  (`allow-drift: <причина>`) — анонимных прощений не бывает;
+- разрешён только подкоманде `deploy` (verify/rollback/repair —
+  ошибка аргументов).
+
+Дальше деплой как обычно строит/пушит текущий образ и
+`helm upgrade --atomic` выравнивает live к git.
 
 ## Repair (одноразовая выправка)
 
@@ -81,8 +123,8 @@ scripts/deploy.sh rollback <rev>
 scripts/deploy.sh repair --skip-history-gate
 ```
 
-Что делает: гейты 1-3 и 5 (история пропущена флагом — это и есть
-исключение), затем `helm upgrade` с ТЕКУЩИМ app-тегом из СВЕЖЕГО
+Что делает: гейты 1-3 и 5 (история пропущена флагом — исключение,
+доступное repair и rollback), затем `helm upgrade` с ТЕКУЩИМ app-тегом из СВЕЖЕГО
 чарта main (образ НЕ пересобирается — тег обязан уже жить в
 registry), строка `repair` в JOURNAL. Это не «деплой новых фич», это
 выравнивание chart/appVersion состояния. После repair — разбери
@@ -98,12 +140,15 @@ registry), строка `repair` в JOURNAL. Это не «деплой новы
 ## Чек-лист «деплой упал»
 
 1. Прочитать отказ — гейты называют причину и средство (repair /
-   sync-version / реальное выравнивание values).
+   sync-version / реальное выравнивание values / allow-drift).
 2. `--atomic` уже откатил неудачный upgrade — проверь
    `helm history` (последняя ревизия `deployed`?).
-3. Нет — `scripts/deploy.sh repair --skip-history-gate`, затем
-   разбор.
-4. Лок «завис» (держатель умер): `fuser /run/vesmaro-deploy.lock`
+3. Нет — откат на последнюю хорошую ревизию
+   `scripts/deploy.sh rollback <rev> --skip-history-gate` либо
+   `scripts/deploy.sh repair --skip-history-gate`, затем разбор.
+4. После rollback следующий деплой упрётся в дрейф values — это
+   ожидаемо: `scripts/deploy.sh deploy --allow-drift "<причина>"`.
+5. Лок «завис» (держатель умер): `fuser /run/vesmaro-deploy.lock`
    → pid держателя; мёртвый процесс лок освободит сам (fd закрыт
    ядром) — если не освободил, разберись с процессом, не удаляй файл
    вслепую.
