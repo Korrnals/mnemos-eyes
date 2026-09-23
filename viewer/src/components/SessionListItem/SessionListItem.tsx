@@ -1,12 +1,17 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { formatTimestamp } from "@/components/memory/memoryDisplay";
 import { useT } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import type { A2ASession } from "@/gateway/types";
 
 /**
  * Compact session row (component-inventory §9): session id, participant,
  * status (TTL), turns, timestamp. The id is the link target.
+ *
+ * UI-18 pair 13: the list URL rides as `return=` so the session detail's
+ * back control leads back into this list (the old in-page «← Все сессии»
+ * BackLink is gone — one pattern instead of three behaviors).
  */
 export interface SessionListItemProps {
   session: A2ASession;
@@ -16,10 +21,15 @@ export interface SessionListItemProps {
 export function SessionListItem({ session, className }: SessionListItemProps) {
   const t = useT();
   const ttlLive = typeof session.ttl_expires_at === "string";
+  const location = useLocation();
   return (
     <li className={className}>
       <Link
-        to={`/system/sessions/${session.session_id}`}
+        to={withReturn(
+          `/system/sessions/${session.session_id}`,
+          location.pathname,
+          location.search,
+        )}
         className="block rounded-md border border-border-subtle bg-well p-5 shadow-well transition-colors duration-instant hover:bg-elevated focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
       >
         <div className="flex items-start justify-between gap-3">

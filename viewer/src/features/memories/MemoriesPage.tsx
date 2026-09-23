@@ -1,4 +1,4 @@
-import { useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCard } from "@/components/MemoryCard/MemoryCard";
@@ -24,6 +24,10 @@ import { useProjectOptions } from "./useProjectOptions";
 export function MemoriesPage() {
   const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
+  // UI-18 pair 8: the list URL (filters + page included) rides as `return=`
+  // on every card link so the detail's back control leads back into the
+  // exact list state (spec §1 pair 8).
+  const location = useLocation();
   const state = parseMemoryListParams(searchParams);
   const projects = useProjectOptions();
   const list = useMemories(toListParams(state));
@@ -201,7 +205,10 @@ export function MemoriesPage() {
           <ul className="grid gap-4">
             {memories.map((memory) => (
               <li key={memory.id}>
-                <MemoryCard memory={memory} />
+                <MemoryCard
+                  memory={memory}
+                  returnSource={{ pathname: location.pathname, search: location.search }}
+                />
               </li>
             ))}
           </ul>

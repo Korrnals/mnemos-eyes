@@ -254,8 +254,6 @@ export const en: Record<TranslationKey, string> = {
   "tags.drill.tasks": "Tasks carrying this tag",
   "tags.drill.tasksEmpty": "No tasks carry this tag",
   "tags.drill.memories": "Memories",
-  "tags.drill.subsetNote":
-    "Showing a subset: the drill rides the search ranker and may be incomplete (BE-13)",
   "tags.drill.storeErrors": "Stores unreachable: {{servers}}",
   "tags.drill.openInMemories": "Open in Memories",
 

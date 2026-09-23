@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { AssignmentItem } from "@/gateway/boardTypes";
+import { withReturn } from "@/lib/returnParams";
 import { useI18n, useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
 import { formatTaskDate } from "@/features/tasks/taskStatus";
@@ -55,6 +56,9 @@ export function AssignmentDrawer({
 }) {
   const t = useT();
   const { lang } = useI18n();
+  // UI-18 pair 6: the execution URL rides as `return=` on the open-task
+  // link so the task's back control leads back into this drawer's page.
+  const location = useLocation();
   // The reports query keys per TASK — the drawer reads the SAME cache the
   // task tab fills (one wire call per task across surfaces).
   const reports = useTaskReports(row?.task_id);
@@ -83,7 +87,11 @@ export function AssignmentDrawer({
           </DialogTitle>
 
           <Link
-            to={`/tasks/${encodeURIComponent(row.task_id)}?tab=execution`}
+            to={withReturn(
+              `/tasks/${encodeURIComponent(row.task_id)}?tab=execution`,
+              location.pathname,
+              location.search,
+            )}
             className="text-sm font-medium text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
           >
             {t("agents.drawer.openTask", { id: row.task_id })}

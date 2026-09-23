@@ -265,8 +265,6 @@ export const ru = {
   "tags.drill.tasks": "Задачи с этим тегом",
   "tags.drill.tasksEmpty": "Задач с этим тегом нет",
   "tags.drill.memories": "Записи",
-  "tags.drill.subsetNote":
-    "Показано подмножество: дрилл идёт через поисковый ранжир и может быть неполным (BE-13)",
   "tags.drill.storeErrors": "Недоступны хранилища: {{servers}}",
   "tags.drill.openInMemories": "Открыть в Записях",
 

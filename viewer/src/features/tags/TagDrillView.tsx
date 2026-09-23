@@ -7,50 +7,27 @@ import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useGateway } from "@/gateway/GatewayContext";
+import { useMemories } from "@/hooks/useMemories";
 import { keys } from "@/lib/queryKeys";
 import { GC_TIMES, STALE_TIMES } from "@/lib/queryClient";
 import { withReturn } from "@/lib/returnParams";
 import { useT } from "@/i18n";
 import type { TagSummary } from "@/gateway/types";
-import type { TagDrillMemory } from "@/gateway/boardTypes";
 import { familyOf, siblingTags } from "./model";
 import { TagBreadcrumbs } from "./TagSections";
 import { TagChip } from "./TagChip";
 
 /**
- * Дрилл по тегу — Ур.4 матрёшки (UI-17 spec §5): the SERVER drill endpoint
- * (tasks + memories; replaces the old client-side 500-row filter that lost
- * everything beyond the fresh window and never saw the board). BE-13
- * honesty: memories ride the search ranker → the subset note stays until
- * the server closes BE-13. Header count comes from the FULL /api/tags
- * aggregate, so the subset gap is visible, not hidden.
+ * Дрилл по тегу — Ур.4 матрёшки (UI-17 spec §5): tasks come from the SERVER
+ * drill endpoint; memories come from the HONEST TAG LISTING —
+ * `listMemories({ tags })` (the wire `GET /memories?tags=`, live since
+ * 1.3.2). BE-13: a listing is not a search — same rows, same order and same
+ * coverage as the «Записи» list narrowed by the tag, no ranker truncation.
+ * Header count still comes from the FULL /api/tags aggregate.
  */
 
-function drillMemoryToCard(memory: TagDrillMemory): {
-  memory: Parameters<typeof MemoryCard>[0]["memory"];
-  server: string | null;
-} {
-  return {
-    memory: {
-      id: memory.id,
-      title: memory.title,
-      content: memory.excerpt,
-      tags: [...memory.tags],
-      // Pass the server status through verbatim — a silent "raw" default
-      // would fabricate a lifecycle state the server never sent (review
-      // P3). Unknown values land in statusLabelKey's default branch.
-      status: memory.status as Parameters<typeof MemoryCard>[0]["memory"]["status"],
-      project: "",
-      agent: "",
-      memory_type: "note",
-      source: "manual",
-      created_at: memory.created_at ?? "",
-      updated_at: "",
-      marker_version: 1,
-    },
-    server: memory.server ?? null,
-  };
-}
+/** Memory budget of the drill section (matches the old drill wire limit). */
+const DRILL_MEMORY_LIMIT = 12;
 
 export interface TagDrillViewProps {
   tag: string;
@@ -78,10 +55,15 @@ export function TagDrillView({
   const location = useLocation();
   const drill = useQuery({
     queryKey: keys.tags.drill(tag),
-    queryFn: ({ signal }) => gateway.drillTag(tag, { limit: 12 }, signal),
+    queryFn: ({ signal }) => gateway.drillTag(tag, { limit: DRILL_MEMORY_LIMIT }, signal),
     staleTime: STALE_TIMES.tags,
     gcTime: GC_TIMES.tags,
   });
+  // BE-13: the memories section is the honest LISTING, not the drill's
+  // search-ranked subset. Same adapter method the /memory list uses — the
+  // rows the drill shows are literally the rows `?tag=` lists.
+  const memories = useMemories({ tags: tag, limit: DRILL_MEMORY_LIMIT });
+  const listed = memories.data ?? [];
 
   const count = cloudTags.find((entry) => entry.tag === tag)?.count;
   const family = familyOf(tag);
@@ -89,7 +71,6 @@ export function TagDrillView({
   const siblings = siblingTags(cloudTags, tag);
   const segments = tag.split(":");
   const secondSegment = segments.length >= 3 ? segments[1] : null;
-  const memories = drill.data?.memories ?? [];
   const tasks = drill.data?.tasks ?? [];
 
   return (
@@ -226,44 +207,45 @@ export function TagDrillView({
           <section aria-labelledby="tag-drill-memories">
             <h2 id="tag-drill-memories" className="text-sm font-medium text-foreground">
               {t("tags.drill.memories")}
-              {memories.length > 0 ? ` · ${memories.length}` : ""}
+              {listed.length > 0 ? ` · ${listed.length}` : ""}
             </h2>
-            {memories.length === 0 ? (
+            {memories.isPending ? (
+              <div role="status" aria-label={t("tags.loading")} className="mt-2">
+                <MemoryCardSkeleton count={2} />
+              </div>
+            ) : memories.isError ? (
+              <EmptyState
+                variant="error"
+                title={t("tags.loadFailed")}
+                message={memories.error instanceof Error ? memories.error.message : undefined}
+                action={
+                  <Button
+                    variant="outline"
+                    onClick={() => void memories.refetch()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                }
+              />
+            ) : listed.length === 0 ? (
               <p className="mt-1 text-xs text-foreground-secondary">
                 {t("tags.nothingCarries")}
               </p>
             ) : (
               <ul className="mt-2 grid gap-4">
-                {memories.map((memory) => {
-                  const card = drillMemoryToCard(memory);
-                  return (
-                    <li key={memory.id} className="grid gap-1">
-                      <MemoryCard
-                        memory={card.memory}
-                        returnSource={{
-                          pathname: location.pathname,
-                          search: location.search,
-                        }}
-                      />
-                      {card.server ? (
-                        <Badge
-                          variant="outline"
-                          className="w-fit"
-                          aria-label={`${t("memory.sourceLabel")} ${card.server}`}
-                        >
-                          {card.server}
-                        </Badge>
-                      ) : null}
-                    </li>
-                  );
-                })}
+                {listed.map((memory) => (
+                  <li key={memory.id}>
+                    <MemoryCard
+                      memory={memory}
+                      returnSource={{
+                        pathname: location.pathname,
+                        search: location.search,
+                      }}
+                    />
+                  </li>
+                ))}
               </ul>
             )}
-            {/* Spec §6: the BE-13 subset note rides BOTH branches — an empty
-             * drill is still a subset, the honest caveat never disappears. */}
-            <p className="mt-2 text-xs text-foreground-muted">
-              {t("tags.drill.subsetNote")}
-            </p>
           </section>
 
           <Link

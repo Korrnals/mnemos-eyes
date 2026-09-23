@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 import {
   ChevronDown,
   ChevronUp,
@@ -16,6 +16,7 @@ import { TextEngine } from "@/components/TextEngine";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { InboxEditInput, TaskInboxEntry } from "@/gateway/boardTypes";
+import { withReturn } from "@/lib/returnParams";
 import { useI18n, useT } from "@/i18n";
 import {
   formatTaskDate,
@@ -257,6 +258,9 @@ function InboxCard({
   const { adoptInboxItem } = useTaskMutations();
   const adoptable = canAdopt && !item.stale && !item.adopted;
   const editable = canEdit && !item.stale && !item.adopted;
+  // UI-18 pair 3: the inbox URL (?adopted=1 included) rides as `return=` so
+  // the task page's back control leads back into this list.
+  const location = useLocation();
   const [editing, setEditing] = useState(false);
   const openEditor = () => {
     if (!expanded) onToggleExpanded();
@@ -284,7 +288,11 @@ function InboxCard({
         ) : null}
         {item.adopted && item.adopted_task_id ? (
           <Link
-            to={`/tasks/${encodeURIComponent(item.adopted_task_id)}`}
+            to={withReturn(
+              `/tasks/${encodeURIComponent(item.adopted_task_id)}`,
+              location.pathname,
+              location.search,
+            )}
             className="text-xs text-iris-bright underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
           >
             {t("tasks.inboxAdoptedLink", { id: item.adopted_task_id })}

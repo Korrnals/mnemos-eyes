@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { Cog, FileText, History, Layers, PencilLine, Play, ScrollText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { useGateway } from "@/gateway/GatewayContext";
 import type { BoardTask, TaskHistory, TaskMemories } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import {
   formatTaskDate,
   historyEventLabelKey,
@@ -476,6 +477,11 @@ function memoryCard(value: unknown): { title: string; excerpt: string; status: s
 function MemoryTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
   const t = useT();
   const links = useTaskMemories(taskId);
+  // UI-18 pair 12 (detail→detail): the memory links carry THIS task URL —
+  // tab=memory plus whatever `return=` the task itself arrived with — as
+  // their own `return=` (§2.2 rule 3: each link stores only its immediate
+  // predecessor, the chain resolves recursively: memory → task → list).
+  const location = useLocation();
 
   if (links.isPending) {
     return (
@@ -520,7 +526,11 @@ function MemoryTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
           return (
             <li key={memoryId}>
               <Link
-                to={`/memory/${encodeURIComponent(memoryId)}`}
+                to={withReturn(
+                  `/memory/${encodeURIComponent(memoryId)}`,
+                  location.pathname,
+                  location.search,
+                )}
                 className="block rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well transition-colors duration-instant hover:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
               >
                 <span className="flex flex-wrap items-center gap-2">
