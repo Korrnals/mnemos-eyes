@@ -77,9 +77,13 @@ const AgentsHarnessesPage = lazy(() =>
     default: m.ExecutorRegistryPage,
   })),
 );
-const ExecutionSettingsPage = lazy(() =>
-  import("@/features/agents/ExecutionSettingsPage").then((m) => ({
-    default: m.ExecutionSettingsPage,
+// Settings hub (UI-21): the /system/settings route composes «Исполнение»
+// (the AGW-3 section, reused verbatim) + «Автоматизация» + «Интерфейс»
+// cross-links. The legacy single-section shell (ExecutionSettingsPage)
+// stays in features/agents for composition + parity tests.
+const SettingsHubPage = lazy(() =>
+  import("@/features/settings/SettingsHubPage").then((m) => ({
+    default: m.SettingsHubPage,
   })),
 );
 const AutomationPage = lazy(() =>
@@ -272,13 +276,14 @@ export function buildRoutes(): RouteObject[] {
             </Page>
           ),
         },
-        // Owner settings (AGW-3): minimal shell page — one live section
-        // («Исполнение»); further sections join as sibling blocks.
+        // Owner settings (UI-21 hub over the AGW-3 shell): one h1 +
+        // sibling sections «Исполнение» | «Автоматизация» | «Интерфейс»,
+        // deep-linkable via #execution/#automation/#interface.
         {
           path: "/system/settings",
           element: (
             <Page>
-              <ExecutionSettingsPage />
+              <SettingsHubPage />
             </Page>
           ),
         },

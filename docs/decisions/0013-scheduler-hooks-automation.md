@@ -195,6 +195,14 @@ only when launches exist). v1 cuts: no cron UI, no templates, no bulk, no
 global kill-switch toggle (read-only), no audit viewer, no catch-up, no
 local timezones, no charts.
 
+**Amendment (2026-09-23, TL per owner's settings mandate — UI-21):** the
+«no global kill-switch toggle» v1-cut is scoped to `/system/automation`
+(it stays read-only with a link into the hub). The settings hub
+`/system/settings#automation` hosts the settings form (enabled +
+`cap_global_per_day`, PUT /api/automation/settings) with the honest
+«engine not armed» banner while `engine:false` — saving intent is not
+arming the engine: S2 arming still follows the T2 checklist (ADR §5).
+
 ### 9. Success metrics
 
 S1: ≥60 % of created rules have ≥1 manual run within 2 weeks; 0 breaking

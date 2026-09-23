@@ -4254,7 +4254,8 @@ class Store:
     # ------------------------------------------- settings + condition meta
     def automation_settings(self) -> dict[str, Any]:
         """Global kill-switch + daily cap (board_meta, ADR 0013 §6).
-        Defaults: enabled=false (disable-by-default, C-1), cap=20/day."""
+        Defaults: enabled=false (disable-by-default, C-1),
+        cap=AUTOMATION_DEFAULT_GLOBAL_CAP (10/day)."""
         raw_enabled = self.get_meta(AUTOMATION_ENABLED_META_KEY)
         raw_cap = self.get_meta(AUTOMATION_CAP_META_KEY)
         try:

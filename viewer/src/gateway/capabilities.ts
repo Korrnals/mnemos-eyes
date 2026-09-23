@@ -25,6 +25,8 @@ import type {
   AssignmentCreatedResult,
   AssignmentListParams,
   AssignmentsPage,
+  AutomationSettings,
+  AutomationSettingsInput,
   AutomationStatus,
   DeviceRevokedResult,
   DevicesPage,
@@ -314,6 +316,8 @@ export function isAgentsMutationSource(
  */
 export interface AutomationSource {
   automationStatus(signal?: AbortSignal): Promise<AutomationStatus>;
+  /** Kill-switch + daily cap (`GET /api/automation/settings`, OPEN read). */
+  getAutomationSettings(signal?: AbortSignal): Promise<AutomationSettings>;
   listSchedules(signal?: AbortSignal): Promise<SchedulesPage>;
   listHooks(signal?: AbortSignal): Promise<HooksPage>;
   listLaunches(params?: LaunchesParams, signal?: AbortSignal): Promise<LaunchesPage>;
@@ -326,6 +330,7 @@ export function isAutomationSource(
 ): gateway is AutomationGateway {
   return (
     typeof (gateway as Partial<AutomationSource>).automationStatus === "function" &&
+    typeof (gateway as Partial<AutomationSource>).getAutomationSettings === "function" &&
     typeof (gateway as Partial<AutomationSource>).listSchedules === "function" &&
     typeof (gateway as Partial<AutomationSource>).listHooks === "function" &&
     typeof (gateway as Partial<AutomationSource>).listLaunches === "function"
@@ -346,6 +351,11 @@ export interface AutomationMutationSource {
   createHook(payload: HookCreateInput): Promise<HookRule>;
   patchHook(ruleId: number, patch: HookPatchInput): Promise<HookRule>;
   deleteHook(ruleId: number): Promise<RuleDeletedAck>;
+  /**
+   * Kill-switch + daily cap (`PUT /api/automation/settings`, ui-token;
+   * audited automation.settings.changed old→new). UI-21 settings hub.
+   */
+  putAutomationSettings(payload: AutomationSettingsInput): Promise<AutomationSettings>;
 }
 
 export type AutomationMutationGateway = MemoryGateway &
@@ -361,7 +371,8 @@ export function isAutomationMutationSource(
     typeof (gateway as Partial<AutomationMutationSource>).runScheduleNow ===
       "function" &&
     typeof (gateway as Partial<AutomationMutationSource>).createHook === "function" &&
-    typeof (gateway as Partial<AutomationMutationSource>).deleteHook === "function"
+    typeof (gateway as Partial<AutomationMutationSource>).deleteHook === "function" &&
+    typeof (gateway as Partial<AutomationMutationSource>).putAutomationSettings === "function"
   );
 }
 

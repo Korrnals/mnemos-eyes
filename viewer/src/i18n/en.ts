@@ -979,6 +979,28 @@ export const en: Record<TranslationKey, string> = {
   "automation.banner.usedToday": "auto-launches today",
   "automation.banner.rules": "rules",
   "automation.banner.rulesCount": "{{schedules}} schedules, {{hooks}} hook rules",
+  "automation.banner.settingsLink": "change in Settings",
+  // UI-21 settings hub: the kill-switch/cap form (server contract §2).
+  "automation.settings.title": "Automation",
+  "automation.settings.enabledLabel": "Automation enabled",
+  "automation.settings.engineOffNote":
+    "The engine is not running yet (S1): this preference is stored now and takes effect when the engine ships.",
+  "automation.settings.capLabel": "Daily auto-launch cap",
+  "automation.settings.capHint": "1–1000; {{used}} of {{cap}} used today.",
+  "automation.settings.capError": "Enter a whole number from 1 to 1000.",
+  "automation.settings.save": "Save",
+  "automation.settings.saving": "Saving…",
+  "automation.settings.saved": "Automation settings saved",
+  "automation.settings.savedDetail": "kill-switch and daily cap updated",
+  "automation.settings.saveFailed": "Failed to save automation settings",
+  // UI-21 settings hub: «Интерфейс» — cross-links only (preferences stay
+  // at their point of use; spec §0).
+  "settings.hub.interfaceTitle": "Interface",
+  "settings.hub.interfaceHint": "These preferences live where you use them:",
+  "settings.hub.prefLang": "language — RU|EN in the top bar",
+  "settings.hub.prefDensity": "density — the button in the top bar",
+  "settings.hub.prefBoardStyle": "board style — the toggle on the tasks page",
+  "settings.hub.prefSidebar": "sidebar — the button on the sidebar itself",
   "automation.listLoading": "Loading",
   "automation.listFailed": "Failed to load the list",
   "automation.schedule.create": "New schedule",

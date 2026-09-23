@@ -405,3 +405,51 @@ describe("MockAdapter agents — SCHED-1 automation", () => {
     expect(hooks.items.find((rule) => rule.id === created.id)?.enabled).toBe(false);
   });
 });
+
+describe("MockAdapter agents — automation settings (UI-21 hub)", () => {
+  it("get answers the store defaults verbatim: enabled=false, cap=10", async () => {
+    const settings = await adapter().getAutomationSettings();
+    expect(settings).toEqual({ ok: true, enabled: false, cap_global_per_day: 10 });
+  });
+
+  it("put applies both fields; partial bodies keep the untouched one", async () => {
+    const mock = adapter();
+    const both = await mock.putAutomationSettings({
+      enabled: true,
+      cap_global_per_day: 25,
+    });
+    expect(both).toEqual({ ok: true, enabled: true, cap_global_per_day: 25 });
+    // Partial body (the wire allows it; the UI sends both): cap stays 25.
+    const half = await mock.putAutomationSettings({ enabled: false });
+    expect(half).toEqual({ ok: true, enabled: false, cap_global_per_day: 25 });
+  });
+
+  it("put 422s an out-of-range cap with the server text VERBATIM", async () => {
+    const mock = adapter();
+    for (const cap of [0, -5, 1001, 2.5]) {
+      await rejectsApiError(
+        mock.putAutomationSettings({ enabled: null, cap_global_per_day: cap }),
+        422,
+      );
+    }
+    try {
+      await mock.putAutomationSettings({ cap_global_per_day: 1001 });
+    } catch (error) {
+      expect((error as Error).message).toBe(
+        "cap_global_per_day must be an int in 1..1000",
+      );
+    }
+    // Refused calls changed nothing.
+    expect((await mock.getAutomationSettings()).cap_global_per_day).toBe(10);
+  });
+
+  it("status projects the kill-switch/cap pair from the LIVE settings", async () => {
+    const mock = adapter();
+    await mock.putAutomationSettings({ enabled: true, cap_global_per_day: 777 });
+    const status = await mock.automationStatus();
+    expect(status.global_kill_switch).toBe(true);
+    expect(status.daily_cap).toBe(777);
+    expect(status.daily_used).toBe(0); // the honest S1 counter
+    expect(status.engine).toBe(false);
+  });
+});

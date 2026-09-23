@@ -2,6 +2,7 @@ import type {
   ArchivePage,
   AssignmentItem,
   AssignmentsPage,
+  AutomationSettings,
   AutomationStatus,
   BoardSummary,
   ExecutionSettings,
@@ -1113,12 +1114,28 @@ export const MOCK_LAUNCHES: LaunchRow[] = [
   },
 ];
 
-/** Status projection — engine false is the honest S1 constant (no loop). */
+/**
+ * Kill-switch + daily cap starting values — the store defaults VERBATIM
+ * (store.py ADR 0013 §6: enabled=false disable-by-default C-1,
+ * cap=AUTOMATION_DEFAULT_GLOBAL_CAP=10, clamp 1..1000).
+ */
+export const MOCK_AUTOMATION_SETTINGS: AutomationSettings = {
+  ok: true,
+  enabled: false,
+  cap_global_per_day: 10,
+};
+
+/**
+ * Status projection — engine false is the honest S1 constant (no loop).
+ * `global_kill_switch`/`daily_cap` are overridden by MockAdapter from the
+ * LIVE settings pair (server parity); the values here are the same store
+ * defaults, kept only as the static fallback shape.
+ */
 export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
   ok: true,
   engine: false,
   global_kill_switch: false,
-  daily_cap: 50,
+  daily_cap: 10,
   daily_used: 0,
   // condition_meta mirrors the SERVER dictionaries VERBATIM
   // (store.RULE_CONDITION_FIELD_ENUMS / HOOK_EVENT_WHITELIST): fields with

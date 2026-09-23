@@ -12,15 +12,18 @@ import { formatPulseAge, lastSeenAgeS, presenceFromLastSeen } from "./presence";
 import { useValidationNow } from "@/features/tasks/useValidationClock";
 
 /**
- * `/system/settings` — minimal shell page (AGW-3): ONE live section,
- * «Исполнение» (spec §2.3: one global default + one fallback; project
- * overrides stay reserved). The selects list every registry row — offline
- * entries stay VISIBLE but disabled with their reason (§2.3); the save
- * runs through the ui-token gate, 422 gate texts come verbatim from the
- * API (the mock raises the same Amd 2 §5 gates). Further setting sections
- * join this page as sibling blocks in later waves.
+ * `/system/settings` «Исполнение» section (AGW-3, spec §2.3: one global
+ * default + one fallback; project overrides stay reserved). Extracted as a
+ * sibling block for the settings hub (UI-21, spec 2026-09-23 §1.1) — the
+ * legacy single-section page below composes the SAME block unchanged. The
+ * selects list every registry row — offline entries stay VISIBLE but
+ * disabled with their reason (§2.3); the save runs through the ui-token
+ * gate, 422 gate texts come verbatim from the API (the mock raises the
+ * same Amd 2 §5 gates).
  */
-export function ExecutionSettingsPage() {
+
+/** The whole «Исполнение» well — the settings hub reuses it verbatim. */
+export function ExecutionSettingsSection({ anchorId }: { anchorId?: string }) {
   const t = useT();
   const gateway = useGateway();
   const capable = isAgentsSource(gateway);
@@ -40,7 +43,16 @@ export function ExecutionSettingsPage() {
     dirty || fallbackId !== "" ? fallbackId : (loaded?.fallback_executor ?? "");
 
   if (!capable) {
-    return <AgentsUnsupported />;
+    // Hub posture (UI-21 §3): the SECTION degenerates, the page stays —
+    // the same honest text as AgentsUnsupported, minus its page-level h1
+    // (the hub owns the single h1).
+    return (
+      <EmptyState
+        variant="empty"
+        title={t("agents.unavailableTitle")}
+        message={t("agents.unavailableMessage")}
+      />
+    );
   }
 
   const items = executors.data?.items ?? [];
@@ -104,68 +116,88 @@ export function ExecutionSettingsPage() {
   };
 
   return (
+    <section
+      id={anchorId}
+      aria-labelledby="execution-settings-heading"
+      className="space-y-3 rounded-md border border-border-subtle bg-well p-4 shadow-well"
+    >
+      <div>
+        <h2 id="execution-settings-heading" className="text-sm font-medium">
+          {t("agents.settings.executionTitle")}
+        </h2>
+        <p className="mt-0.5 text-xs text-foreground-secondary">
+          {t("agents.settings.executionHint")}
+        </p>
+      </div>
+
+      {settings.isError ? (
+        <EmptyState
+          variant="error"
+          title={t("agents.list.failed")}
+          message={settings.error.message}
+          action={
+            <Button variant="outline" onClick={() => void settings.refetch()}>
+              {t("common.retry")}
+            </Button>
+          }
+        />
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <SettingsSelect
+            id="execution-default"
+            label={t("agents.settings.defaultLabel")}
+            value={defaultIdShown}
+            items={items}
+            disabledReason={selectableReason}
+            onChange={(value) => {
+              setDefaultId(value);
+              setDirty(true);
+            }}
+          />
+          <SettingsSelect
+            id="execution-fallback"
+            label={t("agents.settings.fallbackLabel")}
+            value={fallbackIdShown}
+            items={items}
+            disabledReason={selectableReason}
+            onChange={(value) => {
+              setFallbackId(value);
+              setDirty(true);
+            }}
+          />
+        </div>
+      )}
+
+      <div className="flex items-center justify-end gap-2">
+        <Button size="sm" onClick={save} disabled={saving || settings.isPending}>
+          {saving ? t("agents.settings.saving") : t("agents.settings.save")}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Legacy single-section page (AGW-3 shell): ONE h1 + the «Исполнение»
+ * block. The route now renders the settings hub (UI-21) which composes the
+ * same section as a sibling; this shell stays for direct composition and
+ * keeps the parity tests green.
+ */
+export function ExecutionSettingsPage() {
+  const t = useT();
+  const gateway = useGateway();
+  const capable = isAgentsSource(gateway);
+
+  if (!capable) {
+    return <AgentsUnsupported />;
+  }
+
+  return (
     <div className="mx-auto max-w-3xl space-y-4">
       <h1 id="settings-title" className="text-xl font-semibold">
         {t("agents.settings.title")}
       </h1>
-
-      <section
-        aria-labelledby="execution-settings-heading"
-        className="space-y-3 rounded-md border border-border-subtle bg-well p-4 shadow-well"
-      >
-        <div>
-          <h2 id="execution-settings-heading" className="text-sm font-medium">
-            {t("agents.settings.executionTitle")}
-          </h2>
-          <p className="mt-0.5 text-xs text-foreground-secondary">
-            {t("agents.settings.executionHint")}
-          </p>
-        </div>
-
-        {settings.isError ? (
-          <EmptyState
-            variant="error"
-            title={t("agents.list.failed")}
-            message={settings.error.message}
-            action={
-              <Button variant="outline" onClick={() => void settings.refetch()}>
-                {t("common.retry")}
-              </Button>
-            }
-          />
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <SettingsSelect
-              id="execution-default"
-              label={t("agents.settings.defaultLabel")}
-              value={defaultIdShown}
-              items={items}
-              disabledReason={selectableReason}
-              onChange={(value) => {
-                setDefaultId(value);
-                setDirty(true);
-              }}
-            />
-            <SettingsSelect
-              id="execution-fallback"
-              label={t("agents.settings.fallbackLabel")}
-              value={fallbackIdShown}
-              items={items}
-              disabledReason={selectableReason}
-              onChange={(value) => {
-                setFallbackId(value);
-                setDirty(true);
-              }}
-            />
-          </div>
-        )}
-
-        <div className="flex items-center justify-end gap-2">
-          <Button size="sm" onClick={save} disabled={saving || settings.isPending}>
-            {saving ? t("agents.settings.saving") : t("agents.settings.save")}
-          </Button>
-        </div>
-      </section>
+      <ExecutionSettingsSection />
     </div>
   );
 }
