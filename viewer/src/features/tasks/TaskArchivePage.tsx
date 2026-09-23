@@ -30,8 +30,8 @@ import { useTaskArchive } from "./useTasks";
  * before it lands in the URL (no request per keystroke). Rows expand inline
  * (native details/summary): archived tasks are NOT on the board projection —
  * the expansion IS the inline preview, and UI-18 pair 4 adds the title link
- * to `/tasks/:id` (the detail page renders archived rows through the
- * archive-probe fallback) carrying `return=` so «‹ Архив» restores the full
+ * to `/tasks/:id` (the detail page renders archived rows through the direct
+ * single-task GET, BE-16) carrying `return=` so «‹ Архив» restores the full
  * filter + offset state. Ф3 wires «Вернуть из архива» (POST unarchive → the
  * board row returns via the SSE mapping, the archive list refreshes, toast
  * confirms).

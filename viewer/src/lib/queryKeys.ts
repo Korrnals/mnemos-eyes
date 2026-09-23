@@ -39,14 +39,16 @@ export const keys = {
   pulse: {
     feed: (params: PulseParams = {}) => ["pulse", "feed", params] as const,
   },
-  // Ф2 task domain. There is NO per-task detail key: the board API has no
-  // single-task GET, so the detail page READS the shared board projection
-  // through a `select` on the same `tasks.board` key — one wire call feeds
-  // the list, the mini-stats and every open detail page, and SSE patches to
-  // `tasks.board` reach both surfaces at once.
+  // Ф2 task domain. The PRIMARY detail source is still the shared board
+  // projection (`tasks.board`): one wire call feeds the list, the mini-stats
+  // and every open detail page, and SSE patches reach them all at once.
+  // `tasks.detail` is the FALLBACK path only — the direct single-task GET
+  // (BE-16, active AND archived in one TaskOut) fired when the projection
+  // misses the id (archived rows; see useTaskDetail in useTasks.ts).
   tasks: {
     all: ["tasks"] as const,
     board: () => ["tasks", "board"] as const,
+    detail: (taskId: string) => ["tasks", "detail", taskId] as const,
     reports: {
       all: ["tasks", "reports"] as const,
       detail: (taskId: string) => ["tasks", "reports", "detail", taskId] as const,
@@ -154,6 +156,7 @@ export type MetricsKey = ReturnType<typeof keys.status.metrics>;
 export type BoardHealthKey = ReturnType<typeof keys.status.boardHealth>;
 export type PulseFeedKey = ReturnType<typeof keys.pulse.feed>;
 export type TaskBoardKey = ReturnType<typeof keys.tasks.board>;
+export type TaskDetailKey = ReturnType<typeof keys.tasks.detail>;
 export type TaskReportsKey = ReturnType<typeof keys.tasks.reports.detail>;
 export type TaskHistoryKey = ReturnType<typeof keys.tasks.history>;
 export type TaskMemoriesKey = ReturnType<typeof keys.tasks.memories>;

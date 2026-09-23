@@ -634,11 +634,17 @@ export class MockAdapter implements MemoryGateway {
   }
 
   async taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask> {
+    // BE-16 mirror: one handler for BOTH active and archived rows — the
+    // wire's single GET /api/tasks/{id} applies no archived filter, so the
+    // mock's archivedTasks split (a fixture detail, not a wire behaviour)
+    // stays invisible here.
     await this.delay(signal);
-    const task = this.tasks.find((candidate) => candidate.id === taskId);
+    const task =
+      this.tasks.find((candidate) => candidate.id === taskId) ??
+      this.archivedTasks.find((candidate) => candidate.id === taskId);
     if (!task) {
-      throw new ApiError(404, `task '${taskId}' not found on the board`, {
-        url: "mock:/api/board",
+      throw new ApiError(404, `task '${taskId}' not found`, {
+        url: `mock:/api/tasks/${taskId}`,
       });
     }
     return { ...task };

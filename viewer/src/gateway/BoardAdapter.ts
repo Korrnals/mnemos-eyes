@@ -122,7 +122,7 @@ import type {
  * - history        GET /api/tasks/{id}/history   (audit + memory timeline, Ф2)
  * - taskMemories   GET /api/tasks/{id}/memories  (resolved links, Ф2)
  * - archive        GET /api/archive              ?q&status&col&agent&project&limit&offset (Ф2)
- * - taskById       GET /api/board                (pick by id — no single GET exists)
+ * - taskById       GET /api/tasks/{id}           (BE-16: one TaskOut for active AND archived)
  * - pulse          GET /api/memories/pulse       ?scope&project&limit (Ф1)
  * - boardHealth    GET /api/health               (per-store detail view, Ф1)
  * - events         GET /api/events               (SSE, see gateway/events.ts)
@@ -753,14 +753,12 @@ export class BoardAdapter implements BoardGateway {
   }
 
   async taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask> {
-    const board = await this.board(undefined, signal);
-    const task = board.tasks.find((candidate) => candidate.id === taskId);
-    if (!task) {
-      throw new ApiError(404, `task '${taskId}' not found on the board`, {
-        url: `${this.baseUrl}/board`,
-      });
-    }
-    return task;
+    // BE-16 (#101): GET /api/tasks/{task_id} resolves BOTH active and
+    // archived tasks in one TaskOut shape — the board-projection pick this
+    // method used before (and its 200-row archive probe) are gone.
+    return this.request<BoardTask>(`/tasks/${encodeURIComponent(taskId)}`, {
+      signal,
+    });
   }
 
   // --- Ф3 mutations (ui-token gated; wire contract in the class docblock) ----

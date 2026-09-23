@@ -11,6 +11,7 @@ import {
   useInboxMemory,
   useTask,
   useTaskArchive,
+  useTaskDetail,
   useTaskHistory,
   useTaskInbox,
   useTaskMemories,
@@ -44,6 +45,10 @@ let gateway: MockAdapter | null = null;
 function Probe(): null {
   useBoardTasks();
   useTask("TB-1");
+  // The detail-GET fallback (BE-16 fold-in) rides the same conventions —
+  // "NOPE" 404s once at mount and then sits in its error state, which the
+  // burst must not disturb (no retry, no option churn).
+  useTaskDetail("NOPE", true);
   useTaskReports("TB-1");
   useTaskHistory("TB-1");
   useTaskMemories("TB-1");

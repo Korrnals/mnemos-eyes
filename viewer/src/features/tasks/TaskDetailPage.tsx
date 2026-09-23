@@ -24,9 +24,9 @@ import {
 import { EditTaskDialog } from "./EditTaskDialog";
 import { useTaskMutations } from "./useTaskMutations";
 import {
-  useArchivedTask,
   useSyncReportCount,
   useTask,
+  useTaskDetail,
   useTaskHistory,
   useTaskMemories,
   useTaskReports,
@@ -35,17 +35,15 @@ import {
 /**
  * `/tasks/:id` — the task PAGE (concept §4.1: a route, not the board's modal
  * stack; tabs are URL state `?tab=reports|history|memory|details`, default
- * «Отчёты»). The row comes from the shared `tasks.board` projection (no
- * single-task GET exists — see useTasks.ts). Ф3 adds the mutation header:
- * «Изменить» (content edit, BE-12 force path inside) and UI-8 «Вернуть в
- * работу» on a live final report (PATCH status=in-progress — the column
- * never moves).
+ * «Отчёты»). The row comes from the shared `tasks.board` projection; when
+ * the projection misses the id (an archived row, most often) the direct
+ * single-task GET supplies it (BE-16: one TaskOut for active AND archived —
+ * see `useTaskDetail`). Ф3 adds the mutation header: «Изменить» (content
+ * edit, BE-12 force path inside) and UI-8 «Вернуть в работу» on a live
+ * final report (PATCH status=in-progress — the column never moves).
  *
- * UI-18 pair 4: when the board projection misses the id AND the task lives
- * in the archive, the page renders from the archive row (`useArchivedTask`
- * probe — the wire has no archived single GET). Tab links preserve `?return=`
- * and every other param (spec §2.2 rule 4): the first tab click must not
- * kill the back context.
+ * UI-18: tab links preserve `?return=` and every other param (spec §2.2
+ * rule 4): the first tab click must not kill the back context.
  */
 
 const TASK_TABS = [
@@ -72,10 +70,11 @@ export function TaskDetailPage() {
   const canMutate = isTaskMutationSource(gateway);
   const { id } = useParams<{ id: string }>();
   const task = useTask(id);
-  // UI-18 pair 4: archived rows miss the board projection — probe the
-  // archive ONLY after the board query settled empty (no extra wire call on
-  // the happy path).
-  const archived = useArchivedTask(id, task.isSuccess && task.data === undefined);
+  // UI-18 pair 4 / BE-16: rows missing from the board projection (archived
+  // ones, usually) resolve through the DIRECT single-task GET — fired only
+  // after the board query settled empty (no extra wire call on the happy
+  // path).
+  const detail = useTaskDetail(id, task.isSuccess && task.data === undefined);
   // UI-8 needs the reports anyway (the «Отчёты» tab loads the same key —
   // one wire call, no extra request for the header decision).
   const reports = useTaskReports(id);
@@ -141,12 +140,12 @@ export function TaskDetailPage() {
   }
 
   const boardTask = task.data;
-  const current = boardTask ?? archived.data ?? undefined;
+  const current = boardTask ?? detail.data ?? undefined;
   if (!current) {
-    // Not on the board projection: unknown id or ARCHIVED row. The archive
-    // probe may still be fetching (UI-18 pair 4) — hold the skeleton until
-    // it settles so a live archived row never flashes not-found.
-    if (archived.fetchStatus === "fetching") {
+    // Not on the board projection: the detail GET may still be resolving
+    // (UI-18 pair 4) — hold the skeleton until it settles so a live row
+    // never flashes not-found.
+    if (detail.fetchStatus === "fetching") {
       return (
         <TaskDetailShell>
           <div role="status" aria-label={t("tasks.loadingOne")}>
@@ -155,8 +154,8 @@ export function TaskDetailPage() {
         </TaskDetailShell>
       );
     }
-    // Unknown id, or an archived row beyond the probe page: the not-found
-    // state keeps its honest «Открыть архив» escape.
+    // Unknown id (the GET 404s; BE-16 resolves every existing row): the
+    // not-found state keeps its honest «Открыть архив» escape.
     return (
       <TaskDetailShell>
         <EmptyState
