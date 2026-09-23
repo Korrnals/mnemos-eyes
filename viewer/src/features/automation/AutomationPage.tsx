@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 import { Play, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { useGateway } from "@/gateway/GatewayContext";
 import { useI18n, useT } from "@/i18n";
 import { formatTaskDate } from "@/features/tasks/taskStatus";
 import { useBoardTasks } from "@/features/tasks/useTasks";
+import { withReturn } from "@/lib/returnParams";
 import { useSessionControl } from "@/features/ui-token/useSessionControl";
 import { useAutomationEvents } from "./automationEvents";
 import { parseConditionMeta } from "./conditionMeta";
@@ -280,6 +281,9 @@ function SchedulesTab({
 }) {
   const t = useT();
   const rules = query.data?.items ?? [];
+  // UI-18 pair 7: the automation URL (rules/journal tab) rides as `return=`
+  // on the task links so the task's back control leads back here.
+  const location = useLocation();
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -329,7 +333,11 @@ function SchedulesTab({
                   : t("automation.rule.everyInterval", { interval: rule.trigger_value })}
               </span>
               <Link
-                to={`/tasks/${encodeURIComponent(rule.task_id)}?tab=execution`}
+                to={withReturn(
+                  `/tasks/${encodeURIComponent(rule.task_id)}?tab=execution`,
+                  location.pathname,
+                  location.search,
+                )}
                 className="font-mono text-xs text-iris-bright underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
               >
                 {rule.task_id}

@@ -88,7 +88,8 @@ describe("TaskInboxPage (mock adapter)", () => {
     );
     expect(htmlAdopted).toContain("records — 4");
     expect(htmlAdopted).toContain("adopted → TB-3");
-    expect(htmlAdopted).toMatch(/href="\/tasks\/TB-3"/);
+    // UI-18 pair 3: the inbox URL rides as `return=` on the task link.
+    expect(htmlAdopted).toMatch(/href="\/tasks\/TB-3\?return=%2Ftasks%2Finbox%3Fadopted%3D1"/);
     // The toggle itself is a labelled checkbox bound to the URL state.
     expect(htmlAdopted).toContain('type="checkbox"');
   });

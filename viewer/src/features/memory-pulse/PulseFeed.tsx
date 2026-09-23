@@ -8,6 +8,7 @@ import { formatTimestamp } from "@/components/memory/memoryDisplay";
 import { statusBadgeVariant, statusLabelKey } from "@/components/memory/memoryBadges";
 import type { MemoryPulseItem, MemoryPulseServerNote } from "@/gateway/boardTypes";
 import { useT } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import { cn } from "@/lib/utils";
 
 /**
@@ -30,6 +31,12 @@ export interface PulseFeedProps {
   /** Compact cut for the Overview block (no tags, fewer hints). */
   compact?: boolean;
   className?: string;
+  /**
+   * UI-18 pair 10: source list location (pathname + search) for the
+   * `return=` param on row links. Absent (the Overview block) — canonical
+   * bare `/memory/:id` links, unchanged (spec §2.2 rule 6).
+   */
+  returnSource?: { pathname: string; search: string };
 }
 
 export function PulseFeed({
@@ -37,6 +44,7 @@ export function PulseFeed({
   perServer,
   compact = false,
   className,
+  returnSource,
 }: PulseFeedProps) {
   const t = useT();
   const degraded = (perServer ?? []).filter((note) => !note.ok);
@@ -75,7 +83,15 @@ export function PulseFeed({
               </Badge>
               <div className="min-w-0 flex-1">
                 <Link
-                  to={`/memory/${encodeURIComponent(item.id)}`}
+                  to={
+                    returnSource
+                      ? withReturn(
+                          `/memory/${encodeURIComponent(item.id)}`,
+                          returnSource.pathname,
+                          returnSource.search,
+                        )
+                      : `/memory/${encodeURIComponent(item.id)}`
+                  }
                   className="inline-flex min-h-6 items-center font-scroll text-sm font-semibold leading-snug hover:text-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
                 >
                   {item.title || t("pulse.untitled")}

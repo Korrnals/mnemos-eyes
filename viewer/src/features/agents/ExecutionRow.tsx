@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { ExternalLink, MoreHorizontal, RotateCcw, XCircle, Copy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AssignmentItem } from "@/gateway/boardTypes";
+import { withReturn } from "@/lib/returnParams";
 import { useI18n, useT } from "@/i18n";
 import { formatTaskDate } from "@/features/tasks/taskStatus";
 import { useValidationNow } from "@/features/tasks/useValidationClock";
@@ -49,6 +50,9 @@ export function ExecutionRow({
   const t = useT();
   const { lang } = useI18n();
   const now = useValidationNow();
+  // UI-18 pair 6: the execution URL rides as `return=` on the open-task
+  // link so the task's back control leads back into this feed.
+  const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const timing = assignmentRowTiming(row, now);
   const terminal =
@@ -178,7 +182,11 @@ export function ExecutionRow({
                 }}
               >
                 <Link
-                  to={`/tasks/${encodeURIComponent(row.task_id)}?tab=execution`}
+                  to={withReturn(
+                    `/tasks/${encodeURIComponent(row.task_id)}?tab=execution`,
+                    location.pathname,
+                    location.search,
+                  )}
                   role="menuitem"
                   onClick={() => setMenuOpen(false)}
                   className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-foreground transition-colors duration-instant hover:bg-elevated focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"

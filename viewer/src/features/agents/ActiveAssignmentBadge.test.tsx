@@ -37,7 +37,9 @@ async function renderBadge(taskId: string): Promise<string> {
 describe("ActiveAssignmentBadge (mock corpus)", () => {
   it("queued task: neutral chip, state text, deep link to the execution tab", async () => {
     const html = await renderBadge("TB-1"); // corpus row 101: queued
-    expect(html).toContain('href="/tasks/TB-1?tab=execution"');
+    // UI-18 pair 6: the badge is source-aware — the bare MemoryRouter sits
+    // on "/", so the return carries that URL.
+    expect(html).toContain('href="/tasks/TB-1?tab=execution&amp;return=%2F"');
     expect(html).toContain(">queued<");
     expect(html).toContain('title="Execution: queued"');
   });
@@ -46,7 +48,7 @@ describe("ActiveAssignmentBadge (mock corpus)", () => {
     const html = await renderBadge("TB-11"); // corpus row 106: running
     expect(html).toContain(">running<");
     expect(html).toContain("text-iris-bright");
-    expect(html).toContain('href="/tasks/TB-11?tab=execution"');
+    expect(html).toContain('href="/tasks/TB-11?tab=execution&amp;return=%2F"');
   });
 
   it("terminal-only task renders NOTHING (no badge noise, unknown ≠ zero)", async () => {
