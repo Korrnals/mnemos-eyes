@@ -28,6 +28,8 @@ import {
 } from "./presence";
 import { orderRegistry } from "./registryOrder";
 import type { RegistryBands } from "./registryOrder";
+import { effectiveEnrollmentState } from "./enrollment";
+import { ProvisionCard } from "./ProvisionCard";
 import { useExecutors } from "./useAgents";
 import { useEnrollments } from "./useEnrollment";
 import { useExecutorMutations } from "./useExecutorMutations";
@@ -110,6 +112,12 @@ export function ExecutorRegistryPage() {
 
   // Dialog open state (the form is keyed inside — fresh per open).
   const [enrollmentOpen, setEnrollmentOpen] = useState(false);
+  // AGW-11: the ≤3 live-token pre-flight count for the mint dialog — the
+  // expiry-aware view state (a dead-but-unswept token must not eat quota).
+  const now = useValidationNow();
+  const liveTokens = (enrollments.data?.items ?? []).filter(
+    (row) => effectiveEnrollmentState(row, now) === "created",
+  ).length;
 
   if (!capable) {
     return <AgentsUnsupported />;
@@ -134,6 +142,12 @@ export function ExecutorRegistryPage() {
           {t("agents.enrollment.title")}
         </Button>
       </header>
+
+      {/* AGW-11 (wave 4): the connect card — the registry's expansion
+       * entry point. The SSH path walks a machine to a pending row by
+       * itself; it sits ABOVE the bands (the owner's primary answer),
+       * the manual mint stays one click away in the header. */}
+      <ProvisionCard />
 
       {executors.isPending ? (
         <div role="status" aria-label={t("agents.registry.loading")}>
@@ -216,6 +230,7 @@ export function ExecutorRegistryPage() {
         open={enrollmentOpen}
         onOpenChange={setEnrollmentOpen}
         executors={items}
+        liveCount={liveTokens}
       />
 
       {/* AGW-6 B: the settings card (deep-link target + menu rows render

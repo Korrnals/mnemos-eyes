@@ -950,8 +950,6 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.created": "Enrollment token created",
   "agents.enrollment.tokenLabel": "Enrollment token",
   "agents.enrollment.tokenOnce": "The token is shown ONCE — copy it now.",
-  "agents.enrollment.show": "Show",
-  "agents.enrollment.hide": "Hide",
   "agents.enrollment.copy": "Copy",
   "agents.enrollment.copied": "Copied",
   "agents.enrollment.copyFailedToken":

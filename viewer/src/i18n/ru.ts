@@ -969,8 +969,6 @@ export const ru = {
   "agents.enrollment.created": "Токен подключения создан",
   "agents.enrollment.tokenLabel": "Токен подключения",
   "agents.enrollment.tokenOnce": "Токен показывается один раз — скопируйте сейчас.",
-  "agents.enrollment.show": "Показать",
-  "agents.enrollment.hide": "Скрыть",
   "agents.enrollment.copy": "Копировать",
   "agents.enrollment.copied": "Скопировано",
   "agents.enrollment.copyFailedToken":
