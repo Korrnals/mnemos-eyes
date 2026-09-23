@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MockAdapter } from "./MockAdapter";
+import { MockAdapter, pulseContentFragment } from "./MockAdapter";
 import { MOCK_MEMORIES } from "./fixtures";
 import { ApiError } from "@/lib/errors";
 
@@ -268,5 +268,72 @@ describe("MockAdapter.cancellation and latency", () => {
     const start = performance.now();
     await new MockAdapter().health(); // default options → latency enabled
     expect(performance.now() - start).toBeGreaterThanOrEqual(80);
+  });
+});
+
+describe("MockAdapter.pulse content fragments (server content_fragment mirror)", () => {
+  it("serves the documented overrides: mem-0004 markdown, mem-0005 honest null", async () => {
+    const pulse = await makeAdapter().pulse({ scope: "all", limit: 20 });
+    const byId = new Map(pulse.items.map((item) => [item.id, item.content]));
+    expect(byId.get("mem-0004")).toBe(
+      "# Decision log\n\n- namespaced tags only\n- `topic:` slugs reviewed weekly",
+    );
+    expect(byId.has("mem-0005")).toBe(true);
+    expect(byId.get("mem-0005")).toBeNull();
+  });
+
+  it("keeps every corpus fragment within the 400-char wire cap", async () => {
+    const pulse = await makeAdapter().pulse({ scope: "all", limit: 20 });
+    for (const item of pulse.items) {
+      expect(item.content == null || item.content.length <= 400).toBe(true);
+    }
+  });
+
+  it("cuts at the server whitespace set: space, tab, VT, FF (not space-only)", () => {
+    // Tab is a legal boundary on the wire (the old mock cut at " " only).
+    const tabbed = "a".repeat(380) + "\t" + "b".repeat(30);
+    expect(pulseContentFragment(tabbed)).toBe("a".repeat(380));
+    // \u000B vertical tab and \f form feed — the full server _WS_CHARS set
+    // (" \t\r\n\f\v"; \r and \n are stripped by the leading trim in these
+    // examples, VT/FF are not — this is the drift the fix closes).
+    expect(pulseContentFragment("a".repeat(380) + "\u000B" + "b".repeat(30))).toBe(
+      "a".repeat(380),
+    );
+    expect(pulseContentFragment("a".repeat(380) + "\f" + "b".repeat(30))).toBe(
+      "a".repeat(380),
+    );
+    // Plain space stays the common case.
+    expect(pulseContentFragment("a".repeat(380) + " " + "b".repeat(30))).toBe(
+      "a".repeat(380),
+    );
+  });
+
+  it("matches the server window: a boundary AT the limit is legal", () => {
+    // Whitespace sits exactly at index 400 → the server keeps text[:400]
+    // (rfind over [0, limit+1)) instead of falling back to an earlier
+    // boundary. Index 400 is whitespace, indices 0..399 are not.
+    const text = "a".repeat(100) + " " + "b".repeat(299) + " " + "c".repeat(50);
+    expect(text[100]).toBe(" ");
+    expect(text[400]).toBe(" ");
+    expect(pulseContentFragment(text)).toHaveLength(400);
+  });
+
+  it("hard-cuts when the window holds no whitespace", () => {
+    expect(pulseContentFragment("x".repeat(500))).toBe("x".repeat(400));
+    // A boundary beyond the window does not rescue the hard cut.
+    expect(pulseContentFragment("x".repeat(420) + " " + "tail")).toBe(
+      "x".repeat(400),
+    );
+  });
+
+  it("maps blank or absent content to honest null", () => {
+    expect(pulseContentFragment(null)).toBeNull();
+    expect(pulseContentFragment(undefined)).toBeNull();
+    expect(pulseContentFragment("")).toBeNull();
+    expect(pulseContentFragment("   \t\n")).toBeNull();
+  });
+
+  it("passes short content through whole and trimmed", () => {
+    expect(pulseContentFragment("  hello world  ")).toBe("hello world");
   });
 });

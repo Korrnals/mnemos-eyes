@@ -312,6 +312,12 @@ class TestContentFragment:
     def test_blank_content_maps_to_none(self, blank):
         assert mnemos_client.content_fragment(blank) is None
 
+    @pytest.mark.parametrize("junk", [{"a": 1}, ["x", "y"], 42, 4.5, True])
+    def test_non_string_content_maps_to_none(self, junk):
+        # A structured record must never surface as its Python repr
+        # (``{'a': 1}``) in the pulse — non-string bodies are absent.
+        assert mnemos_client.content_fragment(junk) is None
+
 
 class TestMemoryPulse:
     """Pulse items carry a truncated content fragment for the UI TextEngine:

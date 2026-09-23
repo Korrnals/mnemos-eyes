@@ -526,7 +526,8 @@ export class MockAdapter implements MemoryGateway {
         // Server-contract mirror: ≤400-char fragment (plain corpus prose or
         // a documented mock override — see MOCK_PULSE_CONTENT_OVERRIDES).
         content:
-          memory.id !== undefined && memory.id in MOCK_PULSE_CONTENT_OVERRIDES
+          memory.id !== undefined &&
+          Object.hasOwn(MOCK_PULSE_CONTENT_OVERRIDES, memory.id)
             ? MOCK_PULSE_CONTENT_OVERRIDES[memory.id]
             : pulseContentFragment(memory.content),
       }));
@@ -2394,20 +2395,30 @@ function compareCreated(a?: Memory, b?: Memory): number {
 /** Pulse fragment cap (server `content_fragment` mirror): ≤400 chars. */
 const PULSE_FRAGMENT_MAX = 400;
 
+/** Whitespace set the server cuts at (`content_fragment` `_WS_CHARS` mirror). */
+const PULSE_WS_CHARS = " \t\r\n\f\v";
+
 /**
  * Mock mirror of the server's `content_fragment()`: the pulse row preview is
- * a ≤400-char cut at a whitespace boundary (hard cut only when the window
- * holds no whitespace); blank or absent content maps to null — the UI shows
- * honest absence, never an empty shell.
+ * a ≤400-char cut at a whitespace boundary. The whitespace set and the
+ * limit+1 search window are the server's exactly, so dev previews cut at
+ * prod positions (a boundary AT the limit is legal; hard cut only when the
+ * window holds no whitespace). Blank or absent content maps to null — the
+ * UI shows honest absence, never an empty shell. Exported for the pulse
+ * contract tests.
  */
-function pulseContentFragment(raw: string | null | undefined): string | null {
+export function pulseContentFragment(raw: string | null | undefined): string | null {
   if (raw === null || raw === undefined) return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
   if (trimmed.length <= PULSE_FRAGMENT_MAX) return trimmed;
-  const window = trimmed.slice(0, PULSE_FRAGMENT_MAX);
-  const boundary = window.lastIndexOf(" ");
-  return (boundary > 0 ? window.slice(0, boundary) : window).trimEnd();
+  // Last whitespace within limit+1 chars (server rfind(ws, 0, limit + 1)).
+  let boundary = -1;
+  for (const ws of PULSE_WS_CHARS) {
+    boundary = Math.max(boundary, trimmed.lastIndexOf(ws, PULSE_FRAGMENT_MAX));
+  }
+  const cut = boundary > 0 ? boundary : PULSE_FRAGMENT_MAX;
+  return trimmed.slice(0, cut).trimEnd();
 }
 
 function round(value: number, decimals: number): number {
