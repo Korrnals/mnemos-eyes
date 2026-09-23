@@ -36,7 +36,7 @@ import { useKanbanDnd } from "./useKanbanDnd";
 import { useBoardTasks, useReportCounts } from "./useTasks";
 import { useTaskMutations } from "./useTaskMutations";
 import { BoardStyleToggle } from "./BoardStyleToggle";
-import { loadBoardStyle, type BoardStyle } from "./tasksViewPrefs";
+import { useBoardStyle } from "@/lib/boardStyleStore";
 
 /**
  * `/tasks` — the KANBAN view of the domain, view №1 per the redesign concept
@@ -67,9 +67,11 @@ function TaskBoardView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const state = parseTaskListParams(searchParams);
   const [collapsed, setCollapsed] = useState(() => loadCollapsedGroups());
-  // CV-5: the board render style («Группы | Классика») — persisted locally
-  // under "vesmaro.boardStyle"; both styles share columns, DnD and filters.
-  const [boardStyle, setBoardStyle] = useState<BoardStyle>(() => loadBoardStyle());
+  // CV-5 / UI-23: the board render style («Группы | Классика») lives in the
+  // shared store (lib/boardStyleStore.ts, persisted "vesmaro.boardStyle") —
+  // the kanban toggle and the settings hub are two controls of ONE state
+  // (spec §4.3); both styles share columns, DnD and filters.
+  const [boardStyle] = useBoardStyle();
   const [createOpen, setCreateOpen] = useState(false);
   const mutations = useTaskMutations();
 
@@ -125,8 +127,8 @@ function TaskBoardView() {
           <div className="flex flex-wrap items-center gap-2">
             <TasksViewToggle />
             {/* CV-5: board style lives ONLY on the kanban — the list has no
-             * accordion/classic distinction. */}
-            <BoardStyleToggle style={boardStyle} onChange={setBoardStyle} />
+             * accordion/classic distinction. The toggle owns the store write. */}
+            <BoardStyleToggle />
           </div>
         </div>
         {canMutate ? (

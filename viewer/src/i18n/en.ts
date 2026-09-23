@@ -1002,14 +1002,68 @@ export const en: Record<TranslationKey, string> = {
   "automation.settings.saved": "Automation settings saved",
   "automation.settings.savedDetail": "kill-switch and daily cap updated",
   "automation.settings.saveFailed": "Failed to save automation settings",
-  // UI-21 settings hub: «Интерфейс» — cross-links only (preferences stay
-  // at their point of use; spec §0).
-  "settings.hub.interfaceTitle": "Interface",
-  "settings.hub.interfaceHint": "These preferences live where you use them:",
-  "settings.hub.prefLang": "language — RU|EN in the top bar",
-  "settings.hub.prefDensity": "density — the button in the top bar",
-  "settings.hub.prefBoardStyle": "board style — the toggle on the tasks page",
-  "settings.hub.prefSidebar": "sidebar — the button on the sidebar itself",
+  // UI-23 settings hub v2: sections, controls, hints and verdicts (spec §7).
+  "settings.hub.navLabel": "Page sections",
+  "settings.hub.appearanceTitle": "Appearance",
+  "settings.hub.behaviorTitle": "Behavior",
+  "settings.hub.boardTitle": "Board",
+  "settings.hub.navigationTitle": "Navigation",
+  "settings.hub.executionTitle": "Execution",
+  "settings.hub.automationTitle": "Automation",
+  "settings.hub.themeLabel": "Theme",
+  "settings.hub.themeSystem": "System",
+  "settings.hub.themeDark": "Dark",
+  "settings.hub.themeLight": "Light",
+  "settings.hub.themeHint": "“System” follows your OS preference.",
+  "settings.hub.langLabel": "Interface language",
+  "settings.hub.densityLabel": "Row density",
+  "settings.hub.densityComfortable": "Comfortable",
+  "settings.hub.densityCompact": "Compact",
+  "settings.hub.densityHint":
+    "Working lists — tasks, registries, results. Search and memory stay airy.",
+  "settings.hub.appliesEverywhere": "Applies everywhere immediately.",
+  "settings.hub.boardStyleLabel": "Kanban board style",
+  "settings.hub.boardStyleHint": "Takes effect on Tasks → Kanban.",
+  "settings.hub.motionLabel": "Animations",
+  "settings.hub.motionSystem": "System",
+  "settings.hub.motionReduced": "Minimal",
+  "settings.hub.motionHint":
+    "“Minimal” disables motion and shimmer regardless of the OS setting.",
+  "settings.hub.sidebarLabel": "Sidebar",
+  "settings.hub.sidebarExpanded": "Expanded",
+  "settings.hub.sidebarCollapsed": "Collapsed",
+  "settings.hub.sidebarHint": "Also changes with the button on the sidebar itself.",
+  "settings.hub.onboardingReplay": "Show the “How it works” hint again",
+  "settings.hub.onboardingReplayed": "The hint will expand again on the Execution page.",
+  "settings.hub.notCustomizable": "Not customizable",
+  "settings.hub.verdict.fonts":
+    "Typography is a single font pair and one scale: coherence beats choice.",
+  "settings.hub.verdict.contemplative":
+    "Search and memory stay airy regardless of density — by design.",
+  "settings.hub.verdict.viewRoute":
+    "Kanban and List are routes, not a preference: the page address is the choice.",
+  "settings.hub.verdict.domains":
+    "Sidebar sections and their order are fixed — the product map stays fully visible.",
+  "settings.hub.verdict.groups":
+    "Project-group collapse is remembered per project — workspace state, not a preference.",
+  "settings.hub.verdict.dnd":
+    "Card drag-and-drop is the board's primary control.",
+  "settings.hub.verdict.filters":
+    "Filters and search are part of the page address (?project=&q=) — bookmarkable.",
+  "settings.hub.verdict.panels":
+    "Terminal and feed panels collapse in place on the Execution page — state is remembered.",
+  "settings.hub.verdict.confirms":
+    "Confirmations for destructive actions are always on — they protect your data.",
+  "settings.hub.verdict.scrolls":
+    "Whole-page scrolling with position restore on Back is fixed.",
+  "settings.hub.verdict.updateBanner":
+    "The page never reloads on its own — a calm banner announces a new version.",
+  "settings.hub.verdict.hotkeys":
+    "Hotkeys are fixed: “/” focuses search, “?” opens the cheatsheet.",
+  "settings.hub.verdict.search":
+    "Global search is the single entrance to memory: its behavior is part of the structure, not a preference.",
+  "settings.hub.verdict.crumbs":
+    "Breadcrumbs carry the navigation context of the route; removing them breaks orientation.",
   "automation.listLoading": "Loading",
   "automation.listFailed": "Failed to load the list",
   "automation.schedule.create": "New schedule",

@@ -33,6 +33,12 @@
       scroll-behavior: smooth;
     }
   }
+
+  /* vesmaro.motion="reduced" (UI-23): the hub's forced regime also settles
+   * anchor scrolling — overrides the no-preference smooth rule above. */
+  html[data-motion="reduced"] {
+    scroll-behavior: auto;
+  }
 }
 
 /* Docs search dropdown entrance (docs spec §13): one piece, duration-fast +

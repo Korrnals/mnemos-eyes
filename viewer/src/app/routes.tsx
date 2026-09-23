@@ -299,9 +299,10 @@ export function buildRoutes(): RouteObject[] {
             </Page>
           ),
         },
-        // Owner settings (UI-21 hub over the AGW-3 shell): one h1 +
-        // sibling sections «Исполнение» | «Автоматизация» | «Интерфейс»,
-        // deep-linkable via #execution/#automation/#interface.
+        // Owner settings (UI-23 hub v2 over the UI-21 shell): one h1 +
+        // six sibling sections «Внешний вид» | «Поведение» | «Доска» |
+        // «Навигация» | «Исполнение» | «Автоматизация», deep-linkable via
+        // #appearance/#behavior/#board/#navigation/#execution/#automation.
         {
           path: "/system/settings",
           element: (

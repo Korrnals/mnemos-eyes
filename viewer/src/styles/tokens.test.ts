@@ -263,9 +263,27 @@ describe("self-hosted fonts (T4)", () => {
 
 describe("theme bootstrap (design-system.md §9)", () => {
   it("resolves the theme before first paint with the provider's contract", () => {
-    expect(indexHtml).toContain("mnemos-eyes:theme"); // storage key
+    // UI-23 migration: the new registry key first, the legacy fallback second.
+    expect(indexHtml).toContain("vesmaro.theme");
+    expect(indexHtml).toContain("mnemos-eyes:theme");
+    expect(
+      indexHtml.indexOf("vesmaro.theme"),
+      "the new key must be consulted before the legacy one",
+    ).toBeLessThan(indexHtml.indexOf("mnemos-eyes:theme"));
     expect(indexHtml).toContain("prefers-color-scheme"); // system default
     expect(indexHtml).toContain("dataset.theme"); // [data-theme] switching
+  });
+});
+
+describe("motion attribute (UI-23, vesmaro.motion reduced branches)", () => {
+  it("mirrors the reduced-motion durations for the forced regime", () => {
+    expect(tokensCss).toContain('[data-motion="reduced"]');
+    // The forced block must carry the same zeroed durations as the OS block.
+    const forced = tokensCss.match(/\[data-motion="reduced"\]\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(forced).toContain("--duration-iris: 0ms");
+    expect(forced).toContain("--duration-slow: 0ms");
+    expect(forced).toContain("--duration-normal: 0ms");
+    expect(forced).toContain("--duration-fast: 80ms");
   });
 });
 
