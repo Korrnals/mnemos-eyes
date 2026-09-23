@@ -219,6 +219,39 @@ export interface BoardEventMap {
   // list-sync signal over the harnesses key.
   "harness.added": HarnessEvent & { readonly kind: "harness.added" };
   "harness.removed": HarnessEvent & { readonly kind: "harness.removed" };
+  // Provisioning kinds (wave 4 AGW-11, design 2026-09-23 §B): job
+  // lifecycle HINTS for the connect card — created (202 accepted),
+  // progress (every step; carries the live state), ok (the enrollment was
+  // consumed — executor_id links the pending registry row), failed (typed
+  // error_code + masked detail), repinned (the owner's re-pin action).
+  // Transit invariant: NONE of these ever carries the mne_ token, the ssh
+  // secret or any credential material (server-side broadcast contract).
+  "provisioning.created": ProvisioningEvent & {
+    readonly kind: "provisioning.created";
+    readonly host: string;
+    readonly port: number;
+    readonly enrollment_id: string;
+  };
+  "provisioning.progress": ProvisioningEvent & {
+    readonly kind: "provisioning.progress";
+    readonly state: string;
+    readonly step: string;
+  };
+  "provisioning.ok": ProvisioningEvent & {
+    readonly kind: "provisioning.ok";
+    readonly executor_id: string;
+  };
+  "provisioning.failed": ProvisioningEvent & {
+    readonly kind: "provisioning.failed";
+    readonly error_code: string;
+    readonly detail?: string;
+  };
+  "provisioning.repinned": {
+    readonly kind: "provisioning.repinned";
+    readonly host: string;
+    readonly port: number;
+    readonly fingerprint: string;
+  };
   // Pairing kinds (CV-7, ADR 0012 §10.3 — ui-contract §11 дополнение):
   // requested (exchange created→scanned), confirmed (owner allow=true),
   // revoked (owner deny / cancel / device revoke — pairing_id XOR device_id
@@ -316,6 +349,17 @@ export interface HarnessEvent {
   readonly harness?: Readonly<Record<string, unknown>>;
   /** removed only: the deleted name. */
   readonly name?: string;
+}
+
+/**
+ * Provisioning event payload base (wave 4 AGW-11): `{kind, job_id}` —
+ * every member of the family keys off the job except `repinned` (the
+ * owner act speaks about the host:port identity, not a job). A pure
+ * change HINT: the connect card invalidates its job query and refetches
+ * the authoritative GET (invalidation-only bridge, agentsEvents.ts).
+ */
+export interface ProvisioningEvent {
+  readonly job_id: string;
 }
 
 /**
@@ -516,6 +560,89 @@ export function parseBoardEvent(raw: string): ParsedBoardEvent {
       return {
         status: "event",
         event: { kind, name: parsed.name },
+      };
+    case "provisioning.created":
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.host !== "string" ||
+        typeof parsed.port !== "number" ||
+        typeof parsed.enrollment_id !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          job_id: parsed.job_id,
+          host: parsed.host,
+          port: parsed.port,
+          enrollment_id: parsed.enrollment_id,
+        },
+      };
+    case "provisioning.progress":
+      // state + step are the whole point (the connect card's live feed).
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.state !== "string" ||
+        typeof parsed.step !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          job_id: parsed.job_id,
+          state: parsed.state,
+          step: parsed.step,
+        },
+      };
+    case "provisioning.ok":
+      // executor_id links the pending registry row (approve funnel).
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.executor_id !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: { kind, job_id: parsed.job_id, executor_id: parsed.executor_id },
+      };
+    case "provisioning.failed":
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.error_code !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          job_id: parsed.job_id,
+          error_code: parsed.error_code,
+          ...(typeof parsed.detail === "string" ? { detail: parsed.detail } : {}),
+        },
+      };
+    case "provisioning.repinned":
+      // The owner re-pin speaks about the host:port identity, not a job.
+      if (
+        typeof parsed.host !== "string" ||
+        typeof parsed.port !== "number" ||
+        typeof parsed.fingerprint !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          host: parsed.host,
+          port: parsed.port,
+          fingerprint: parsed.fingerprint,
+        },
       };
     case "pairing.requested":
     case "pairing.confirmed":

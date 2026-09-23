@@ -34,6 +34,9 @@ import type {
   EnrollmentCreatedResult,
   EnrollmentRevokeResult,
   EnrollmentsPage,
+  ProvisionCreateInput,
+  ProvisionCreatedResult,
+  ProvisionJobStatus,
   HarnessCreateInput,
   HarnessesPage,
   HarnessStateResult,
@@ -395,6 +398,21 @@ export interface BoardGateway extends MemoryGateway {
    * non-terminal assignment or an automation rule.
    */
   deleteHarness(name: string): Promise<void>;
+  /**
+   * Queue an SSH provision job (`POST /api/executors/provision`, ui-token;
+   * wave 4 AGW-11). 202 {job_id, enrollment_id} — the mne_ token NEVER
+   * rides the answer (transit-only server-side). The ssh secret travels
+   * in the request body ONCE and is never logged by this adapter.
+   */
+  createProvisionJob(
+    payload: ProvisionCreateInput,
+  ): Promise<ProvisionCreatedResult>;
+  /**
+   * Job progress (`GET /api/executors/provision/{job_id}`, ui-token):
+   * state, steps, pinned host-key fingerprint, the linked enrollment.
+   * 404 unknown id; 503 while the provisioner is disabled.
+   */
+  getProvisionJob(jobId: string, signal?: AbortSignal): Promise<ProvisionJobStatus>;
   /**
    * Set the default/fallback pair (`PUT /api/settings/execution`,
    * ui-token). Amd 2 §5 gates answer 422: a default must exist, be
@@ -984,6 +1002,54 @@ export class BoardAdapter implements BoardGateway {
       method: "DELETE",
       auth: true,
     });
+  }
+
+  async createProvisionJob(
+    payload: ProvisionCreateInput,
+  ): Promise<ProvisionCreatedResult> {
+    return this.request<ProvisionCreatedResult>("/executors/provision", {
+      method: "POST",
+      // Wire shape mirrors board ProvisionBody: optional keys ride only
+      // when set (server defaults: port 22, harness 'zcode'); the auth
+      // secret/passphrase ride as empty strings when unused. The secret
+      // exists in this ONE request and nowhere else client-side.
+      body: {
+        host: payload.host,
+        ...(payload.port !== undefined ? { port: payload.port } : {}),
+        ...(payload.name ? { name: payload.name } : {}),
+        auth: {
+          kind: payload.auth.kind,
+          secret: payload.auth.secret ?? "",
+          ...(payload.auth.passphrase
+            ? { passphrase: payload.auth.passphrase }
+            : {}),
+        },
+        ...(payload.harness_hint ? { harness_hint: payload.harness_hint } : {}),
+        ...(payload.board_url_for_host
+          ? { board_url_for_host: payload.board_url_for_host }
+          : {}),
+        ...(payload.expected_host_key_fingerprint
+          ? {
+              expected_host_key_fingerprint:
+                payload.expected_host_key_fingerprint,
+            }
+          : {}),
+        ...(payload.reuse_enrollment_id
+          ? { reuse_enrollment_id: payload.reuse_enrollment_id }
+          : {}),
+      },
+      auth: true,
+    });
+  }
+
+  async getProvisionJob(
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<ProvisionJobStatus> {
+    return this.request<ProvisionJobStatus>(
+      `/executors/provision/${encodeURIComponent(jobId)}`,
+      { signal, auth: true },
+    );
   }
 
   async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {

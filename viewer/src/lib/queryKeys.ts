@@ -107,6 +107,13 @@ export const keys = {
       all: ["agents", "harnesses"] as const,
       list: () => ["agents", "harnesses", "list"] as const,
     },
+    // AGW-11 (wave 4): SSH provision jobs. SSE provisioning.* invalidates
+    // the family; the connect card also polls while a job is live (the
+    // stream is at-most-once — the poll is the belt-and-braces leg).
+    provision: {
+      all: ["agents", "provision"] as const,
+      job: (jobId: string) => ["agents", "provision", "job", jobId] as const,
+    },
     settings: {
       execution: () => ["agents", "settings", "execution"] as const,
     },

@@ -546,3 +546,129 @@ describe("harness.* (wave 3C, ui-contract §11 дополнение)", () => {
     expect(parsed).toMatchObject({ status: "ignored", reason: "malformed-payload" });
   });
 });
+
+describe("provisioning.* (AGW-11, ui-contract §11 дополнение)", () => {
+  it("parses created with the host:port + enrollment link", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.created",
+        job_id: "pj-1",
+        host: "vps-1",
+        port: 22,
+        enrollment_id: "enr-1",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({
+      kind: "provisioning.created",
+      job_id: "pj-1",
+      host: "vps-1",
+      port: 22,
+      enrollment_id: "enr-1",
+    });
+  });
+
+  it("parses progress with the live state + step text", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.progress",
+        job_id: "pj-1",
+        state: "installing",
+        step: "running the bootstrap one-liner (pinned TLS)",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({
+      kind: "provisioning.progress",
+      job_id: "pj-1",
+      state: "installing",
+      step: "running the bootstrap one-liner (pinned TLS)",
+    });
+  });
+
+  it("parses ok with the minted executor link; failed with the typed code", () => {
+    const ok = parseBoardEvent(
+      JSON.stringify({ kind: "provisioning.ok", job_id: "pj-1", executor_id: "exec-9" }),
+    );
+    expect(ok.status).toBe("event");
+    if (ok.status !== "event") return;
+    expect(ok.event).toMatchObject({
+      kind: "provisioning.ok",
+      job_id: "pj-1",
+      executor_id: "exec-9",
+    });
+    const failed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.failed",
+        job_id: "pj-1",
+        error_code: "ssh.sudo_required",
+        detail: "sudo -n preflight failed",
+      }),
+    );
+    expect(failed.status).toBe("event");
+    if (failed.status !== "event") return;
+    expect(failed.event).toMatchObject({
+      kind: "provisioning.failed",
+      job_id: "pj-1",
+      error_code: "ssh.sudo_required",
+      detail: "sudo -n preflight failed",
+    });
+  });
+
+  it("parses repinned on the host:port identity + fingerprint (no job_id)", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.repinned",
+        host: "vps-1",
+        port: 22,
+        fingerprint: "SHA256:abc",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({
+      kind: "provisioning.repinned",
+      host: "vps-1",
+      port: 22,
+      fingerprint: "SHA256:abc",
+    });
+  });
+
+  it("frames missing their mandatory fields are malformed, not thin", () => {
+    for (const frame of [
+      { kind: "provisioning.created", job_id: "pj-1" },
+      { kind: "provisioning.progress", job_id: "pj-1", state: "installing" },
+      { kind: "provisioning.ok", job_id: "pj-1" },
+      { kind: "provisioning.failed", job_id: "pj-1" },
+      { kind: "provisioning.repinned", host: "vps-1" },
+    ]) {
+      expect(parseBoardEvent(JSON.stringify(frame))).toMatchObject({
+        status: "ignored",
+        reason: "malformed-payload",
+      });
+    }
+  });
+
+  it("no secret material is allowed to ride ANY provisioning frame", () => {
+    // Contractual (design §B transit invariant): the parser passes frames
+    // through, so the EXCLUSION test is on the parsed shape — only the
+    // declared fields may exist, an injected token/secret never lands.
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.progress",
+        job_id: "pj-1",
+        state: "installing",
+        step: "…",
+        token: "mne_leak",
+        secret: "ssh-key-material",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    const wire = JSON.stringify(parsed.event);
+    expect(wire).not.toContain("mne_leak");
+    expect(wire).not.toContain("ssh-key-material");
+  });
+});
