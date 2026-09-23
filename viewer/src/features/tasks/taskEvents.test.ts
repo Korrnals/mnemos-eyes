@@ -4,8 +4,8 @@ import { parseBoardEvent } from "@/gateway/events";
 import type { BoardEvent } from "@/gateway/events";
 import { keys } from "@/lib/queryKeys";
 import { applyTaskEventToCache } from "./taskEvents";
-import { MOCK_BOARD, MOCK_REPORTS } from "@/gateway/boardFixtures";
-import type { BoardSummary, TaskReports } from "@/gateway/boardTypes";
+import { MOCK_ARCHIVED_TASK, MOCK_BOARD, MOCK_REPORTS } from "@/gateway/boardFixtures";
+import type { BoardSummary, BoardTask, TaskReports } from "@/gateway/boardTypes";
 
 /**
  * SSE → cache mapping (Ф2 gate): every task.* / report event patches ONLY
@@ -104,6 +104,33 @@ describe("task.created / updated / moved — surgical board patch", () => {
     expect(after.tasks.find((t) => t.id === "TB-3")?.title).toBe("Переименована");
     expect(after.counts).toEqual(before.counts);
     expect(after.tasks.length).toBe(before.tasks.length);
+  });
+
+  it("task.updated with archived=1 removes the board row (no phantom, ME5-1)", () => {
+    const client = seededClient();
+    const before = boardOf(client);
+    // Reachable on the wire: PATCH has no archived guard, so a server-side
+    // edit of an archived row emits task.updated carrying archived=1. The
+    // board cache mirrors GET /board (archived=0 only) — the row must be
+    // REMOVED, not re-inserted.
+    client.setQueryData(
+      keys.tasks.detail("TB-3"),
+      before.tasks.find((task) => task.id === "TB-3")!,
+    );
+    const archivedPatch = {
+      ...before.tasks.find((task) => task.id === "TB-3")!,
+      archived: 1,
+      title: "Архивирована чужим клиентом",
+    };
+    applyTaskEventToCache(client, mustEvent({ kind: "task.updated", task: archivedPatch }));
+
+    const after = boardOf(client);
+    expect(after.tasks.find((task) => task.id === "TB-3")).toBeUndefined();
+    expect(after.counts.open).toBe(before.counts.open - 1);
+    // The detail mirror still learns the fresh row, archived state included.
+    const detail = client.getQueryData<BoardTask>(keys.tasks.detail("TB-3"));
+    expect(detail?.title).toBe("Архивирована чужим клиентом");
+    expect(detail?.archived).toBe(1);
   });
 
   it("task.moved replaces the row and recounts both columns", () => {
@@ -252,6 +279,43 @@ describe("report — reports cache patch + count badge bump", () => {
     expect(client.getQueryData(keys.tasks.reports.detail("TB-9"))).toBeUndefined();
     // The badge count still learns about it.
     expect(client.getQueryData(keys.tasks.reports.count("TB-9"))).toBe(1);
+  });
+});
+
+describe("tasks.detail mirror (BE-16 fallback cache, ME-005)", () => {
+  it("task.updated patches a cached detail row in place (no wire refetch)", () => {
+    const client = seededClient();
+    // The archived row was opened via the single-task GET — its answer sits
+    // under keys.tasks.detail exactly like useTaskDetail would leave it.
+    client.setQueryData(keys.tasks.detail(MOCK_ARCHIVED_TASK.id), MOCK_ARCHIVED_TASK);
+
+    const renamed = { ...MOCK_ARCHIVED_TASK, title: "Переименована из архива" };
+    applyTaskEventToCache(client, mustEvent({ kind: "task.updated", task: renamed }));
+
+    const detail = client.getQueryData<BoardTask>(keys.tasks.detail("RB-1"));
+    expect(detail?.title).toBe("Переименована из архива");
+    expect(detail?.archived).toBe(1); // same authoritative row, not a projection
+  });
+
+  it("a full-row event for an UNCACHED id never synthesises a detail entry", () => {
+    const client = seededClient();
+    applyTaskEventToCache(
+      client,
+      mustEvent({ kind: "task.updated", task: { ...CREATED_TASK, id: "T-GHOST" } }),
+    );
+    expect(client.getQueryData(keys.tasks.detail("T-GHOST"))).toBeUndefined();
+  });
+
+  it("task.archived / task.unarchived invalidate a cached detail (no usable payload)", () => {
+    const client = seededClient();
+    client.setQueryData(keys.tasks.detail("TB-4"), MOCK_ARCHIVED_TASK);
+    client.setQueryData(keys.tasks.detail("RB-1"), MOCK_ARCHIVED_TASK);
+
+    applyTaskEventToCache(client, mustEvent({ kind: "task.archived", task_id: "TB-4" }));
+    applyTaskEventToCache(client, mustEvent({ kind: "task.unarchived", task_id: "RB-1" }));
+
+    expect(isKeyInvalidated(client, keys.tasks.detail("TB-4"))).toBe(true);
+    expect(isKeyInvalidated(client, keys.tasks.detail("RB-1"))).toBe(true);
   });
 });
 

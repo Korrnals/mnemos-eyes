@@ -24,7 +24,12 @@ const FOCUSABLE_SELECTOR = [
  * the DOM states that remove an element from the tab order / accessibility
  * tree — `[hidden]`, `aria-hidden="true"`, or the Tailwind `hidden` class
  * (the class alone leaves no attribute trace; without the check a `.hidden`
- * button would still receive Tab focus inside the trap). */
+ * button would still receive Tab focus inside the trap).
+ *
+ * Caveat (ME-001 review): the `.hidden`-class match is WIDTH-INDEPENDENT —
+ * an element with responsive visibility (`hidden md:flex`) inside the trap
+ * would be skipped at ALL widths, since no layout engine runs here. No trap
+ * consumer currently renders responsive-visibility focusables. */
 function isTrappable(element: HTMLElement): boolean {
   return element.closest('[hidden], [aria-hidden="true"], .hidden') === null;
 }
