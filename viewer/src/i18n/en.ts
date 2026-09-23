@@ -1248,6 +1248,8 @@ export const en: Record<TranslationKey, string> = {
   "docs.hub.coverage.mixed": "Partially translated (ru+en)",
   "docs.copy.code": "Copy code",
   "docs.copy.done": "Code copied",
+  "docs.mermaid.renderFailed":
+    "The diagram could not be rendered — its source is shown instead.",
   "docs.notFound.title": "No such page",
   "docs.notFound.message": "Check the address or go back to the category list.",
   "docs.notFound.cta": "Open the docs",

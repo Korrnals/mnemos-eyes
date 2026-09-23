@@ -1270,6 +1270,8 @@ export const ru = {
   "docs.hub.coverage.mixed": "Частично переведено (ru+en)",
   "docs.copy.code": "Скопировать код",
   "docs.copy.done": "Код скопирован",
+  "docs.mermaid.renderFailed":
+    "Диаграмму не удалось отрисовать — показан исходный код.",
   "docs.notFound.title": "Такой страницы нет",
   "docs.notFound.message": "Проверьте адрес или вернитесь к списку категорий.",
   "docs.notFound.cta": "Открыть документацию",
