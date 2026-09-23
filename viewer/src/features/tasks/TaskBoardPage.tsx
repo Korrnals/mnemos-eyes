@@ -15,6 +15,7 @@ import { useReducedMotion } from "@/lib/useReducedMotion";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import { useUiToken } from "@/features/ui-token/UiTokenContext";
+import { hasDeviceToken } from "@/gateway/deviceToken";
 import { useT } from "@/i18n";
 import { buildOrderedColumns } from "./boardDnd";
 import { CreateTaskDialog } from "./CreateTaskDialog";
@@ -75,11 +76,13 @@ function TaskBoardView() {
   const [createOpen, setCreateOpen] = useState(false);
   const mutations = useTaskMutations();
 
-  // Owner decision (CV-4 §3, the simpler honest variant): without a ui token
-  // cards do not drag at all — cursor default, tooltip «войдите для
-  // управления». The keyboard move (⋯ → «Переместить…») still leads to the
-  // login window through the standard token gate (runAuthorized).
-  const canDrag = canMutate && tokenPresent;
+  // Owner decision (CV-4 §3, the simpler honest variant) + scope v1
+  // (ADR 0012 Amendment): cards drag on an owner session OR a paired
+  // control device (the server's scope table rules the move itself);
+  // a tokenless, deviceless browser still does not drag at all — tooltip
+  // «войдите для управления». The keyboard move (⋯ → «Переместить…») still
+  // leads through the standard token gate (runAuthorized).
+  const canDrag = canMutate && (tokenPresent || hasDeviceToken());
 
   const tasks = useMemo(() => board.data?.tasks ?? [], [board.data]);
   const taskIds = useMemo(() => tasks.map((task) => task.id), [tasks]);

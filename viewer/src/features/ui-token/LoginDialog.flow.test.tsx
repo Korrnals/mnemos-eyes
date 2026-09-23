@@ -17,7 +17,10 @@ import { Sidebar } from "@/layout/Sidebar";
 import { I18nProvider } from "@/i18n";
 import { keys } from "@/lib/queryKeys";
 import { clearUiToken, hasUiToken } from "@/gateway/uiToken";
-import { DEVICE_TOKEN_STORAGE_KEY } from "@/gateway/deviceToken";
+import {
+  DEVICE_SCOPE_STORAGE_KEY,
+  DEVICE_TOKEN_STORAGE_KEY,
+} from "@/gateway/deviceToken";
 import type * as useTasksModule from "@/features/tasks/useTasks";
 
 // Test-env seam (documented, not a product change): useReportCounts subscribes
@@ -523,20 +526,20 @@ describe("login flow regression (owner repro)", () => {
 });
 
 /**
- * UI-22 device beat (ADR 0012 §5): a PAIRED device (localStorage
- * `vesmaro.deviceToken`) has identity but v0 read-only scope — the server
- * would answer 403 to its mutations. The mutation attempt must surface the
- * HONEST refusal toast, never the login window (the 401 affordance, which
- * would promise a continuation the device can never run) and never a
- * mutation POST.
+ * UI-22 device beat, scope v1 (ADR 0012 Amendment): a PAIRED device with
+ * the `read` scope (localStorage `vesmaro.deviceToken` +
+ * `vesmaro.deviceScope`) cannot mutate — every mutation is a server 403
+ * verdict — so the attempt surfaces the HONEST refusal toast, never the
+ * login window (the 401 affordance) and never a mutation POST.
  */
-describe("paired device (UI-22): mutation attempt → honest toast, no login window", () => {
+describe("paired device (UI-22, read scope): mutation attempt → honest toast, no login window", () => {
   beforeEach(() => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   });
 
-  it("create on a device-bound browser: deviceForbidden toast, window stays closed, zero mutation POSTs", { timeout: 20000 }, async () => {
+  it("create on a read-scope device: deviceForbidden toast, window stays closed, zero mutation POSTs", { timeout: 20000 }, async () => {
     localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, "mnd_paired-device");
+    localStorage.setItem(DEVICE_SCOPE_STORAGE_KEY, "read");
     // No owner session: the boot probe (GET /api/auth/ui-token) refuses.
     // The mutation POST route would 403 — if it is EVER called the test
     // fails on the POST assertion below, which is the point.
@@ -585,7 +588,7 @@ describe("paired device (UI-22): mutation attempt → honest toast, no login win
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
 
-    // Create without a ui token on a paired device…
+    // Create without a ui token on a paired READ-scope device…
     const createButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Task",
     );
@@ -608,7 +611,7 @@ describe("paired device (UI-22): mutation attempt → honest toast, no login win
     expect(document.querySelector('[data-testid="login-dialog"]')).toBeNull();
     // …the honest refusal toast lands instead…
     expect(container.textContent).toContain("Actions from this device are closed");
-    expect(container.textContent).toContain("v0 — read-only");
+    expect(container.textContent).toContain("This device's scope is read-only");
     // …and the request never left the browser: the 403 is announced up
     // front, not fetched.
     const mutationPosts = fetchImpl.mock.calls.filter(
@@ -616,6 +619,109 @@ describe("paired device (UI-22): mutation attempt → honest toast, no login win
         String(input).endsWith("/api/tasks") && (init?.method ?? "GET") === "POST",
     );
     expect(mutationPosts).toHaveLength(0);
+  });
+});
+
+/**
+ * Scope v1 (ADR 0012 Amendment): a `control` device (the DEFAULT since the
+ * archcom ruling) mutates the board with NO owner session — the POST flies,
+ * the board folds the answer in, and no refusal toast appears. (Closed
+ * routes still answer 403 — the server's own honest per-action detail.)
+ */
+describe("paired device (scope v1, control): mutation runs without an owner session", () => {
+  beforeEach(() => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
+
+  it("create on a control-scope device: POST flies, no toast, no window", { timeout: 20000 }, async () => {
+    localStorage.setItem(DEVICE_TOKEN_STORAGE_KEY, "mnd_paired-device");
+    // no scope key — the pre-scope-v1 storage shape; reads as control
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/ui-token")) {
+        return new Response(null, { status: (init?.method ?? "GET") === "GET" ? 401 : 204 });
+      }
+      if (url.endsWith("/api/tasks") && (init?.method ?? "GET") === "POST") {
+        return jsonResponse(
+          {
+            id: "t-device-1", col: "open", title: "Device task",
+            summary: "", spec: "", status: "open", priority: "normal",
+            env: "unknown", agents: [], specialists: [], project: "",
+            memory_ids: [], mnemos_tags: [], archived: false,
+            position: 1, created_at: "2026-09-23T00:00:00+00:00",
+            updated_at: "2026-09-23T00:00:00+00:00", validating_since: "",
+            archived_from: "",
+          },
+          201,
+        );
+      }
+      return jsonResponse(boardPayload);
+    });
+    const gateway = new BoardAdapter({ baseUrl: "/api", fetchImpl: fetchImpl as never });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await queryClient.prefetchQuery({
+      queryKey: keys.tasks.board(),
+      queryFn: () => gateway.board(),
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <I18nProvider initialLang="en">
+          <GatewayContext.Provider value={gateway}>
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <UiTokenProvider>
+                  <MemoryRouter initialEntries={["/tasks"]}>
+                    <TaskListPage />
+                    <ToastViewport />
+                  </MemoryRouter>
+                </UiTokenProvider>
+              </ToastProvider>
+            </QueryClientProvider>
+          </GatewayContext.Provider>
+        </I18nProvider>,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    const createButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Task",
+    );
+    await act(async () => {
+      createButton?.click();
+    });
+    const textarea = document.querySelector("textarea");
+    await act(async () => {
+      setInputValue(textarea as HTMLTextAreaElement, "Device task");
+    });
+    await act(async () => {
+      buttonByText(document.body, "Create task")?.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+
+    // the mutation LEFT the browser and succeeded…
+    const mutationPosts = fetchImpl.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/api/tasks") && (init?.method ?? "GET") === "POST",
+    );
+    expect(mutationPosts).toHaveLength(1);
+    const [, postInit] = mutationPosts[0] as [RequestInfo | URL, RequestInit];
+    expect(new Headers(postInit?.headers).get("Authorization")).toBe(
+      "Bearer mnd_paired-device",
+    );
+    // …no refusal toast, no login window
+    expect(container.textContent).not.toContain("Actions from this device are closed");
+    expect(document.querySelector('[data-testid="login-dialog"]')).toBeNull();
   });
 });
 

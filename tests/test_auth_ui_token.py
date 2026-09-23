@@ -335,10 +335,15 @@ class TestReviewGaps:
         assert r.status_code == 204
         assert "set-cookie" not in r.headers
 
-    def test_device_token_plus_cookie_on_mutation_403(self, client,
-                                                      split_tokens, ui_auth):
-        """mnd_ priority: the device scope middleware 403s BEFORE any leg —
-        a valid owner cookie cannot lend the device a write."""
+    def test_device_token_plus_cookie_on_closed_mutation_403(self, client,
+                                                             split_tokens,
+                                                             ui_auth):
+        """mnd_ priority on a CLOSED route (scope v1, ADR 0012 Amendment):
+        the device scope middleware 403s BEFORE any leg — a live owner
+        cookie in the jar cannot lend the device rights its scope does not
+        hold. (On scope-ALLOWED routes the device needs no lending: its own
+        token carries the mutation — the control matrix in
+        test_device_scope_v1.py.)"""
         assert _verify(client, UI_TOKEN).status_code == 200
         p = client.post("/api/pairing", json={"device_name": "gap-mnd"},
                         headers=ui_auth).json()
@@ -349,7 +354,9 @@ class TestReviewGaps:
         issued = client.post("/api/pairing/exchange",
                              json={"code": p["code"], "device_name": "gap-mnd"})
         mnd = issued.json()["device_token"]
-        r = client.post("/api/tasks", json={"title": "gap-mnd"},
+        # agent-loop mutation: hard-deny for EVERY device scope; the
+        # owner cookie rides along in the jar and must stay irrelevant
+        r = client.post("/api/assignments", json={},
                         headers={"Authorization": f"Bearer {mnd}"})
         assert r.status_code == 403
         # Cleanup: the issued device must not soak a quota slot for the

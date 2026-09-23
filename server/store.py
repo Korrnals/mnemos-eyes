@@ -255,8 +255,14 @@ PAIRING_TTL_S = 180.0                 # one TTL for code/QR/verify (§6)
 PAIRING_VERIFY_DIGITS = 4             # anti-mistake screen check (§3.5)
 DEVICE_MAX_ACTIVE = 5                 # ≤5 active device sessions (§5)
 DEVICE_SLIDING_TTL_S = 30 * 86400.0   # sliding expiry while active (§5)
+# Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): control devices ride a
+# SHORTER sliding window — 7 days of inactivity lapses the session
+# (Security: a stolen mutation-capable phone must age out fast); the hard
+# 90-day cap is unchanged for both scopes.
+DEVICE_SLIDING_TTL_S_CONTROL = 7 * 86400.0
 DEVICE_HARD_TTL_S = 90 * 86400.0      # absolute cap regardless of activity
 DEVICE_TOKEN_PREFIX = "mnd_"
+DEVICE_SCOPES = ("read", "control")   # v0 read; v1 adds control (Amendment)
 PAIRING_STATES = frozenset({
     "created", "scanned", "confirmed", "issued", "expired", "revoked",
 })
@@ -1016,9 +1022,35 @@ class Store:
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as db:
             db.executescript(_SCHEMA)
+            self._migrate_device_scope_v1(db)
             self._migrate(db)
             self._seed_if_empty(db)
             self._seed_harnesses(db)
+
+    def _migrate_device_scope_v1(self, db: sqlite3.Connection) -> None:
+        """Scope v1 data migration (ADR 0012 Amendment, archcom
+        2026-09-23): every ACTIVE read-scope device session flips to
+        `control` IN PLACE — already-paired devices gain board mutations
+        without re-pairing and without re-issuing tokens (the hash-only
+        rows stay valid; the owner's ruling: «управление — центральная
+        фишка vesmaro-eyes; лишать управления подключённое через QR
+        устройство глупо и бессмысленно»).
+
+        Idempotent: a second boot finds no active `read` rows and writes
+        nothing (the UPDATE is its own completion marker). Revoked and
+        expired sessions keep their historical scope — the audit trail
+        must not be rewritten for sessions that can never act again.
+        Deliberately NO SEED_VERSION bump (additive-evolution rule: the
+        seed check WIPES tasks on a version change). The DB column
+        DEFAULT stays 'read' — fail-safe for any INSERT that bypasses
+        the store; new pairings default to control at the STORE layer
+        (create_pairing_request)."""
+        cur = db.execute(
+            "UPDATE device_sessions SET scope='control' "
+            "WHERE state='active' AND scope='read'")
+        if cur.rowcount:
+            self._log(db, "device.scope-migrated", None,
+                      {"migrated": cur.rowcount, "to": "control"})
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, timeout=10)
@@ -1260,7 +1292,12 @@ class Store:
         return t
 
     # ---------------------------------------------------------------- write
-    def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_task(self, payload: dict[str, Any],
+                    actor: str = "") -> dict[str, Any]:
+        """``actor`` (scope v1, ADR 0012 Amendment): optional task-history
+        attribution for the task.created event — `device:<id> <name>` when
+        the mutation rode a paired device's mnd_ token; empty for the
+        ui/machine legs (their history shape is unchanged)."""
         col = payload.get("col", "open")
         if col not in VALID_STATUSES:
             raise ValueError(f"invalid col: {col}")
@@ -1317,10 +1354,14 @@ class Store:
                     now, now,
                 ),
             )
-            self._log(db, "task.created", task_id, {"col": col, "status": status})
+            payload: dict[str, Any] = {"col": col, "status": status}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.created", task_id, payload)
         return self.task(task_id)  # type: ignore[return-value]
 
-    def move_task(self, task_id: str, col: str, position: int | None = None) -> dict[str, Any] | None:
+    def move_task(self, task_id: str, col: str, position: int | None = None,
+                  actor: str = "") -> dict[str, Any] | None:
         """Kanban move (BE-10 semantics + the WF-1 v1 transition mirror).
 
         - ``status`` re-derives from COLUMN_STATUS_MAP: pre-validation
@@ -1371,11 +1412,14 @@ class Store:
                     "UPDATE tasks SET col=?, status=?, position=?, updated_at=? WHERE id=?",
                     (col, status, position, _now(), task_id),
                 )
-            self._log(db, "task.moved", task_id, {"from": src, "to": col})
+            payload: dict[str, Any] = {"from": src, "to": col}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.moved", task_id, payload)
         return self.task(task_id)
 
     def update_task(self, task_id: str, patch: dict[str, Any],
-                    force: bool = False) -> dict[str, Any] | None:
+                    force: bool = False, actor: str = "") -> dict[str, Any] | None:
         """Content/status PATCH (BE-12 semantics).
 
         Allow-listed keys only — anything else (notably ``col``) is silently
@@ -1444,6 +1488,8 @@ class Store:
                 # forced edits must stay auditable: the override lands in
                 # the same task.updated event as the field list
                 payload["forced"] = True
+            if actor:
+                payload["actor"] = actor[:120]
             self._log(db, "task.updated", task_id, payload)
         return self.task(task_id)
 
@@ -1766,9 +1812,10 @@ class Store:
         return True
 
     # ------------------------------------------------------------- archive
-    def archive_task(self, task_id: str) -> bool:
+    def archive_task(self, task_id: str, actor: str = "") -> bool:
         """Archive a task, remembering its current column in ``archived_from``
-        (BE-11b) so unarchive can put it back."""
+        (BE-11b) so unarchive can put it back. ``actor``: optional
+        task-history attribution (scope v1 device leg)."""
         with self._lock, self._conn() as db:
             row = db.execute(
                 "SELECT col FROM tasks WHERE id=? AND archived=0",
@@ -1780,10 +1827,13 @@ class Store:
                 "UPDATE tasks SET archived=1, archived_from=col, updated_at=? WHERE id=?",
                 (_now(), task_id),
             )
-            self._log(db, "task.archived", task_id, {"from": row["col"]})
+            payload: dict[str, Any] = {"from": row["col"]}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.archived", task_id, payload)
         return True
 
-    def unarchive_task(self, task_id: str) -> dict[str, Any] | None:
+    def unarchive_task(self, task_id: str, actor: str = "") -> dict[str, Any] | None:
         """Restore an archived task (BE-11b). It returns to its pre-archive
         column (``archived_from``); rows archived before that column existed
         (``archived_from=''``) — or carrying a value outside the column
@@ -1808,7 +1858,10 @@ class Store:
                 "UPDATE tasks SET archived=0, col=?, status=?, updated_at=? WHERE id=?",
                 (col, COLUMN_STATUS_MAP[col], _now(), task_id),
             )
-            self._log(db, "task.unarchived", task_id, {"to": col})
+            payload: dict[str, Any] = {"to": col}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.unarchived", task_id, payload)
         return self.task(task_id)
 
     def archived_tasks(self, q: str = "", status: str = "", col: str = "",
@@ -3051,7 +3104,7 @@ class Store:
                 and _iso_past(row["expires_at"]))
 
     def create_pairing_request(
-        self, *, created_by: str = "owner", scope: str = "read",
+        self, *, created_by: str = "owner", scope: str = "control",
         ttl_s: float = PAIRING_TTL_S, device_name: str = "",
     ) -> tuple[dict[str, Any], str]:
         """Mint a pairing request (ADR 0012 §2.1). Returns (public row,
@@ -3061,7 +3114,14 @@ class Store:
         ``device_name`` is an optional owner-side label shown on the panel
         BEFORE any scan; the device's first exchange overwrites it with
         its own self-asserted name (§3.6 — that is the string the owner
-        confirms against)."""
+        confirms against).
+
+        Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): new pairings
+        default to `control` — the paired device manages the board. The
+        scope must be decided at the STORE layer, not the schema: the
+        DB column DEFAULT stays 'read' as the fail-safe for INSERTs that
+        bypass this method. `read` stays available explicitly (QA matrix,
+        least-privilege pairings)."""
         code = secrets.token_urlsafe(16)          # 128-bit urlsafe
         verify = f"{secrets.randbelow(10 ** PAIRING_VERIFY_DIGITS):0{PAIRING_VERIFY_DIGITS}d}"
         now = datetime.now(timezone.utc)
@@ -3283,11 +3343,18 @@ class Store:
                     "SELECT 1 FROM device_sessions WHERE id=?",
                     (device_id,)).fetchone():
                 device_id = "dev-" + secrets.token_hex(6)
+            # Scope v1 (ADR 0012 Amendment): the SLIDING window follows the
+            # pairing's scope — control 7 d, read 30 d; the hard 90-day cap
+            # is set below for both. An unknown scope value rides the read
+            # window (fail-safe, same as the guard's scope fallback).
+            scope = row["scope"] if row["scope"] == "control" else "read"
+            sliding = (DEVICE_SLIDING_TTL_S_CONTROL if scope == "control"
+                       else DEVICE_SLIDING_TTL_S)
             device = {
                 "id": device_id, "name": name, "scope": row["scope"],
                 "token_hash": token_hash, "created_at": now_s,
                 "last_seen_at": now_s,
-                "expires_at": _iso_in(DEVICE_SLIDING_TTL_S, now),
+                "expires_at": _iso_in(sliding, now),
                 "hard_expires_at": _iso_in(DEVICE_HARD_TTL_S, now),
                 "state": "active", "ua": (ua or "")[:200],
                 "ip": (ip or "")[:64], "last_seen": now_s,
@@ -3354,9 +3421,12 @@ class Store:
         lookup, constant-time compare. Revoked / hard-TTL-passed /
         sliding-TTL-lapsed tokens answer None (401 upstream) and are
         lazily flipped to state='expired' when the clock says so. A valid
-        active token slides expires_at forward (30 d) and ticks
-        last_seen/ua/ip — one write per authenticated request, the
-        executor presence-tick pattern."""
+        active token slides expires_at forward — 7 d for control scope,
+        30 d for read (scope v1, ADR 0012 Amendment) — and ticks
+        last_seen/ua/ip: one write per authenticated request, the
+        executor presence-tick pattern. The sliding UPDATE deliberately
+        never touches the scope column: the row's scope is set at issue
+        (or by the v1 data migration) and nothing here may rewrite it."""
         if not token.startswith(DEVICE_TOKEN_PREFIX):
             return None
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -3380,11 +3450,13 @@ class Store:
                 return None
             if row["state"] != "active":
                 return None
+            sliding = (DEVICE_SLIDING_TTL_S_CONTROL
+                       if row["scope"] == "control" else DEVICE_SLIDING_TTL_S)
             db.execute(
                 """UPDATE device_sessions
                    SET last_seen_at=?, last_seen=?, expires_at=?, ua=?, ip=?
                    WHERE id=? AND state='active'""",
-                (now_s, now_s, _iso_in(DEVICE_SLIDING_TTL_S, now),
+                (now_s, now_s, _iso_in(sliding, now),
                  (ua or "")[:200], (ip or "")[:64], row["id"]))
             return self._device_public(row)
 

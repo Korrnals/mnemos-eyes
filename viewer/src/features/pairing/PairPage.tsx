@@ -123,15 +123,17 @@ export function PairPage() {
           if (isAwaiting(result)) {
             setState({ phase: "awaiting", verify: result.verify });
           } else {
-            // ADR 0012 §5: the token's home is THIS device — the identity is
-            // persisted the moment the exchange answers, so «Начать работу»
-            // lands on a working read-only board with zero copy/paste. The
-            // on-screen copy button stays as the explicit-transfer path
-            // (another app/PWA on the same device).
+            // ADR 0012 §5 + Amendment (scope v1): the token's home is THIS
+            // device — the identity is persisted the moment the exchange
+            // answers (scope included — new pairings default to `control`),
+            // so «Начать работу» lands on a working board with zero
+            // copy/paste. The on-screen copy button stays as the
+            // explicit-transfer path (another app/PWA on the same device).
             saveDeviceIdentity({
               token: result.device_token,
               deviceId: result.device_id,
               deviceName: name.trim(),
+              scope: result.scope === "read" ? "read" : "control",
             });
             setState({ phase: "issued", issued: result });
           }
