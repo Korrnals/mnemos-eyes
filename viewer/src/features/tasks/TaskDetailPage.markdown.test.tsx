@@ -129,6 +129,14 @@ async function waitFor(what: string, probe: () => boolean): Promise<void> {
   }
 }
 
+async function click(target: Element | null | undefined): Promise<void> {
+  expect(target, "interaction target must exist").toBeDefined();
+  await act(async () => {
+    (target as HTMLButtonElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
 beforeEach(() => {
   sessionStorage.clear();
   container = null;
@@ -248,5 +256,68 @@ describe("TaskDetailPage × TextEngine (UI-27)", () => {
     expect(mdHeadings).toEqual([]);
     expect(labeledSections.some((section) => section.querySelector("strong"))).toBe(false);
     expect(labeledSections.some((section) => section.querySelector("li"))).toBe(false);
+  });
+});
+
+/**
+ * Owner clamp directive: every disclosure clamps long documents. The
+ * report row is a native <details> — its body renders clamped with the
+ * measured «Show full text» affordance (button only when the content
+ * actually overflows max-h-48). Overflow is simulated the same way the
+ * TextEngine unit tests do: prototype height stubs (happy-dom lays out
+ * nothing).
+ */
+describe("TaskDetailPage reports tab — disclosure clamp", () => {
+  const proto = HTMLElement.prototype as unknown as Record<string, PropertyDescriptor | undefined>;
+  let savedOffset: PropertyDescriptor | undefined;
+  let savedClient: PropertyDescriptor | undefined;
+
+  function stubOverflow(contentHeight: number, boxHeight: number): void {
+    savedOffset = Object.getOwnPropertyDescriptor(proto, "offsetHeight");
+    savedClient = Object.getOwnPropertyDescriptor(proto, "clientHeight");
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get: () => contentHeight,
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get: () => boxHeight,
+    });
+  }
+
+  function restoreOverflow(): void {
+    delete (HTMLElement.prototype as { offsetHeight?: unknown }).offsetHeight;
+    delete (HTMLElement.prototype as { clientHeight?: unknown }).clientHeight;
+    if (savedOffset) Object.defineProperty(HTMLElement.prototype, "offsetHeight", savedOffset);
+    if (savedClient) Object.defineProperty(HTMLElement.prototype, "clientHeight", savedClient);
+  }
+
+  afterEach(() => {
+    restoreOverflow();
+  });
+
+  it("overflowing report body shows «Show full text»; expanding removes the cut", async () => {
+    stubOverflow(500, 192);
+    const el = await mountTask("reports");
+    const details = el.querySelector("details");
+    expect(details, "report disclosure renders").not.toBeNull();
+    expect(details!.querySelector(".max-h-48"), "clamp box inside the disclosure").not.toBeNull();
+    await waitFor("expand button", () => Boolean(details!.querySelector("button")));
+    const button = details!.querySelector("button");
+    expect(button?.textContent).toBe("Show full text");
+    await click(button!);
+    expect(details!.querySelector(".max-h-48")).toBeNull();
+    expect(details!.querySelector("button")).toBeNull();
+    // The body itself stays rendered after the expand.
+    expect(details!.querySelector("h2")?.textContent).toBe("Итог");
+  });
+
+  it("report body that fits shows no expand button (clamp box still caps)", async () => {
+    // No stubs: happy-dom reports zero heights, so nothing «overflows».
+    const el = await mountTask("reports");
+    const details = el.querySelector("details");
+    expect(details, "report disclosure renders").not.toBeNull();
+    expect(details!.querySelector(".max-h-48")).not.toBeNull();
+    expect(details!.querySelector("button")).toBeNull();
   });
 });

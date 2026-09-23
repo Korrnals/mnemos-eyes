@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { TableRowSkeleton } from "@/components/skeletons/Skeletons";
+import { TextEngine } from "@/components/TextEngine";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { ArchivePage, BoardTask } from "@/gateway/boardTypes";
@@ -311,12 +312,36 @@ function ArchiveRow({
         </span>
       </summary>
       <div className="mt-2 space-y-2 border-t border-border-subtle pt-2">
-        <p className="whitespace-pre-wrap text-xs text-foreground-secondary">
-          {task.summary || "—"}
-        </p>
-        <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-elevated p-2 font-mono text-xs text-foreground-secondary">
-          {task.spec || "—"}
-        </pre>
+        {/* UI-27 + owner clamp directive: the expanded archive row is a
+         * disclosure — summary and spec are author text and render through
+         * the TextEngine primitive with the measured clamp (long documents
+         * cut at max-h-48 behind «показать полностью», not an unbounded
+         * wall). Plain text keeps the legacy look; the spec keeps its well
+         * box. */}
+        {task.summary ? (
+          <TextEngine
+            text={task.summary}
+            variant="compact"
+            clamp
+            className="text-xs text-foreground-secondary"
+          />
+        ) : (
+          <p className="text-xs text-foreground-secondary">—</p>
+        )}
+        {task.spec ? (
+          <div className="rounded-md bg-elevated p-2">
+            <TextEngine
+              text={task.spec}
+              variant="full"
+              clamp
+              className="font-mono text-xs text-foreground-secondary"
+            />
+          </div>
+        ) : (
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-elevated p-2 font-mono text-xs text-foreground-secondary">
+            —
+          </pre>
+        )}
         <p className="flex flex-wrap gap-x-4 text-xs text-foreground-muted">
           <span>
             {t("tasks.detailsProject")}: {task.project || "—"}
