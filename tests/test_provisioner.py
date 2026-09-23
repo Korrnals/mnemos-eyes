@@ -31,6 +31,7 @@ QA matrix:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
 
@@ -57,10 +58,13 @@ class FakeResult:
 
 
 class FakeConn:
-    def __init__(self, exit_status: int = 0, stderr: str = "") -> None:
+    def __init__(self, exit_status: int = 0, stderr: str = "",
+                 preflight_exit: int = 0) -> None:
         self.exit_status = exit_status
         self.stderr = stderr
+        self.preflight_exit = preflight_exit
         self.commands: list[str] = []
+        self.uploads: list[tuple[str, bytes]] = []
         self.closed = False
         # simulated registration leg: set per connect by the fixture —
         # running the bootstrap spends the enrollment IN THE STORE exactly
@@ -71,7 +75,7 @@ class FakeConn:
     async def run(self, command: str) -> FakeResult:
         self.commands.append(command)
         if command == "sudo -n true":  # typed sudo preflight (P2-4)
-            return FakeResult(0)
+            return FakeResult(self.preflight_exit)
         if self.registration.get("enrollment_id"):
             import sqlite3
             from conftest import DATA_DIR
@@ -82,6 +86,12 @@ class FakeConn:
             db.commit()
             db.close()
         return FakeResult(self.exit_status, self.stderr)
+
+    async def upload_file(self, remote_path: str, data: bytes) -> None:
+        self.uploads.append((remote_path, data))  # the CA leg (P2-3)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 @pytest.fixture(autouse=True)
@@ -94,11 +104,12 @@ def fake_provisioner(app_module, monkeypatch):
     connect_calls: list[JobFacts] = []
     flags = {"simulate_registration": True}
 
-    async def fake_connect(facts: JobFacts, host_key_check):
-        # commit-scoped arity: until the transport rewrite (P1-2) the worker
-        # passes a 1-arg validator closure; the fixture follows the worker
+    async def fake_connect(facts: JobFacts, policy):
+        # the REAL contract arity (P1-2): the transport decides the host
+        # key via a policy exposing validate(host, addr, port, key) — the
+        # SSHClient.validate_host_public_key signature asyncssh calls
         connect_calls.append(facts)
-        host_key_check(FakeKey())
+        policy.validate(facts.host, "127.0.0.1", facts.port, FakeKey())
         if flags.get("simulate_registration"):
             conn_holder["conn"].registration = {"enrollment_id": facts.enrollment_id}
         return conn_holder["conn"]
@@ -168,12 +179,19 @@ class TestHappyPath:
         row = _poll_until(done)
         steps_text = " ".join(json.loads(row["steps"]))
         assert "bootstrap" in steps_text
-        # the FROZEN one-liner: url, token, name, harness — verbatim
-        cmd = _bootstrap_command(fake_provisioner["conn"]["conn"])
-        assert cmd.startswith(
-            "curl -kfsSL https://b.example/api/poller/bootstrap.sh")
+        # the FROZEN one-liner over PINNED TLS (P2-3): the CA rides the
+        # SSH channel, curl carries --cacert and never -k
+        conn = fake_provisioner["conn"]["conn"]
+        cmd = _bootstrap_command(conn)
+        assert cmd.startswith("curl --cacert /tmp/vesmaro-lab-ca-")
+        assert " -fsSL https://b.example/api/poller/bootstrap.sh" in cmd
+        curl_part = cmd.split("|")[0]
+        assert "-kfsSL" not in curl_part and " -k " not in curl_part
         assert "| sudo bash -s -- --url https://b.example --token mne_" in cmd
         assert "--name vps-1 --harness zcode" in cmd
+        # the CA upload happened over the SSH channel: job-scoped tmp path
+        assert conn.uploads and conn.uploads[0][0].startswith("/tmp/vesmaro-lab-ca-")
+        assert conn.uploads[0][1].startswith(b"-----BEGIN CERTIFICATE-----")
         # the enrollment was consumed
         enr = client.get(f"/api/executors/provision/{job_id}",
                          headers=ui_auth).json()["enrollment"]
@@ -189,46 +207,103 @@ class TestHappyPath:
         assert "provisioning.host_key_pinned" in kinds
         assert "provisioning.ok" in kinds
 
-    @pytest.mark.skip(reason="WIP M1.x: the in-loop mismatch simulation needs "
-                             "an in-loop cancellation fixture (hangs pytest "
-                             "shutdown); pin enforcement itself is covered by "
-                             "the mismatch unit path in provisioner.py")
-    def test_second_job_enforces_the_pin(self, client, ui_auth, fake_provisioner):
+    def test_second_job_enforces_the_pin(self, client, ui_auth,
+                                         fake_provisioner, app_module):
+        # the TOFU core: job 1 pins the presented key; job 2 on the same
+        # host presents a DIFFERENT key — the policy rejects it and the
+        # transport (mimicking asyncssh's False -> HostKeyNotVerifiable)
+        # fails the job with the typed host_key_mismatch
         r = _provision(client, ui_auth, host="enforce-1")
         assert r.status_code == 202
         first_id = r.json()["job_id"]
         _poll_until(lambda: _job(client, ui_auth, first_id, state="done"))
-        # a DIFFERENT host key is presented now (the conn holder is replaced)
+
         class OtherKey:
             def as_bytes(self) -> bytes:
                 return b"other-key"
 
-        fake_provisioner["conn"]["conn"] = FakeConn(0)
-        # inject the mismatching key via the validator
-        old = fake_provisioner["connect"]
-
-        async def connect_with_other_key(facts, host_key_check):
-            host_key_check(OtherKey())
+        async def connect_other_key(facts, policy):
+            if not policy.validate(facts.host, "127.0.0.1", facts.port,
+                                   OtherKey()):
+                raise prov.ProvisioningError(
+                    "host_key_mismatch",
+                    f"host key {policy.presented_fingerprint} does not match "
+                    f"the pinned/expected {policy.expected}")
             return fake_provisioner["conn"]["conn"]
 
-        fake_provisioner["connect"] = connect_with_other_key
-        # the pin from job 1 is enforced → mismatch
-        import asyncio
         p = prov._provisioner
-        facts = JobFacts(job_id="pj-x", host="enforce-1", port=22, auth_kind="alias",
-                         secret=None, passphrase=None, username="",
-                         harness_hint="zcode", enrollment_id="enr-x",
-                         executor_name="vps-1", board_url="https://b.example",
-                         bootstrap_token=Redacted("mne_t"),
-                         expected_host_key_fingerprint="")
-        with_err = None
-        try:
-            asyncio.run(p._guarded_run(facts))
-        except Exception as exc:  # noqa: BLE001
-            with_err = exc
-        row = _job(client, ui_auth, "pj-x")
+        p._ssh_connect = connect_other_key
+        # the job ROW must exist for the verdict (the route normally mints
+        # it atomically with the facts)
+        row0 = app_module.store.create_provision_job(
+            host="enforce-1", port=22, auth_kind="alias", key_fingerprint="",
+            harness_hint="zcode", board_url_for_host="https://b.example",
+            enrollment_id="enr-x")
+        asyncio.run(p._guarded_run(_facts(job_id=row0["id"], host="enforce-1",
+                                          enrollment_id="enr-x")))
+        row = _job(client, ui_auth, row0["id"])
         assert row["state"] == "failed"
         assert row["error_code"] == "host_key_mismatch"
+        kinds = [k for k, _ in fake_provisioner["audits"]]
+        assert "provisioning.failed" in kinds
+
+
+# --------------------------------------------------- transport (P1-2/P2-3/P2-4)
+class TestTransport:
+    def test_sudo_preflight_fail_is_typed(self, client, ui_auth,
+                                          fake_provisioner):
+        fake_provisioner["conn"]["conn"] = FakeConn(preflight_exit=1)
+        r = _provision(client, ui_auth, host="sudo-fail-1")
+        job_id = r.json()["job_id"]
+        row = _poll_until(lambda: _job(client, ui_auth, job_id,
+                                       state="failed"))
+        assert row["error_code"] == "ssh.sudo_required"
+        # nothing was installed: the bootstrap command never ran
+        assert not [c for c in
+                    fake_provisioner["conn"]["conn"].commands
+                    if c.startswith("curl")]
+
+    def test_missing_ca_fails_closed_without_unpinned_tls(
+            self, client, ui_auth, fake_provisioner, monkeypatch):
+        monkeypatch.delenv("VESMARO_TLS_CA_FILE")
+        r = _provision(client, ui_auth, host="no-ca-1")
+        job_id = r.json()["job_id"]
+        row = _poll_until(lambda: _job(client, ui_auth, job_id,
+                                       state="failed"))
+        assert row["error_code"] == "ca.unavailable"
+        assert not fake_provisioner["conn"]["conn"].uploads
+
+    def test_install_timeout_is_bootstrap_timeout(self, client, ui_auth,
+                                                  fake_provisioner,
+                                                  app_module, monkeypatch):
+        # NOTE: the worker task only progresses inside the loop of the
+        # request that spawned it (TestClient without a context manager
+        # runs a fresh portal per request) — a 30s-hanging install leg
+        # started via the ROUTE would simply be cancelled at request end.
+        # The deterministic way: drive the worker on the test's own loop.
+        conn = FakeConn()
+
+        async def hanging_run(command: str):
+            if command == "sudo -n true":
+                return FakeResult(0)
+            conn.commands.append(command)
+            if command.startswith("rm -f "):  # the tmp-CA cleanup (P2-3)
+                return FakeResult(0)
+            await asyncio.sleep(30)  # the install leg hangs until cancelled
+
+        conn.run = hanging_run  # type: ignore[method-assign]
+        fake_provisioner["conn"]["conn"] = conn
+        monkeypatch.setattr(prov, "INSTALL_TIMEOUT_S", 0.05)
+        row0 = app_module.store.create_provision_job(
+            host="install-timeout-1", port=22, auth_kind="alias",
+            key_fingerprint="", harness_hint="zcode",
+            board_url_for_host="https://b.example", enrollment_id="enr-it")
+        prov.remember(row0["id"], "enr-it", "mne_t")
+        asyncio.run(prov._provisioner._guarded_run(
+            _facts(job_id=row0["id"], host="install-timeout-1",
+                   enrollment_id="enr-it")))
+        row = _job(client, ui_auth, row0["id"])
+        assert row["error_code"] == "bootstrap.timeout"
 
 
 # --------------------------------------------------- input validation (P1-1)
@@ -291,7 +366,8 @@ class TestInputValidation:
         facts = _facts(job_id="pj-quote", executor_name="x; reboot",
                        harness_hint="z; rm -rf /",
                        board_url="https://b.example/evil $(calc)")
-        cmd = Provisioner.bootstrap_command(facts, "mne_t")
+        cmd = Provisioner.bootstrap_command(
+            facts, "mne_t", ca_path="/tmp/vesmaro-lab-ca-pj-quote.crt")
         # every adversarial value appears ONLY inside single quotes
         assert "--name x; reboot" not in cmd
         assert "--harness z; rm -rf /" not in cmd
@@ -337,8 +413,9 @@ class TestAntiSpray:
 
 
 class _NeverConn:
+    """Kept for the M1.x in-loop cancellation fixture (hang scenarios)."""
+
     async def run(self, command: str):  # hangs until cancelled
-        import asyncio
         await asyncio.sleep(30)
 
     def close(self) -> None:
