@@ -435,6 +435,129 @@ def test_images_vendored_and_refs_rewritten(synced, upstream_repo) -> None:
     assert report["projects"]["fakeproj"]["images"] == ["docs/en/assets/logo.svg"]
 
 
+# --- mermaid label normalization (L1, ME-010, ADR-0020) -----------------------
+
+
+def test_mermaid_literal_newline_labels_become_br() -> None:
+    """Literal `\n` inside mermaid labels → `<br/>` in place."""
+    src = (
+        "```mermaid\n"
+        "flowchart LR\n"
+        "    A[Сырой текст] --> B[Сжатие\\n5-ступенчатый фильтр]\n"
+        "    B --> C[Кэш оригинала\\nпо SHA-256]\n"
+        "```\n"
+    )
+    fixed = sync_docs.normalize_mermaid_labels(src)
+    assert "B[Сжатие<br/>5-ступенчатый фильтр]" in fixed
+    assert "C[Кэш оригинала<br/>по SHA-256]" in fixed
+    assert "\\n" not in fixed
+
+
+def test_mermaid_labels_never_requoted() -> None:
+    """Shape syntax must survive: a cylinder `[(x)]` stays unquoted."""
+    src = (
+        "```mermaid\n"
+        "flowchart TB\n"
+        "    L1[scanner\\nruns] -->|tag| DB[(mnemos store)]\n"
+        "```\n"
+    )
+    fixed = sync_docs.normalize_mermaid_labels(src)
+    assert "DB[(mnemos store)]" in fixed  # cylinder shape preserved
+    assert '"' not in fixed  # no label gained quotes
+    assert "L1[scanner<br/>runs]" in fixed
+
+
+def test_mermaid_block_without_breaks_untouched() -> None:
+    src = "```mermaid\nflowchart TB\n    A[plain] --> B[x]\n```\n"
+    assert sync_docs.normalize_mermaid_labels(src) == src
+
+
+def test_non_mermaid_fences_untouched() -> None:
+    """The `\n` sequence in json/yaml/text fences is DATA — must not change."""
+    json_fence = (
+        "```json\n"
+        '{\n  "compressed_text": "[compressed: a1b2... | 30000→900 chars]\\n'
+        'отфильтрованный контент..."\n}\n'
+        "```\n"
+    )
+    assert sync_docs.normalize_mermaid_labels(json_fence) == json_fence
+    yaml_fence = "```yaml\nccr:\n  ttl_days: 7  # literal \\n stays\n```\n"
+    assert sync_docs.normalize_mermaid_labels(yaml_fence) == yaml_fence
+    text_fence = "```text\n[compressed: <hash> | 1→2]\\n retrieve\n```\n"
+    assert sync_docs.normalize_mermaid_labels(text_fence) == text_fence
+
+
+def test_mermaid_decision_and_edge_labels_untouched() -> None:
+    """Node labels gain `<br/>`; edge labels `|...|` and shapes `{...}` stay."""
+    src = (
+        "```mermaid\n"
+        "flowchart LR\n"
+        "    F[mnemos_retrieve\\nхеш] --> G{query?}\n"
+        "    G -->|да\\nнет| I[FTS5-сниппеты\\nранжированные]\n"
+        "```\n"
+    )
+    fixed = sync_docs.normalize_mermaid_labels(src)
+    assert "F[mnemos_retrieve<br/>хеш]" in fixed
+    assert "{query?}" in fixed
+    # Edge labels: `|да<br/>нет|` is valid mermaid (verified against
+    # mermaid@11.17.2); delimiters stay untouched.
+    assert "|да<br/>нет|" in fixed
+    assert "I[FTS5-сниппеты<br/>ранжированные]" in fixed
+
+
+def test_mermaid_label_transform_is_idempotent() -> None:
+    src = (
+        "```mermaid\n"
+        "flowchart LR\n"
+        "    A[Сырой текст] --> B[Сжатие\\n5-ступенчатый фильтр]\n"
+        "```\n"
+    )
+    once = sync_docs.normalize_mermaid_labels(src)
+    assert sync_docs.normalize_mermaid_labels(once) == once
+
+
+def test_mermaid_normalization_applied_by_sync(tmp_path, config) -> None:
+    repo = tmp_path / "mermaid-upstream"
+    shutil.copytree(str(config["projects"]["fakeproj"]["repo"]), repo)
+    (repo / "docs/en/user/cli-reference.md").write_text(
+        "# CLI reference\n\n"
+        "```mermaid\n"
+        "flowchart LR\n"
+        "    A[Raw text] --> B[Compress\\n5-stage filter]\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    _git(repo, "config", "user.email", "153223100+Korrnals@users.noreply.github.com")
+    _git(repo, "config", "user.name", "Korrnals")
+    _git(repo, "commit", "-qam", "docs: mermaid fence")
+    cfg = copy.deepcopy(config)
+    cfg["projects"]["fakeproj"]["repo"] = str(repo)
+    cfg["projects"]["fakeproj"]["ref"] = _git(repo, "rev-parse", "HEAD")
+    content_out = tmp_path / "c-mermaid"
+    sync_docs.sync(cfg, content_out=content_out, assets_out=tmp_path / "a-mermaid")
+    page = (content_out / "fakeproj" / "en" / "user" / "cli-reference.md").read_text(
+        encoding="utf-8"
+    )
+    assert "B[Compress<br/>5-stage filter]" in page
+    fence = page.split("```mermaid")[1].split("```")[0]
+    assert "\\n" not in fence
+    assert '"' not in fence
+
+
+def test_curated_translation_mermaid_labels_normalized(tmp_path, config) -> None:
+    curated_text = CURATED_TRANSLATION.replace(
+        "Переведённое вводное руководство узла fakemesh.",
+        "```mermaid\nflowchart LR\n    A[Узел\\nфакмеш] --> B[Готово]\n```\n",
+    )
+    _make_curated(tmp_path, curated_text)
+    _run_sync(tmp_path, config)
+    slot = tmp_path / "c" / "fakemesh" / "ru" / "user" / "getting-started.md"
+    page = slot.read_text(encoding="utf-8")
+    assert "A[Узел<br/>факмеш]" in page
+    fence = page.split("```mermaid")[1].split("```")[0]
+    assert "\\n" not in fence
+
+
 # --- clone integrity + drift ---------------------------------------------------
 
 

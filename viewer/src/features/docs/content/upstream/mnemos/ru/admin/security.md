@@ -418,10 +418,10 @@ mnemos search --tags mnemos:decision         # не совпадает с mnemos
 
 ```mermaid
 flowchart TB
-    L1[1. Сканер на write-path\nзапускается на каждом mnemos_add] -->|тег mnemos:no-federate| DB[(mnemos store)]
-    DB -->|настраиваемый интервал| L2[2. Background scanner job\nпересканирует корпус для false negatives\nбудущее: #89]
+    L1[1. Сканер на write-path<br/>запускается на каждом mnemos_add] -->|тег mnemos:no-federate| DB[(mnemos store)]
+    DB -->|настраиваемый интервал| L2[2. Background scanner job<br/>пересканирует корпус для false negatives<br/>будущее: #89]
     L2 -->|найдено чувствительное| DB
-    DB -->|на sync export / pull| L3[3. Moderation pipeline\nфинальная защита на выходе\nвыпущено: #85 parts 1+2a+2b]
+    DB -->|на sync export / pull| L3[3. Moderation pipeline<br/>финальная защита на выходе<br/>выпущено: #85 parts 1+2a+2b]
     L3 -->|sanitized / refuse| OUT[out]
 ```
 

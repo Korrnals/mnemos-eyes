@@ -170,6 +170,36 @@ def normalize_rules(config: dict[str, Any]) -> dict[str, Any]:
     return rules
 
 
+# mermaid labels: a literal two-character `\n` (backslash + 'n') inside an
+# upstream label is an authoring artifact of the source generator. The
+# canonical in-label line break (and what mermaid's own line-splitting
+# handles: rendering-util splits on /\\n|\n|<br\s*\/?>/ — verified against
+# the pinned mermaid@11.17.2) is `<br/>`. Unquoted labels keep their text
+# form: quoting a label to carry `<br/>` would silently change shape
+# syntax (`DB[(mnemos store)]` is a cylinder only unquoted) — so the
+# transform replaces the escape in place and never rewrites label delimiters
+# (ME-010, АРХКОМ ADR-0020 L1 mandate). Deterministic and idempotent:
+# `<br/>` survives a second pass unchanged.
+MERMAID_FENCE_RE = re.compile(r"```mermaid[^\n]*\n(.*?)```", re.DOTALL)
+MERMAID_LABEL_BREAK_RE = re.compile(r"\\n")
+
+
+def normalize_mermaid_labels(text: str) -> str:
+    """Convert literal `\\n` in mermaid labels to `<br/>` (L1, ME-010).
+
+    Applies ONLY inside ```mermaid fences — other fences (json, yaml, text)
+    carry the two-character sequence verbatim as data and must not change.
+    Second run is a no-op: `<br/>` contains no `\\n` sequence.
+    """
+    def fix_block(match: re.Match[str]) -> str:
+        block = match.group(1)
+        if MERMAID_LABEL_BREAK_RE.search(block):
+            return "```mermaid\n" + MERMAID_LABEL_BREAK_RE.sub("<br/>", block) + "```"
+        return match.group(0)
+
+    return MERMAID_FENCE_RE.sub(fix_block, text)
+
+
 # --------------------------------------------------------------------------
 # L1 text transforms
 # --------------------------------------------------------------------------
@@ -475,6 +505,7 @@ def sync(
                     continue
                 raw = source.read_text(encoding="utf-8")
                 body = strip_chrome(raw, rules)
+                body = normalize_mermaid_labels(body)
                 body, applied = apply_overlays(body, overlays, locale, entry_path)
                 stats["overlays_applied"].extend(applied)
                 rewriter = Rewriter(
@@ -584,6 +615,9 @@ def sync(
                 meta, body = split_frontmatter(
                     curated.read_text(encoding="utf-8"), str(curated)
                 )
+                # Curated bodies go through the same L1 mermaid-label rule:
+                # writers are human, the same literal-`\n` slip can land here.
+                body = normalize_mermaid_labels(body)
                 slug = f"{name}/{source_of[: -len(MD_EXT)]}"
                 en_entry = include_entries[source_of]
                 fallback = source_of[: -len(MD_EXT)].replace("-", " ")

@@ -425,10 +425,10 @@ layer does not expose a secret.
 
 ```mermaid
 flowchart TB
-    L1[1. Write-path scanner\nruns on every mnemos_add] -->|tag mnemos:no-federate| DB[(mnemos store)]
-    DB -->|configurable interval| L2[2. Background scanner job\nre-scans corpus for false negatives\nfuture: #89]
+    L1[1. Write-path scanner<br/>runs on every mnemos_add] -->|tag mnemos:no-federate| DB[(mnemos store)]
+    DB -->|configurable interval| L2[2. Background scanner job<br/>re-scans corpus for false negatives<br/>future: #89]
     L2 -->|found sensitive| DB
-    DB -->|on sync export / pull| L3[3. Moderation pipeline\nfinal defense on output\nshipped: #85 parts 1+2a+2b]
+    DB -->|on sync export / pull| L3[3. Moderation pipeline<br/>final defense on output<br/>shipped: #85 parts 1+2a+2b]
     L3 -->|sanitized / refuse| OUT[out]
 ```
 
