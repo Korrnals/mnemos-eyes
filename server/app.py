@@ -670,7 +670,7 @@ COLUMN_RU = {
 # route on server-loaded /docs (F5/deep-link). Swagger stays reachable at
 # /api/docs; board mode keeps the historical /docs.
 _docs_url = "/api/docs" if ROOT_APP == "app" else "/docs"
-app = FastAPI(title="vesmaro-eyes", version="1.35.0", lifespan=lifespan,
+app = FastAPI(title="vesmaro-eyes", version="1.36.0", lifespan=lifespan,
               docs_url=_docs_url)
 
 
