@@ -517,7 +517,18 @@ function TaskTableRow({
   );
 }
 
-/** Mobile card-row: badges + title + meta (same fields as the table). */
+/**
+ * Mobile card-row: badges + title + meta (same fields as the table).
+ *
+ * ME-008: the card anchor and the active-assignment badge anchor are
+ * SIBLINGS — an `<a>` inside an `<a>` is invalid HTML (browsers may
+ * reparent it) and breaks link semantics/a11y. Same structure as the
+ * kanban card (TaskBoardCard): the card link owns the title/meta and
+ * stretches its pointer hit-area over the whole card via its ::after
+ * (the card root is the positioned ancestor), while the badge stays an
+ * independent link to the task's «Исполнение» tab — two honest targets,
+ * one tab stop each. `relative z-10` lifts the badge above that overlay.
+ */
 function TaskCardRow({
   task,
   lang,
@@ -534,14 +545,7 @@ function TaskCardRow({
   const location = useLocation();
   return (
     <div className="relative flex min-h-row items-start gap-2">
-      <Link
-        to={withReturn(
-          `/tasks/${encodeURIComponent(task.id)}`,
-          location.pathname,
-          location.search,
-        )}
-        className="flex min-h-row flex-1 flex-col gap-1 rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well transition-colors duration-instant hover:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
-      >
+      <div className="relative flex min-h-row flex-1 flex-col gap-1 rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well transition-colors duration-instant hover:border-iris-bright focus-within:border-iris-bright/60 cursor-pointer">
         <span className="flex flex-wrap items-center gap-1.5">
           <Badge variant={priorityBadgeVariant(task.priority)}>
             {t(priorityLabelKey(task.priority))}
@@ -549,7 +553,9 @@ function TaskCardRow({
           <Badge variant={statusBadgeVariant(task.status)}>
             {t(statusLabelKey(task.status))}
           </Badge>
-          <ActiveAssignmentBadge taskId={task.id} />
+          <span className="relative z-10">
+            <ActiveAssignmentBadge taskId={task.id} />
+          </span>
           {reportCount ? (
             <span className="inline-flex items-center gap-0.5 text-xs text-foreground-muted">
               <MessageSquare className="size-3" aria-hidden="true" />
@@ -557,13 +563,22 @@ function TaskCardRow({
             </span>
           ) : null}
         </span>
-        <span className="font-medium">{task.title}</span>
-        <span className="flex flex-wrap gap-x-3 text-xs text-foreground-secondary">
-          <span>{task.project || t("tasks.noProject")}</span>
-          <span>{(task.agents ?? []).join(", ") || "—"}</span>
-          <span>{formatTaskDate(task.updated_at, lang)}</span>
-        </span>
-      </Link>
+        <Link
+          to={withReturn(
+            `/tasks/${encodeURIComponent(task.id)}`,
+            location.pathname,
+            location.search,
+          )}
+          className="flex flex-col gap-1 font-medium after:absolute after:inset-0 after:rounded-md after:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+        >
+          <span>{task.title}</span>
+          <span className="flex flex-wrap gap-x-3 text-xs font-normal text-foreground-secondary">
+            <span>{task.project || t("tasks.noProject")}</span>
+            <span>{(task.agents ?? []).join(", ") || "—"}</span>
+            <span>{formatTaskDate(task.updated_at, lang)}</span>
+          </span>
+        </Link>
+      </div>
       {showMenu ? <TaskRowMenu task={task} /> : null}
     </div>
   );

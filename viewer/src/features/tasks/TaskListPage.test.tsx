@@ -195,4 +195,31 @@ describe("TaskListPage (mock adapter)", () => {
     // No mutation affordances outside the mutation-capable adapters.
     expect(html).not.toContain("Actions for task");
   });
+
+  it("ME-008: card and badge nav targets survive the sibling split (SSR)", async () => {
+    // The mobile card-row used to nest the active-assignment <a> inside the
+    // card <a>. The split keeps BOTH honest targets: card/title → the task,
+    // badge → its «Исполнение» tab (UI-18 pair 6, source-aware return).
+    // DOM-validity itself is pinned in TaskListPage.domNesting.test.tsx —
+    // SSR renderToString does not run React's validateDOMNesting.
+    const html = await renderTasks(
+      new MockAdapter({ latency: false }),
+      "/tasks",
+      async (client, gateway) => {
+        await seedBoard(client, gateway);
+        // The badge reads the assignments list — seed it so the chip
+        // actually renders inside the card rows (TB-1: queued).
+        if (gateway instanceof MockAdapter) {
+          await client.prefetchQuery({
+            queryKey: keys.agents.assignments.list({}),
+            queryFn: () => gateway.listAssignments(),
+          });
+        }
+      },
+    );
+    expect(html).toContain('href="/tasks/TB-1?return=');
+    expect(html).toContain(
+      'href="/tasks/TB-1?tab=execution&amp;return=%2Ftasks"',
+    );
+  });
 });
