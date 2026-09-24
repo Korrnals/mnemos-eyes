@@ -15,13 +15,16 @@ import { getManifest } from "@/features/docs/manifest";
  * is never a link) and TopBar titles, pure over pathnames.
  */
 describe("domain map", () => {
-  it("is the concept IA: Overview root + Memory + Tasks/Agents + Docs + Stores slot + System", () => {
+  it("is the concept IA: Overview root + Memory + Tasks/Agents + Kora + Docs + Stores slot + System", () => {
     // ADR 0015: the docs domain slots in after «Агенты», before «Хранилища».
+    // ADR 0019 rev.2: «Кора» slots in after «Агенты» — live from week 0
+    // (the section IS the early-UI-contact deliverable, mock-backed).
     expect(NAV_DOMAINS.map((d) => d.to)).toEqual([
       "/",
       "/memory",
       "/tasks",
       "/agents",
+      "/kora",
       "/docs",
       "/stores",
       "/system",

@@ -21,6 +21,7 @@
     "codegen:offline": "bash scripts/codegen.sh --from-snapshot",
     "codegen:board": "bash scripts/codegen-board.sh",
     "codegen:board:offline": "bash scripts/codegen-board.sh --from-snapshot",
+    "codegen:kora": "bash scripts/codegen-kora.sh",
     "sync-docs": "python3 ../scripts/sync_docs.py sync",
     "docs:drift": "python3 ../scripts/sync_docs.py --check-drift"
   },

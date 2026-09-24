@@ -15,6 +15,7 @@ export const en: Record<TranslationKey, string> = {
   "nav.pulse": "Pulse",
   "nav.tasks": "Tasks",
   "nav.agents": "Agents",
+  "nav.kora": "Kora",
   "nav.stores": "Stores",
   "nav.system": "System",
   "nav.soon": "soon",
@@ -822,8 +823,7 @@ export const en: Record<TranslationKey, string> = {
   "agents.connect.label": "How to connect an external agent",
   "agents.connect.step1":
     "Press «Add executor», fill in the name and the harness — you can add your own harness right in the list.",
-  "agents.connect.step2":
-    "Create a token and copy the ONE command from the screen.",
+  "agents.connect.step2": "Create a token and copy the ONE command from the screen.",
   "agents.connect.step3":
     "Run it on the external machine (VPS) — it installs the dependencies, the agent and the service on its own.",
   "agents.connect.step4":
@@ -974,7 +974,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.harness.invalid":
     "Lowercase latin/digits first, then dots, dashes, underscores (≤60 chars).",
 
-  "agents.enrollment.oneLinerHint": "The outer -k is safe: the installer text is public and secret-free — everything inside rides the pinned CA. The --url must be the address THIS machine resolves (the VPN overlay address may differ from the LAN one).",
+  "agents.enrollment.oneLinerHint":
+    "The outer -k is safe: the installer text is public and secret-free — everything inside rides the pinned CA. The --url must be the address THIS machine resolves (the VPN overlay address may differ from the LAN one).",
   "agents.enrollment.tokenInCopyNote": "Copying puts the FULL token on the clipboard.",
   "agents.enrollment.quotaCount": "Live tokens: {{count}} of 3",
   "agents.enrollment.quotaFull":
@@ -1054,8 +1055,7 @@ export const en: Record<TranslationKey, string> = {
   "agents.provision.doneLoadingRow": "Waiting for the registry row to appear…",
   "agents.provision.approvedAlready":
     "“{{name}}” is already approved — enable routing in the registry",
-  "agents.provision.approveIntro":
-    "Check the machine key and confirm the connection.",
+  "agents.provision.approveIntro": "Check the machine key and confirm the connection.",
   "agents.provision.pasteBackLabel":
     "Last 8 hex chars of the fingerprint FROM THE MACHINE",
   "agents.provision.pasteBackHint":
@@ -1085,8 +1085,7 @@ export const en: Record<TranslationKey, string> = {
     "The board restarted mid-install — job secrets live in memory only. Start the connection again.",
   "agents.provision.hint.pinInvalidated":
     "The machine's pinned key was changed (re-pin) — the job was stopped.",
-  "agents.provision.hint.generic":
-    "The install failed — technical detail below.",
+  "agents.provision.hint.generic": "The install failed — technical detail below.",
 
   "agents.enrollment.listTitle": "Enrollment tokens",
   "agents.enrollment.listHint": "live + history",
@@ -1171,7 +1170,8 @@ export const en: Record<TranslationKey, string> = {
   "settings.hub.sidebarCollapsed": "Collapsed",
   "settings.hub.sidebarHint": "Also changes with the button on the sidebar itself.",
   "settings.hub.onboardingReplay": "Show the “How it works” hint again",
-  "settings.hub.onboardingReplayed": "The hint will expand again on the Execution page.",
+  "settings.hub.onboardingReplayed":
+    "The hint will expand again on the Execution page.",
   "settings.hub.notCustomizable": "Not customizable",
   "settings.hub.verdict.fonts":
     "Typography is a single font pair and one scale: coherence beats choice.",
@@ -1183,8 +1183,7 @@ export const en: Record<TranslationKey, string> = {
     "Sidebar sections and their order are fixed — the product map stays fully visible.",
   "settings.hub.verdict.groups":
     "Project-group collapse is remembered per project — workspace state, not a preference.",
-  "settings.hub.verdict.dnd":
-    "Card drag-and-drop is the board's primary control.",
+  "settings.hub.verdict.dnd": "Card drag-and-drop is the board's primary control.",
   "settings.hub.verdict.filters":
     "Filters and search are part of the page address (?project=&q=) — bookmarkable.",
   "settings.hub.verdict.panels":
@@ -1489,7 +1488,8 @@ export const en: Record<TranslationKey, string> = {
   "pair.tokenLabel": "Device token",
   "pair.copyToken": "Copy token",
   "pair.copyFallback": "Copied via the browser's fallback path.",
-  "pair.copyManual": "Copy failed — the token is selected in the row, copy it manually.",
+  "pair.copyManual":
+    "Copy failed — the token is selected in the row, copy it manually.",
   "pair.startWork": "Start working",
   "pair.deviceId": "Device id",
   "pair.scope": "scope",
@@ -1501,4 +1501,72 @@ export const en: Record<TranslationKey, string> = {
   "pair.err429": "Too many attempts",
   "pair.err503": "Pairing is disabled on the server",
   "pair.errGeneric": "Could not connect",
+
+  // --- Kora (ADR 0019 rev.2 — week-0 contract mocks) -----------------------------
+  "kora.title": "Kora — sessions across all hosts",
+  "kora.week0Badge": "Week 0 · contract mocks",
+  "kora.week0Note":
+    "This screen runs on mock data: no Kora server endpoints exist yet — the slice 1–3 contract is frozen in docs/kora/openapi.yaml, implementation arrives with the slices.",
+  "kora.coverage.title": "What I see / what I don't",
+  "kora.coverage.support.full": "full",
+  "kora.coverage.support.lists-only": "lists only",
+  "kora.coverage.support.metadata-only": "metadata only",
+  "kora.coverage.support.absent": "not scanned",
+  "kora.coverage.gaps": "Known gaps",
+  "kora.onboarding.title": "Why Kora",
+  "kora.onboarding.case1.title": "See everything",
+  "kora.onboarding.case1.body":
+    "All zcode, vscode and pi sessions on connected hosts — one list, no console hopping.",
+  "kora.onboarding.case2.title": "Catch up",
+  "kora.onboarding.case2.body":
+    "A read-only transcript of any session: what happened and where it stopped, changing nothing.",
+  "kora.onboarding.case3.title": "Steer from the phone",
+  "kora.onboarding.case3.body":
+    "A new session or a prompt into your own — via the relay; the phone sees the same UI as the desktop.",
+  "kora.list.title": "Sessions",
+  "kora.list.loading": "Loading sessions",
+  "kora.list.loadFailed": "Failed to load the session list",
+  "kora.list.empty": "No sessions yet",
+  "kora.list.emptyMessage":
+    "Connect an executor — its sessions appear on their own: the registry is derived, no registration ceremonies.",
+  "kora.session.age": "age: {{age}}",
+  "kora.session.noPreview": "No last-line preview",
+  "kora.session.steerable": "steerable",
+  "kora.session.origin.relay": "relay",
+  "kora.session.origin.local": "local",
+  "kora.session.state.live": "live",
+  "kora.session.state.idle": "idle",
+  "kora.session.state.dead": "process dead",
+  "kora.session.noId": "No session id in the route",
+  "kora.session.notFound": "Session not found",
+  "kora.session.notFoundMessage": "Session '{{id}}' is not in the Kora registry.",
+  "kora.session.backToList": "Back to the session list",
+  "kora.session.readonlyPlate": "Someone else's session — read-only",
+  "kora.session.readonlyPlateNote":
+    "Continuation is available only for relay-origin sessions or after explicit adoption.",
+  "kora.transcript.title": "Transcript (read-only)",
+  "kora.transcript.loading": "Loading the transcript",
+  "kora.transcript.loadFailed": "Failed to load the transcript",
+  "kora.transcript.empty": "No entries",
+  "kora.transcript.emptyMessage":
+    "The session is in the registry but the store has no entries — or the reader has not reached it yet.",
+  "kora.transcript.redacted": "redacted",
+  "kora.transcript.redactedNote":
+    "Part of the line was masked by the single redaction module on serving",
+  "kora.chat.title": "Chat (slice 3)",
+  "kora.chat.placeholder": "Prompt into the session…",
+  "kora.chat.send": "Send",
+  "kora.chat.confirmMode": "Confirm-mode: the prompt is confirmed on the host",
+  "kora.chat.delivery.ok": "Delivered to the relay",
+  "kora.chat.delivery.failed": "Not delivered — please retry",
+  "kora.chat.freshness": "Freshness: the store tail is re-read, target ≤60s",
+  "kora.chat.unavailable":
+    "Steering unavailable: local session. Read-only — the NO-DRIFT invariant.",
+  "kora.chat.stepUp.label": "Steering PIN",
+  "kora.chat.stepUp.enable": "Enable steering",
+  "kora.chat.stepUp.active": "Steering active (TTL ≤ 15 minutes)",
+  "kora.chat.stepUp.required": "Steering is locked — enter the PIN first",
+  "kora.chat.stepUp.failed": "Failed to enable steering",
+  "kora.chat.stepUp.note":
+    "Reading needs no PIN; steering — after a short PIN ritual (step-up, TTL ≤ 15 minutes).",
 };
