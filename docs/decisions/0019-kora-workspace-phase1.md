@@ -1,6 +1,9 @@
-# ADR 0016: Kora (Кора) Workspace — фаза 1: read-only агрегация сессий + relay-продолжение (вариант C)
+# ADR 0019: Kora (Кора) Workspace — фаза 1: read-only агрегация сессий + relay-продолжение (вариант C)
 
 - Status: **Accepted (rev.2) — RATIFIED BY OWNER 2026-09-24**
+  (Numbered 0019: a parallel-session ADR 0016 (docs-upstream-import)
+  landed in main during the ratification window — committee artifacts
+  of 2026-09-23/24 referencing «ADR 0016» point to THIS document.)
   Owner decisions recorded the same day: (а) ratified rev.2 as a whole;
   (б) phone cookie = 7 days «stay on this device» with SLIDING renewal
   (+7 days on every owner mobile login), instant revoke button in the

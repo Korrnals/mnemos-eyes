@@ -40,6 +40,9 @@ export const en: Record<TranslationKey, string> = {
   // Session-aware mode line (fix/login-feedback) — see ru.ts.
   "nav.modeReadOnly": "read-only",
   "nav.modeActive": "session active",
+  // UI-22: paired device without an owner session — see ru.ts.
+  "nav.modeDevice": "device connected",
+  "nav.modeDeviceControl": "device connected · full access",
   // Sidebar version label (owner feedback) — see ru.ts.
   "nav.versionAria": "App version {{version}}",
   "shell.skipToContent": "Skip to content",
@@ -51,6 +54,9 @@ export const en: Record<TranslationKey, string> = {
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------
   "breadcrumbs.label": "Breadcrumb",
+  // Back control of the sticky crumb row (UI-18 spec §3.4): see ru.ts.
+  "nav.backTo": "Back: {{place}}",
+  "nav.backFallback": "Back",
 
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Switch to light theme",
@@ -248,8 +254,6 @@ export const en: Record<TranslationKey, string> = {
   "tags.drill.tasks": "Tasks carrying this tag",
   "tags.drill.tasksEmpty": "No tasks carry this tag",
   "tags.drill.memories": "Memories",
-  "tags.drill.subsetNote":
-    "Showing a subset: the drill rides the search ranker and may be incomplete (BE-13)",
   "tags.drill.storeErrors": "Stores unreachable: {{servers}}",
   "tags.drill.openInMemories": "Open in Memories",
 
@@ -343,6 +347,10 @@ export const en: Record<TranslationKey, string> = {
   "login.toastRejected": "Token rejected",
   "login.toastRejectedDetail":
     "The server answered 401 — the login window is open for a current value.",
+  // UI-22 device beat — see ru.ts (scope v1: read-scope devices only).
+  "login.deviceForbidden": "Actions from this device are closed",
+  "login.deviceForbiddenDetail":
+    "This device's scope is read-only: mutations run in an owner session (ADR 0012).",
   "login.logoutFailed":
     "Could not end the server session — you are still signed in. Check the connection and try again.",
 
@@ -456,6 +464,27 @@ export const en: Record<TranslationKey, string> = {
   "tasks.inboxSource": "server: {{server}}",
   "tasks.inboxAdoptedLink": "adopted → {{id}}",
   "tasks.inboxNoSpecialist": "no specialist",
+  // UI-25: key:value chips + expand/edit
+  "tasks.inboxProjectChip": "project: {{value}}",
+  "tasks.inboxPriorityChip": "priority: {{value}}",
+  "tasks.inboxEditedBadge": "edited",
+  "tasks.inboxExpandLabel": "Record details",
+  "tasks.inboxCollapseLabel": "Collapse",
+  "tasks.inboxDetailsLabel": "Record details",
+  "tasks.inboxDetailsSpecialist": "specialist: {{value}}",
+  "tasks.inboxDetailsCreated": "created at source: {{value}}",
+  "tasks.inboxDetailsMemoryId": "memory: {{value}}",
+  "tasks.inboxFullTextLabel": "Record text from memory",
+  "tasks.inboxFullTextFailed": "Could not load the record from memory",
+  "tasks.inboxEditLabel": "Edit",
+  "tasks.inboxEditTitle": "Edit the record before adopting it to the board",
+  "tasks.inboxEditHint": "Edits ride into the task and sync to memory on adoption.",
+  "tasks.inboxEdit.titleLabel": "Title",
+  "tasks.inboxEdit.summaryLabel": "Summary (spec)",
+  "tasks.inboxEdit.priorityLabel": "Priority",
+  "tasks.inboxEdit.projectLabel": "Project",
+  "tasks.inboxEdit.save": "Save edits",
+  "tasks.inboxEdit.cancel": "Cancel",
   "tasks.scanLabel": "Scan stores",
   "tasks.scanBusy": "Scanning…",
   "tasks.adoptLabel": "Adopt to board",
@@ -585,6 +614,8 @@ export const en: Record<TranslationKey, string> = {
   "tasks.mutation.adoptConflictTitle": "Record already adopted",
   "tasks.mutation.adoptConflictDetail": "task {{id}} already exists",
   "tasks.mutation.adopted": "Adopted to board: {{id}}",
+  "tasks.mutation.inboxEditFailed": "Could not save the record edits",
+  "tasks.mutation.inboxEditSaved": "Edits saved — adoption will use this version",
   "tasks.mutation.scanFailed": "Could not scan the stores",
   "tasks.mutation.scanDone": "Scan complete",
   "tasks.mutation.scanDetail": "records seen: {{found}}, new: {{new}}",
@@ -772,7 +803,8 @@ export const en: Record<TranslationKey, string> = {
   "agents.registry.title": "Agent connections",
   "agents.registry.loading": "Loading the executor registry",
   "agents.registry.failed": "Failed to load the executor registry",
-  "agents.registry.empty": "No executors yet — connect the first one with the guide below.",
+  "agents.registry.empty":
+    "No executors yet — connect the first one with the guide below.",
   "agents.registry.band.pending": "Awaiting approval",
   "agents.registry.band.active": "Connected",
   "agents.registry.band.revoked": "Revoked",
@@ -789,17 +821,19 @@ export const en: Record<TranslationKey, string> = {
   "agents.registry.revokedHint": "trust is not restorable — re-register the executor",
   "agents.connect.label": "How to connect an external agent",
   "agents.connect.step1":
-    "On the external machine, install the poller: dependencies and scripts live in deploy/poller/README.md (python ≥ 3.10, httpx + pyyaml).",
+    "Press «Add executor», fill in the name and the harness — you can add your own harness right in the list.",
   "agents.connect.step2":
-    "Copy poller.example.yaml to ~/.config/mnemos-eyes/poller.yaml (chmod 0600) and fill in board_url, executor_name and the allowlist.",
+    "Create a token and copy the ONE command from the screen.",
   "agents.connect.step3":
-    "The machine token lives only in the environment: VESMARO_BOARD_TOKEN in /etc/vesmaro/poller.env (systemd /opt unit) or ~/.config/mnemos-eyes/poller.env (laptop user unit), 0600 permissions — never in the config or in prompts; see deploy/poller/README.md.",
+    "Run it on the external machine (VPS) — it installs the dependencies, the agent and the service on its own.",
   "agents.connect.step4":
-    "Run the poller as a service (the systemd unit from the README) or once with --once for a dry-run check.",
+    "The agent appears here in «Awaiting approval» — approve and enable it.",
   "agents.connect.step5":
-    "The executor appears above in «Awaiting approval» — approve it here, then enable it for routing.",
+    "Give the task with the button on the task card — execution happens on the external machine.",
   "agents.connect.note":
-    "Executor registration is a machine-class API (POST /api/executors with the board token): there is no registration button in the UI — this screen runs the approval queue.",
+    "The command downloads the installer from the board (the installer text is public); everything after rides a secured channel with certificate verification. The token is one-time and lives for 15 minutes.",
+  "agents.connect.manual":
+    "The manual path — deploy/poller/REMOTE-EXECUTOR.md («Путь 2 — руками», for diagnostics and isolated networks).",
   "agents.executors.actionFailed": "Failed to update the executor",
   "agents.executors.approved": "{{name}}: approved",
   "agents.executors.approvedDetail":
@@ -826,13 +860,84 @@ export const en: Record<TranslationKey, string> = {
   "agents.menu.label": "Executor menu {{name}}",
   "agents.menu.copyId": "Copy id ({{id}})",
   "agents.menu.openRegistry": "Open registry",
+  // AGW-6 A: link check (outbound-only honesty)
+  "agents.linkcheck.trigger": "Check connection",
+  "agents.linkcheck.checkForReal": "Check for real",
+  "agents.linkcheck.verdict.never": "has never answered a poll",
+  "agents.linkcheck.verdict.online": "online — answered a poll {{age}} ago",
+  "agents.linkcheck.verdict.stale": "answered a while ago — {{age}} ago",
+  "agents.linkcheck.verdict.offline": "not responding — last answered {{age}} ago",
+  "agents.linkcheck.verdict.revoked": "revoked — presence is gone",
+  "agents.linkcheck.verdict.unknown": "presence thresholds are not loaded yet",
+  "agents.linkcheck.disclaimer":
+    "The board never pings agents (outbound-only): this is the age of the poller's last answer, not machine availability.",
+  "agents.linkcheck.unitSeconds": "s",
+  "agents.linktest.title": "Check for real — {{name}}",
+  "agents.linktest.subtitle":
+    "Pick a task — its «Take into work» sheet opens with {{name}} pinned.",
+  "agents.linktest.allowlistNote":
+    "An allowlist miss is a valid test too: the refusal-report proves the link just as well as a launch.",
+  "agents.linktest.loading": "Loading board tasks",
+  "agents.linktest.empty":
+    "No tasks accept assignments right now. Create a test task on the board and come back.",
+  "agents.linktest.listLabel": "Tasks for the test assignment",
+  "agents.linktest.rowAria": "Open «Take into work» with {{name}} pinned",
+  "agents.sheet.pinnedHint":
+    "Executor pinned: the assignment waits for them to come back online — submit stays active.",
+  "agents.sheet.pinnedInvalidHint":
+    "The pinned executor cannot take tasks right now — pick «Default» or another executor.",
+  // AGW-6 B: executor settings card (drawer)
+  "agents.card.title": "Executor card",
+  "agents.card.description":
+    "Executor settings: identity, link, access, declared capabilities",
+  "agents.card.menuOpen": "Settings card",
+  "agents.card.sectionIdentity": "Identity",
+  "agents.card.sectionLink": "Link",
+  "agents.card.sectionAccess": "Access",
+  "agents.card.sectionCaps": "Capabilities (declared)",
+  "agents.card.sectionDanger": "Danger zone",
+  "agents.card.nameLabel": "Name",
+  "agents.card.copyId": "Copy id ({{id}})",
+  "agents.card.harnessLabel": "harness",
+  "agents.card.transportLabel": "transport",
+  "agents.card.versionLabel": "version",
+  "agents.card.registeredVia": "origin",
+  "agents.card.registeredAt": "registered",
+  "agents.card.updatedAt": "updated",
+  "agents.card.harnessNote":
+    "The harness is not editable: it is the local allowlist matching axis on the machine — changing it would silently desync the board from poller.yaml. The honest path is «Revoke» + a fresh enrollment.",
+  "agents.card.stateApproved": "approved",
+  "agents.card.enabledLabel": "Enabled for dispatch",
+  "agents.card.enabledNote": "dispatch = approved AND enabled",
+  "agents.card.enabledPendingHint":
+    "Approve first — the dispatch switch appears after approval.",
+  "agents.card.capsPlaceholder": "a specialist role, e.g. researcher",
+  "agents.card.capsInputAria": "New capability",
+  "agents.card.capsAdd": "Add",
+  "agents.card.capsClear": "Clear",
+  "agents.card.capsClearConfirm":
+    "Send an empty capabilities list? The server will wipe every declared value ([] is a valid operation).",
+  "agents.card.capsDup": "This capability is already declared.",
+  "agents.card.capsMax": "Maximum 64 — the server rejects more.",
+  "agents.card.capsRemoveAria": "Remove capability {{capability}}",
+  "agents.card.capsNote":
+    "Declarations for ROUTING only (owner-declared); they never gate launches — the real gate is the poller's local allowlist.",
+  "agents.card.save": "Save",
+  "agents.card.saved": "{{name}}: card saved",
+  "agents.card.noChanges": "no changes",
+  "agents.card.dangerNote":
+    "«Revoke» is terminal — trust is not restorable; «Delete» removes the record — active assignments keep their pins.",
+  "agents.card.revokedReadOnly":
+    "This executor is revoked — the card is read-only except Delete.",
+  "agents.card.secretHint":
+    "The secret is never shown: it appears exactly once, at registration. Lost it — revoke the executor and register again.",
   "agents.registry.viaEnrollment": "origin: enrollment token",
   "agents.registry.viaMachine": "origin: machine token",
   "agents.enrollment.title": "Add executor",
   "agents.enrollment.description":
     "Minting a one-time connection token for a remote executor",
   "agents.enrollment.formHint":
-    "A one-time token (15 min TTL) for registering a remote machine; whoever registers with it appears here awaiting approval.",
+    "Fill in the card — you get ONE command for the external machine. The agent installs itself and appears here for approval.",
   "agents.enrollment.label": "Label (for you)",
   "agents.enrollment.labelPlaceholder": "e.g. vps-1",
   "agents.enrollment.harness": "Harness (hint for the commands)",
@@ -843,8 +948,6 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.created": "Enrollment token created",
   "agents.enrollment.tokenLabel": "Enrollment token",
   "agents.enrollment.tokenOnce": "The token is shown ONCE — copy it now.",
-  "agents.enrollment.show": "Show",
-  "agents.enrollment.hide": "Hide",
   "agents.enrollment.copy": "Copy",
   "agents.enrollment.copied": "Copied",
   "agents.enrollment.copyFailedToken":
@@ -864,6 +967,127 @@ export const en: Record<TranslationKey, string> = {
   "agents.enrollment.usedBy": "used: {{name}}",
   "agents.enrollment.usedIp": "connection IP: {{ip}}",
   "agents.enrollment.done": "Done",
+  "agents.harness.addOption": "Add harness…",
+  "agents.harness.add": "Add",
+  "agents.harness.adding": "Adding…",
+  "agents.harness.addFailed": "Failed to add the harness",
+  "agents.harness.invalid":
+    "Lowercase latin/digits first, then dots, dashes, underscores (≤60 chars).",
+
+  "agents.enrollment.oneLinerHint": "The outer -k is safe: the installer text is public and secret-free — everything inside rides the pinned CA. The --url must be the address THIS machine resolves (the VPN overlay address may differ from the LAN one).",
+  "agents.enrollment.tokenInCopyNote": "Copying puts the FULL token on the clipboard.",
+  "agents.enrollment.quotaCount": "Live tokens: {{count}} of 3",
+  "agents.enrollment.quotaFull":
+    "Live-token limit (3) reached — revoke one or wait out the TTL.",
+  "agents.enrollment.manualToggle": "Manual path — diagnostics / air-gapped installs",
+
+  // --- AGW-11: the connect card (SSH provisioner, wave 4) -------------------
+
+  "agents.provision.title": "Connect over SSH",
+  "agents.provision.subtitle":
+    "the board logs into the machine itself, installs the agent and walks it to your approval",
+  "agents.provision.host": "Machine address (IP or hostname)",
+  "agents.provision.hostError":
+    "lowercase letters/digits/hyphens and dots — an IP or FQDN, no slashes",
+  "agents.provision.port": "SSH port",
+  "agents.provision.portError": "port is a number from 1 to 65535",
+  "agents.provision.name": "Executor name (optional)",
+  "agents.provision.nameError":
+    "starts with a letter/digit; letters, digits, dot, '_', '-' up to 120 chars",
+  "agents.provision.authLegend": "How to log in",
+  "agents.provision.authKey": "SSH key",
+  "agents.provision.authAlias": "Alias from the board's ssh-config",
+  "agents.provision.authPassword": "Password",
+  "agents.provision.authPasswordNote":
+    "Password auth is OFF by default on the board: it needs the provisioner.passwordAuth deployment flag. Until it is on, the server honestly refuses (422).",
+  "agents.provision.authAliasNote":
+    "The board connects via an alias from its own ssh-config: user, key and port come from the config. A separate username field is not accepted by the server yet — use an alias.",
+  "agents.provision.keySecret": "Private key (paste in full)",
+  "agents.provision.passwordSecret": "Password",
+  "agents.provision.secretShow": "Show key",
+  "agents.provision.secretHide": "Hide key",
+  "agents.provision.secretNote":
+    "The secret lives only in page memory until submit: never in the DB, logs or events. Masked against shoulder surfing.",
+  "agents.provision.secretError": "This login method needs a secret.",
+  "agents.provision.passphrase": "Key passphrase (if any)",
+  "agents.provision.harness": "Harness (hint for commands)",
+  "agents.provision.boardUrl": "Board address for the machine",
+  "agents.provision.boardUrlNote":
+    "https://host[:port] the TARGET machine resolves (the overlay address may differ from the browser one).",
+  "agents.provision.boardUrlError":
+    "strict https://host[:port] required — no path, no query",
+  "agents.provision.submit": "Connect",
+  "agents.provision.submitting": "Starting…",
+  "agents.provision.submitFailed": "Failed to start the connection",
+  "agents.provision.queued": "Connection to {{host}} started",
+  "agents.provision.reuseNote":
+    "The retry reuses the live enrollment token from the previous attempt",
+  "agents.provision.feedTitle": "Connecting {{host}}",
+  "agents.provision.close": "Hide",
+  "agents.provision.closeAria": "Hide the connect card",
+  "agents.provision.feedLoading": "Reading the job state…",
+  "agents.provision.feedError": "Job unavailable: {{message}}",
+  "agents.provision.feedLive": "The job is running — the feed updates itself",
+  "agents.provision.funnelAria": "Install steps",
+  "agents.provision.state.live": "running",
+  "agents.provision.state.done": "agent registered",
+  "agents.provision.state.failed": "failed",
+  "agents.provision.stage.bootstrapStarted": "SSH connection to the machine",
+  "agents.provision.stage.caPinned": "Machine trust anchor pinned",
+  "agents.provision.stage.pollerInstalled": "Agent installed",
+  "agents.provision.stage.firstHeartbeat": "First agent heartbeat",
+  "agents.provision.stage.wgHandshake": "Mesh tunnel",
+  "agents.provision.stage.reserved": "later",
+  "agents.provision.connectivityTitle": "Connectivity transport",
+  "agents.provision.connectivityManual": "interim: manual tunnel",
+  "agents.provision.connectivityMesh": "mesh",
+  "agents.provision.connectivityProfile": "Connectivity profile:",
+  "agents.provision.connectivityLater": "later",
+  "agents.provision.logTitle": "Step feed",
+  "agents.provision.updatedAt": "updated {{time}}",
+  "agents.provision.errorCode": "Code: {{code}}",
+  "agents.provision.expectedFingerprint": "Expected machine key fingerprint:",
+  "agents.provision.knownHostsHint":
+    "The machine key does not match the pinned one. If the machine was REINSTALLED on purpose, the board has a separate re-pin action (POST /api/executors/provision/host/{host}/repin). Do not blindly retry: a mismatch may mean a MITM.",
+  "agents.provision.retry": "Retry",
+  "agents.provision.doneTitle": "Executor “{{name}}” awaits your approval",
+  "agents.provision.doneLoadingRow": "Waiting for the registry row to appear…",
+  "agents.provision.approvedAlready":
+    "“{{name}}” is already approved — enable routing in the registry",
+  "agents.provision.approveIntro":
+    "Check the machine key and confirm the connection.",
+  "agents.provision.pasteBackLabel":
+    "Last 8 hex chars of the fingerprint FROM THE MACHINE",
+  "agents.provision.pasteBackHint":
+    "Run on the machine: awk '{print $2}' /etc/ssh/ssh_host_ed25519_key.pub | base64 -d | sha256sum — type the last 8 characters of its output. The button unlocks only on a match.",
+  "agents.provision.pasteBackSkipped":
+    "This machine's key was pinned and verified earlier — no re-verification needed.",
+  "agents.provision.hint.sshUnreachable":
+    "Machine unreachable: check the address, port and firewall.",
+  "agents.provision.hint.sshAuthFailed": "The key or password did not fit.",
+  "agents.provision.hint.sshSudoRequired":
+    "Give the user passwordless sudo (NOPASSWD) or run the install as root.",
+  "agents.provision.hint.caUnavailable":
+    "The board did not serve its CA — a board-side problem, check its logs.",
+  "agents.provision.hint.hostKeyMismatch":
+    "The machine key did not match the expected one — the install stopped for safety.",
+  "agents.provision.hint.wgKeyDelivery":
+    "Tunnel key delivery failed (a future mesh transport leg — placeholder).",
+  "agents.provision.hint.wgHandshake":
+    "The tunnel did not come up in time (a future mesh transport leg — placeholder).",
+  "agents.provision.hint.bootstrapTimeout":
+    "The install ran long and was stopped by its timeout.",
+  "agents.provision.hint.bootstrapExit":
+    "The installer exited with an error — technical detail below.",
+  "agents.provision.hint.registerTimeout":
+    "The agent was installed but never registered in time — check its journal on the machine.",
+  "agents.provision.hint.restarted":
+    "The board restarted mid-install — job secrets live in memory only. Start the connection again.",
+  "agents.provision.hint.pinInvalidated":
+    "The machine's pinned key was changed (re-pin) — the job was stopped.",
+  "agents.provision.hint.generic":
+    "The install failed — technical detail below.",
+
   "agents.enrollment.listTitle": "Enrollment tokens",
   "agents.enrollment.listHint": "live + history",
   "agents.enrollment.listLoading": "Loading tokens",
@@ -876,7 +1100,6 @@ export const en: Record<TranslationKey, string> = {
     "Revoke the token {{label}}? It can no longer be used to connect.",
   "agents.enrollment.revoked": "Token revoked",
   "agents.enrollment.revokeFailed": "Failed to revoke the token",
-
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Automation",
@@ -898,6 +1121,86 @@ export const en: Record<TranslationKey, string> = {
   "automation.banner.usedToday": "auto-launches today",
   "automation.banner.rules": "rules",
   "automation.banner.rulesCount": "{{schedules}} schedules, {{hooks}} hook rules",
+  "automation.banner.settingsLink": "change in Settings",
+  // UI-21 settings hub: the kill-switch/cap form (server contract §2).
+  "automation.settings.title": "Automation",
+  "automation.settings.enabledLabel": "Automation enabled",
+  "automation.settings.engineOffNote":
+    "The engine is not running yet (S1): this preference is stored now and takes effect when the engine ships.",
+  "automation.settings.capLabel": "Daily auto-launch cap",
+  "automation.settings.capHint": "1–1000; {{used}} of {{cap}} used today.",
+  "automation.settings.capError": "Enter a whole number from 1 to 1000.",
+  "automation.settings.save": "Save",
+  "automation.settings.saving": "Saving…",
+  "automation.settings.saved": "Automation settings saved",
+  "automation.settings.savedDetail": "kill-switch and daily cap updated",
+  "automation.settings.saveFailed": "Failed to save automation settings",
+  // UI-23 settings hub v2: sections, controls, hints and verdicts (spec §7).
+  "settings.hub.navLabel": "Page sections",
+  "settings.hub.appearanceTitle": "Appearance",
+  "settings.hub.behaviorTitle": "Behavior",
+  "settings.hub.boardTitle": "Board",
+  "settings.hub.navigationTitle": "Navigation",
+  "settings.hub.executionTitle": "Execution",
+  "settings.hub.automationTitle": "Automation",
+  "settings.hub.devicesTitle": "Devices",
+  "settings.hub.devicesHint":
+    "Revoke a compromised device or grant per-component access (tasks, reports, inbox, notifications) — managed per connected device.",
+  "settings.hub.devicesCta": "Manage devices",
+  "settings.hub.themeLabel": "Theme",
+  "settings.hub.themeSystem": "System",
+  "settings.hub.themeDark": "Dark",
+  "settings.hub.themeLight": "Light",
+  "settings.hub.themeHint": "“System” follows your OS preference.",
+  "settings.hub.langLabel": "Interface language",
+  "settings.hub.densityLabel": "Row density",
+  "settings.hub.densityComfortable": "Comfortable",
+  "settings.hub.densityCompact": "Compact",
+  "settings.hub.densityHint":
+    "Working lists — tasks, registries, results. Search and memory stay airy.",
+  "settings.hub.appliesEverywhere": "Applies everywhere immediately.",
+  "settings.hub.boardStyleLabel": "Kanban board style",
+  "settings.hub.boardStyleHint": "Takes effect on Tasks → Kanban.",
+  "settings.hub.motionLabel": "Animations",
+  "settings.hub.motionSystem": "System",
+  "settings.hub.motionReduced": "Minimal",
+  "settings.hub.motionHint":
+    "“Minimal” disables motion and shimmer regardless of the OS setting.",
+  "settings.hub.sidebarLabel": "Sidebar",
+  "settings.hub.sidebarExpanded": "Expanded",
+  "settings.hub.sidebarCollapsed": "Collapsed",
+  "settings.hub.sidebarHint": "Also changes with the button on the sidebar itself.",
+  "settings.hub.onboardingReplay": "Show the “How it works” hint again",
+  "settings.hub.onboardingReplayed": "The hint will expand again on the Execution page.",
+  "settings.hub.notCustomizable": "Not customizable",
+  "settings.hub.verdict.fonts":
+    "Typography is a single font pair and one scale: coherence beats choice.",
+  "settings.hub.verdict.contemplative":
+    "Search and memory stay airy regardless of density — by design.",
+  "settings.hub.verdict.viewRoute":
+    "Kanban and List are routes, not a preference: the page address is the choice.",
+  "settings.hub.verdict.domains":
+    "Sidebar sections and their order are fixed — the product map stays fully visible.",
+  "settings.hub.verdict.groups":
+    "Project-group collapse is remembered per project — workspace state, not a preference.",
+  "settings.hub.verdict.dnd":
+    "Card drag-and-drop is the board's primary control.",
+  "settings.hub.verdict.filters":
+    "Filters and search are part of the page address (?project=&q=) — bookmarkable.",
+  "settings.hub.verdict.panels":
+    "Terminal and feed panels collapse in place on the Execution page — state is remembered.",
+  "settings.hub.verdict.confirms":
+    "Confirmations for destructive actions are always on — they protect your data.",
+  "settings.hub.verdict.scrolls":
+    "Whole-page scrolling with position restore on Back is fixed.",
+  "settings.hub.verdict.updateBanner":
+    "The page never reloads on its own — a calm banner announces a new version.",
+  "settings.hub.verdict.hotkeys":
+    "Hotkeys are fixed: “/” focuses search, “?” opens the cheatsheet.",
+  "settings.hub.verdict.search":
+    "Global search is the single entrance to memory: its behavior is part of the structure, not a preference.",
+  "settings.hub.verdict.crumbs":
+    "Breadcrumbs carry the navigation context of the route; removing them breaks orientation.",
   "automation.listLoading": "Loading",
   "automation.listFailed": "Failed to load the list",
   "automation.schedule.create": "New schedule",
@@ -982,16 +1285,16 @@ export const en: Record<TranslationKey, string> = {
   "overview.agentsAll": "Execution",
   "overview.autoLaunchesToday": "auto-launches today: {{count}}",
 
-  // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
+  // --- docs section (ADR 0015/0016, contract 2026-09-23 §§4–6) ---------------------
   "nav.docs": "Documentation",
-  "docs.index.lede": "Board reference: from the first launch to upgrades.",
   "docs.cat.product": "About the product",
   "docs.catDesc.product": "What mnemos and vesmaro-eyes are: concepts and glossary.",
   "docs.cat.gettingStarted": "Getting started",
   "docs.catDesc.gettingStarted":
     "Deploy the board and sign in — from zero to a workspace.",
   "docs.cat.board": "Board & groups",
-  "docs.catDesc.board": "Memory groups and the kanban board: structure and daily work.",
+  "docs.catDesc.board":
+    "Project groups and the kanban board: structure and everyday work with tasks.",
   "docs.cat.agents": "Agents & assignments",
   "docs.catDesc.agents": "Assignments, executors and completion reports.",
   "docs.cat.automation": "Automation",
@@ -1005,23 +1308,58 @@ export const en: Record<TranslationKey, string> = {
     "Backup, upgrade and troubleshooting — what to do when something breaks.",
   "docs.cat.faq": "FAQ",
   "docs.catDesc.faq": "Short answers to frequent questions.",
+  // Imported hubs (contract §4 — mirroring the hub design spec §2).
+  "docs.cat.mnemosUser": "For users",
+  "docs.catDesc.mnemosUser":
+    "Install, first run, sync and references — everyday work with the memory server.",
+  "docs.cat.mnemosAdmin": "For administrators",
+  "docs.catDesc.mnemosAdmin":
+    "Security, federation and operational runbooks for the mnemos administrator.",
+  "docs.cat.mnemosArchitecture": "Architecture",
+  "docs.catDesc.mnemosArchitecture":
+    "How mnemos is built: hybrid memory and its control surfaces.",
+  "docs.cat.meshUser": "For users",
+  "docs.catDesc.meshUser": "Run a mnemos-mesh node and configure the federation.",
+  "docs.cat.meshAdmin": "For administrators",
+  "docs.catDesc.meshAdmin": "Day-2 operations and security for a mnemos-mesh node.",
   "docs.search.placeholder": "Search the docs",
   "docs.search.ariaLabel": "Search the docs",
   "docs.search.resultsLabel": "Search results",
   "docs.search.indexing": "Indexing…",
   "docs.search.noResults": "Nothing found for “{{query}}”",
   "docs.search.noResultsHint": "Try a single word: “token” instead of “token rotation”",
+  "docs.search.localeHint":
+    "Some pages are available in one language only — switch the interface language (RU|EN in the header).",
   "docs.toc.title": "On this page",
   "docs.prev": "Previous",
   "docs.next": "Next",
   "docs.prevNextNav": "Page navigation",
   "docs.badge.verified": "current as of v{{version}}",
-  "docs.localeFallback": "Available in Russian only",
+  "docs.localeOriginal": "In the original language ({{lang}})",
+  "docs.lang.ru": "Russian",
+  "docs.lang.en": "English",
+  "docs.provenance.badge": "from {{repo}}@{{sha}} · synced {{date}}",
+  "docs.provenance.full":
+    "Imported from the {{repo}} repository, commit {{sha}}, synced {{date}}",
+  "docs.hub.start": "Start here",
+  "docs.hub.categories": "Categories",
+  "docs.hub.vesmaroEyes.lede":
+    "The board reference: from the first launch to upgrades — panels, agents, tokens and maintenance.",
+  "docs.hub.mnemos.lede":
+    "A memory server for AI agents: a well of entries, semantic search and storage governed by the tag contract. This hub carries the user and administrator guides plus the architecture overview.",
+  "docs.hub.mnemosMesh.lede":
+    "Federated storage: bring up a mnemos-mesh node, configure the channel and run two-instance operations.",
+  "docs.hub.coverage.both": "Available in Russian and English",
+  "docs.hub.coverage.ru": "Available in Russian only",
+  "docs.hub.coverage.en": "Available in English only",
+  "docs.hub.coverage.mixed": "Partially translated (ru+en)",
   "docs.copy.code": "Copy code",
   "docs.copy.done": "Code copied",
+  "docs.mermaid.renderFailed":
+    "The diagram could not be rendered — its source is shown instead.",
   "docs.notFound.title": "No such page",
   "docs.notFound.message": "Check the address or go back to the category list.",
-  "docs.notFound.cta": "All categories",
+  "docs.notFound.cta": "Open the docs",
   "docs.error.title": "The page could not be shown",
   "docs.loading": "Loading…",
   "docs.pages.one": "{{count}} page",
@@ -1030,8 +1368,137 @@ export const en: Record<TranslationKey, string> = {
 
   // --- shared empty/error ----------------------------------------------------------
   "common.retry": "Retry",
+
+  // --- UI-27: TextEngine (author text — markdown engine) ----------------------------
+  "text.showFull": "Show full text",
   "empty.offlineNote":
     "If you are running against a live mnemos, check that the API is up and that the dev proxy (/api → mnemos) is reachable. Browser requests stay CORS-gated during development.",
   "app.loadingView": "Loading view",
   "app.notFoundMessage": "This path does not exist in the well.",
+
+  // --- CV-7: QR pairing + devices (ADR 0012) ---------------------------------------
+  "nav.devices": "Devices",
+
+  // The «Подключить устройство» dialog (owner side, §2.1–§2.4).
+  "pairing.title": "Connect a device",
+  "pairing.description":
+    "The QR pairing dialog: create a code, scan it with the device, then confirm the request after matching the four digits.",
+  "pairing.creating": "Creating a pairing…",
+  "pairing.createFailed": "Could not create the pairing",
+  "pairing.confirmFailed": "Could not confirm the pairing",
+  "pairing.denyFailed": "Could not deny the pairing",
+  "pairing.cancelFailed": "Could not cancel the pairing",
+  "pairing.qrTitle": "Scan the QR with the device",
+  "pairing.qr.hint": "No camera? Type the code below manually on the device.",
+  "pairing.qr.loading": "Loading the QR…",
+  "pairing.codeLabel": "Pairing code",
+  "pairing.codeHint": "Manual path: open /pair on the device and enter this code.",
+  "pairing.copy": "Copy",
+  "pairing.copied": "Copied",
+  "pairing.copyFailed":
+    "Copy failed — the code stays in the field, select it manually.",
+  "pairing.waitingScan": "Waiting for the scan…",
+  "pairing.ttl": "expires in {{time}}",
+  "pairing.expiredShort": "expired — start over",
+  "pairing.cancel": "Cancel",
+  "pairing.requestTitle": "Connection request",
+  "pairing.requestHint":
+    "A device scanned the code. Match the four digits against its screen and confirm.",
+  "pairing.unverified": "unverified",
+  "pairing.sourceIp": "Device IP",
+  "pairing.noDeviceName": "no name",
+  "pairing.verifyLabel": "Verification code",
+  "pairing.verifyHint":
+    "Four digits are a screen match, not a password: they must be identical on both devices.",
+  "pairing.approve": "Confirm",
+  "pairing.deny": "Deny",
+  "pairing.confirmedTitle": "Device confirmed",
+  "pairing.confirmedMessage":
+    "The token will be issued at the device's next exchange — the entry appears in the device list.",
+  "pairing.deniedTitle": "Request denied",
+  "pairing.deniedMessage": "The device gets no token; the code is spent.",
+  "pairing.cancelledTitle": "Pairing cancelled",
+  "pairing.expiredTitle": "Pairing expired — start over",
+  "pairing.expiredMessage": "A code lives for 3 minutes. Create a new pairing.",
+  "pairing.revokedTitle": "Pairing revoked",
+  "pairing.failedTitle": "Pairing not created",
+  "pairing.restart": "Start over",
+  "pairing.done": "Done",
+
+  // The «Устройства» page (/system/devices, §10.2).
+  "pairing.devices.title": "Devices",
+  "pairing.devices.listLabel": "Paired devices",
+  "pairing.devices.loading": "Loading devices…",
+  "pairing.devices.failed": "Could not load the devices",
+  "pairing.devices.loginHint":
+    "The device list requires the owner session — sign in to see the connected devices.",
+  "pairing.devices.empty": "No paired devices yet",
+  "pairing.devices.emptyHint":
+    "Connect a phone or tablet: «Connect a device» → QR → confirmation.",
+  "pairing.devices.state.active": "active",
+  "pairing.devices.state.expired": "expired",
+  "pairing.devices.state.revoked": "revoked",
+  "pairing.devices.created": "connected",
+  "pairing.devices.lastIp": "last IP",
+  "pairing.devices.expires": "sliding TTL until",
+  "pairing.devices.hardExpires": "hard until",
+  "pairing.devices.revoke": "Revoke",
+  "pairing.devices.revokeConfirm":
+    "Revoke «{{name}}»? Revocation is irreversible — the device will need a fresh pairing.",
+  "pairing.devices.revoked": "Device revoked",
+  "pairing.devices.revokeFailed": "Could not revoke the device",
+  // Per-device granules (Amendment §A.7 — «давать и забирать доступы»;
+  // global reads are always open and have no switch).
+  "pairing.devices.grantsExpand": "Show component grants",
+  "pairing.devices.grantsCollapse": "Hide component grants",
+  "pairing.devices.grantsTitle": "Component grants",
+  "pairing.devices.grantsHint":
+    "Reads are always open; a switch grants or revokes the component's mutations — effective immediately, no re-pairing.",
+  "pairing.devices.granule.tasks": "Tasks",
+  "pairing.devices.granule.reports": "Reports",
+  "pairing.devices.granule.inbox": "Inbox",
+  "pairing.devices.granule.notifications": "Notifications",
+  "pairing.devices.grantOn": "granted",
+  "pairing.devices.grantOff": "closed",
+  "pairing.devices.grantsSaved": "Grants updated",
+  "pairing.devices.grantsFailed": "Could not update the grants",
+  "pairing.unsupportedTitle": "Pairing is unavailable in this mode",
+  "pairing.unsupportedMessage":
+    "The devices domain speaks the board merge-API (ADR 0012); the direct-mnemos mode has no such page.",
+
+  // The device page (/pair, §2.3 — no authentication).
+  "pair.title": "Connect this device",
+  "pair.intro": "Enter the pairing code from the owner's screen and a device name.",
+  "pair.codeLabel": "Pairing code",
+  "pair.codeInvalid": "The code cannot be empty",
+  "pair.nameLabel": "Device name",
+  "pair.defaultName": "Browser on {{platform}}",
+  "pair.platformUnknown": "unknown platform",
+  "pair.connect": "Connect",
+  "pair.connecting": "Connecting…",
+  "pair.verifyingTitle": "Code accepted — confirm on the trusted side",
+  "pair.verifyHint":
+    "Show the owner these four digits and wait for the confirmation on their screen.",
+  "pair.waitHint":
+    "We will re-check automatically in a minute; the button works manually too.",
+  "pair.checkNow": "Check now",
+  "pair.checking": "Checking…",
+  "pair.linkedTitle": "Device connected — bound to this browser",
+  "pair.boundNote":
+    "The token is stored on this device — nothing to copy by hand. The button below is only for moving it into another app.",
+  "pair.tokenLabel": "Device token",
+  "pair.copyToken": "Copy token",
+  "pair.copyFallback": "Copied via the browser's fallback path.",
+  "pair.copyManual": "Copy failed — the token is selected in the row, copy it manually.",
+  "pair.startWork": "Start working",
+  "pair.deviceId": "Device id",
+  "pair.scope": "scope",
+  "pair.expires": "expires",
+  "pair.enterAnother": "Enter another code",
+  "pair.err403": "The code is bound to another address",
+  "pair.err404": "Unknown code",
+  "pair.err410": "The code expired or was already used",
+  "pair.err429": "Too many attempts",
+  "pair.err503": "Pairing is disabled on the server",
+  "pair.errGeneric": "Could not connect",
 };

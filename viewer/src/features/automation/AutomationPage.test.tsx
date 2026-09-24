@@ -13,6 +13,8 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * `/system/automation` (SCHED-1-UI): the honest engine-off banner, the
@@ -90,7 +92,10 @@ describe("status banner — the S1 honesty", () => {
     expect(text).toContain("Engine not enabled");
     expect(text).toContain("Manual runs only");
     expect(text).toContain("global kill-switch: off");
-    expect(text).toContain("daily cap: 50");
+    // UI-21: the status pair projects from the SAME live settings the hub
+    // form reads (server parity — app.py reads store.automation_settings),
+    // so the cap is the store default 10, not the old fixture drift 50.
+    expect(text).toContain("daily cap: 10");
     expect(text).toContain("auto-launches today: 0");
     expect(text).toContain("rules: 2 schedules, 2 hook rules");
     // No toggle control exists for the kill-switch (v1 cut) — read-only
@@ -103,7 +108,7 @@ describe("status banner — the S1 honesty", () => {
     expect(container.querySelectorAll('[role="switch"]')).toHaveLength(0);
     expect(container.querySelectorAll('[role="checkbox"]')).toHaveLength(0);
     expect(container.querySelectorAll("input[type=checkbox]")).toHaveLength(0);
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -184,7 +189,7 @@ describe("the condition triple — dependent selects, NO free text (regression)"
     const editor = document.querySelector("#hook-condition-field")?.closest("fieldset");
     expect(editor).not.toBeNull();
     expect(editor?.querySelectorAll("input:not([type=hidden])").length).toBe(0);
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -202,7 +207,7 @@ describe("no-token posture — readable section, disabled mutations", () => {
     for (const button of runButtons) {
       expect(button.disabled).toBe(true);
     }
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -218,7 +223,7 @@ describe("journal — cursor pagination", () => {
     expect(text).toContain("skipped");
     expect(text).toContain("manual/ui"); // the engine-off journal reads clearly
     expect(text).toContain("assignment #"); // the run-now outcome link
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("«More» stitches the next cursor page into the list", async () => {
@@ -260,11 +265,11 @@ describe("journal — cursor pagination", () => {
       more!.click();
     });
     // The stitch is async (wire + setQueryData) — wait for it to land.
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       const stitched = container.querySelector("ul[aria-label='Journal']");
       expect((stitched?.querySelectorAll("li").length ?? 0) > firstPage).toBe(true);
     });
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -279,12 +284,12 @@ describe("run-now — ONE shared path, no second machine", () => {
     await act(async () => {
       runButton.click();
     });
-    await vi.waitFor(() => expect(document.body.textContent).toContain("launched"));
+    await actWaitUntil(() => expect(document.body.textContent).toContain("launched"));
     // The run-now outcome is an ORDINARY assignment on the shared queue —
     // the existing surfaces (list/cards/task tab) are the machine; this
     // page built none of its own.
     const queue = await gateway.listAssignments({ task_id: "TB-1" });
     expect(queue.items.some((row) => row.state === "queued")).toBe(true);
-    root.unmount();
+    await actUnmount(root);
   });
 });

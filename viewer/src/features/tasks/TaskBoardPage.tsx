@@ -15,6 +15,7 @@ import { useReducedMotion } from "@/lib/useReducedMotion";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import { useUiToken } from "@/features/ui-token/UiTokenContext";
+import { hasDeviceToken } from "@/gateway/deviceToken";
 import { useT } from "@/i18n";
 import { buildOrderedColumns } from "./boardDnd";
 import { CreateTaskDialog } from "./CreateTaskDialog";
@@ -36,7 +37,7 @@ import { useKanbanDnd } from "./useKanbanDnd";
 import { useBoardTasks, useReportCounts } from "./useTasks";
 import { useTaskMutations } from "./useTaskMutations";
 import { BoardStyleToggle } from "./BoardStyleToggle";
-import { loadBoardStyle, type BoardStyle } from "./tasksViewPrefs";
+import { useBoardStyle } from "@/lib/boardStyleStore";
 
 /**
  * `/tasks` — the KANBAN view of the domain, view №1 per the redesign concept
@@ -67,17 +68,21 @@ function TaskBoardView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const state = parseTaskListParams(searchParams);
   const [collapsed, setCollapsed] = useState(() => loadCollapsedGroups());
-  // CV-5: the board render style («Группы | Классика») — persisted locally
-  // under "vesmaro.boardStyle"; both styles share columns, DnD and filters.
-  const [boardStyle, setBoardStyle] = useState<BoardStyle>(() => loadBoardStyle());
+  // CV-5 / UI-23: the board render style («Группы | Классика») lives in the
+  // shared store (lib/boardStyleStore.ts, persisted "vesmaro.boardStyle") —
+  // the kanban toggle and the settings hub are two controls of ONE state
+  // (spec §4.3); both styles share columns, DnD and filters.
+  const [boardStyle] = useBoardStyle();
   const [createOpen, setCreateOpen] = useState(false);
   const mutations = useTaskMutations();
 
-  // Owner decision (CV-4 §3, the simpler honest variant): without a ui token
-  // cards do not drag at all — cursor default, tooltip «войдите для
-  // управления». The keyboard move (⋯ → «Переместить…») still leads to the
-  // login window through the standard token gate (runAuthorized).
-  const canDrag = canMutate && tokenPresent;
+  // Owner decision (CV-4 §3, the simpler honest variant) + scope v1
+  // (ADR 0012 Amendment): cards drag on an owner session OR a paired
+  // control device (the server's scope table rules the move itself);
+  // a tokenless, deviceless browser still does not drag at all — tooltip
+  // «войдите для управления». The keyboard move (⋯ → «Переместить…») still
+  // leads through the standard token gate (runAuthorized).
+  const canDrag = canMutate && (tokenPresent || hasDeviceToken());
 
   const tasks = useMemo(() => board.data?.tasks ?? [], [board.data]);
   const taskIds = useMemo(() => tasks.map((task) => task.id), [tasks]);
@@ -125,8 +130,8 @@ function TaskBoardView() {
           <div className="flex flex-wrap items-center gap-2">
             <TasksViewToggle />
             {/* CV-5: board style lives ONLY on the kanban — the list has no
-             * accordion/classic distinction. */}
-            <BoardStyleToggle style={boardStyle} onChange={setBoardStyle} />
+             * accordion/classic distinction. The toggle owns the store write. */}
+            <BoardStyleToggle />
           </div>
         </div>
         {canMutate ? (

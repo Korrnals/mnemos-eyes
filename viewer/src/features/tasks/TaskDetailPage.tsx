@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { Cog, FileText, History, Layers, PencilLine, Play, ScrollText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton, TableRowSkeleton } from "@/components/skeletons/Skeletons";
+import { TextEngine } from "@/components/TextEngine";
 import { TaskExecutionTab } from "@/features/agents/TaskExecutionTab";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
-import type { TaskHistory, TaskMemories } from "@/gateway/boardTypes";
+import type { BoardTask, TaskHistory, TaskMemories } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import {
   formatTaskDate,
   historyEventLabelKey,
@@ -24,6 +26,7 @@ import { useTaskMutations } from "./useTaskMutations";
 import {
   useSyncReportCount,
   useTask,
+  useTaskDetail,
   useTaskHistory,
   useTaskMemories,
   useTaskReports,
@@ -32,11 +35,20 @@ import {
 /**
  * `/tasks/:id` — the task PAGE (concept §4.1: a route, not the board's modal
  * stack; tabs are URL state `?tab=reports|history|memory|details`, default
- * «Отчёты»). The row comes from the shared `tasks.board` projection (no
- * single-task GET exists — see useTasks.ts). Ф3 adds the mutation header:
- * «Изменить» (content edit, BE-12 force path inside) and UI-8 «Вернуть в
- * работу» on a live final report (PATCH status=in-progress — the column
- * never moves).
+ * «Отчёты»). The row comes from the shared `tasks.board` projection; when
+ * the projection misses the id (an archived row, most often) the direct
+ * single-task GET supplies it (BE-16: one TaskOut for active AND archived —
+ * see `useTaskDetail`). Ф3 adds the mutation header: «Изменить» (content
+ * edit, BE-12 force path inside) and UI-8 «Вернуть в работу» on a live
+ * final report (PATCH status=in-progress — the column never moves).
+ *
+ * ME-005: an archived row is READ-ONLY by contract — no Edit/resume affordances
+ * (the PATCH is wire-discretionary, the UI simply stops offering it); the
+ * archive page's Restore-to-board remains the mutation path. Tab links and
+ * return navigation stay intact.
+ *
+ * UI-18: tab links preserve `?return=` and every other param (spec §2.2
+ * rule 4): the first tab click must not kill the back context.
  */
 
 const TASK_TABS = [
@@ -63,6 +75,11 @@ export function TaskDetailPage() {
   const canMutate = isTaskMutationSource(gateway);
   const { id } = useParams<{ id: string }>();
   const task = useTask(id);
+  // UI-18 pair 4 / BE-16: rows missing from the board projection (archived
+  // ones, usually) resolve through the DIRECT single-task GET — fired only
+  // after the board query settled empty (no extra wire call on the happy
+  // path).
+  const detail = useTaskDetail(id, task.isSuccess && task.data === undefined);
   // UI-8 needs the reports anyway (the «Отчёты» tab loads the same key —
   // one wire call, no extra request for the header decision).
   const reports = useTaskReports(id);
@@ -71,6 +88,14 @@ export function TaskDetailPage() {
   const [searchParams] = useSearchParams();
   const tabParam = searchParams.get("tab") ?? "reports";
   const tab: TaskTabId = isTaskTabId(tabParam) ? tabParam : "reports";
+  // Tabs inherit the WHOLE current query (return=, …) and swap only `tab`
+  // (spec §2.2 rule 4).
+  const tabHref = (tabId: TaskTabId) => {
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", tabId);
+    const qs = params.toString();
+    return `/tasks/${encodeURIComponent(id ?? "")}${qs ? `?${qs}` : ""}`;
+  };
 
   if (id === undefined) {
     return (
@@ -119,9 +144,23 @@ export function TaskDetailPage() {
     );
   }
 
-  if (!task.data) {
-    // Not on the board projection: unknown id or ARCHIVED row (archived
-    // tasks never travel with /api/board — check the Архив page).
+  const boardTask = task.data;
+  const current = boardTask ?? detail.data ?? undefined;
+  if (!current) {
+    // Not on the board projection: the detail GET may still be resolving
+    // (UI-18 pair 4) — hold the skeleton until it settles so a live row
+    // never flashes not-found.
+    if (detail.fetchStatus === "fetching") {
+      return (
+        <TaskDetailShell>
+          <div role="status" aria-label={t("tasks.loadingOne")}>
+            <MemoryCardSkeleton count={3} />
+          </div>
+        </TaskDetailShell>
+      );
+    }
+    // Unknown id (the GET 404s; BE-16 resolves every existing row): the
+    // not-found state keeps its honest «Открыть архив» escape.
     return (
       <TaskDetailShell>
         <EmptyState
@@ -137,13 +176,17 @@ export function TaskDetailPage() {
       </TaskDetailShell>
     );
   }
-
-  const current = task.data;
   // UI-8: a live (non-superseded) final report marks the task as finished —
   // only then does the header offer «Вернуть в работу».
   const hasLiveFinal = (reports.data?.items ?? []).some(
     (report) => report.kind === "final" && !report.superseded,
   );
+  // ME-005: archived rows are read-only — no Edit/resume affordances (the
+  // wire PATCH stays discretionary; the UI stops offering it). The fallback
+  // GET (BE-16) is the only read that carries `archived`, and it is the
+  // detail header's single source for the gate.
+  const archived = current.archived === 1;
+  const canEdit = canMutate && !archived;
 
   return (
     <TaskDetailShell>
@@ -152,7 +195,7 @@ export function TaskDetailPage() {
       <header className="space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <p className="font-mono text-xs text-foreground-muted">{current.id}</p>
-          {canMutate ? (
+          {canEdit ? (
             <div className="flex flex-wrap gap-2">
               {hasLiveFinal ? (
                 <Button
@@ -204,8 +247,9 @@ export function TaskDetailPage() {
         </p>
       </header>
 
-      {/* Content edit (BE-12 lock + force path lives inside). */}
-      {canMutate ? (
+      {/* Content edit (BE-12 lock + force path lives inside); archived rows
+       * offer no editor at all (ME-005). */}
+      {canEdit ? (
         <EditTaskDialog task={current} open={editOpen} onOpenChange={setEditOpen} />
       ) : null}
 
@@ -219,7 +263,7 @@ export function TaskDetailPage() {
             return (
               <li key={entry.id}>
                 <Link
-                  to={`/tasks/${encodeURIComponent(id)}?tab=${entry.id}`}
+                  to={tabHref(entry.id)}
                   aria-current={active ? "page" : undefined}
                   onClick={(event) => {
                     // Same-path navigation only swaps the query — keep it soft.
@@ -246,8 +290,15 @@ export function TaskDetailPage() {
         {tab === "reports" ? <ReportsTab taskId={id} lang={lang} /> : null}
         {tab === "history" ? <HistoryTab taskId={id} lang={lang} /> : null}
         {tab === "memory" ? <MemoryTab taskId={id} lang={lang} /> : null}
-        {tab === "details" ? <DetailsTab taskId={id} lang={lang} /> : null}
-        {tab === "execution" ? <TaskExecutionTab task={current} /> : null}
+        {tab === "details" ? <DetailsTab task={current} lang={lang} /> : null}
+        {tab === "execution" ? (
+          <TaskExecutionTab
+            task={current}
+            /* AGW-6 A.3 link-test deep-link (?assign=<executorId>): the
+             * sheet auto-opens with the executor pinned. */
+            autoAssignExecutorId={searchParams.get("assign") ?? undefined}
+          />
+        ) : null}
       </div>
     </TaskDetailShell>
   );
@@ -327,9 +378,14 @@ function ReportsTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
                 {formatTaskDate(report.created_at, lang)}
               </span>
             </summary>
-            <p className="mt-2 whitespace-pre-wrap text-foreground-secondary">
-              {report.body}
-            </p>
+            {/* UI-27: agent report bodies are markdown almost by definition —
+             * they render through the TextEngine primitive (plain fallback
+             * keeps legacy output for terse one-liners). The <details> row is
+             * a disclosure, so the body clamps with «показать полностью» —
+             * a long report opens to its height, the tab never turns into an
+             * unbounded wall of report text (owner directive: clamp on every
+             * disclosure). */}
+            <TextEngine text={report.body} variant="full" clamp className="mt-2" />
           </details>
         </li>
       ))}
@@ -432,6 +488,11 @@ function memoryCard(value: unknown): { title: string; excerpt: string; status: s
 function MemoryTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
   const t = useT();
   const links = useTaskMemories(taskId);
+  // UI-18 pair 12 (detail→detail): the memory links carry THIS task URL —
+  // tab=memory plus whatever `return=` the task itself arrived with — as
+  // their own `return=` (§2.2 rule 3: each link stores only its immediate
+  // predecessor, the chain resolves recursively: memory → task → list).
+  const location = useLocation();
 
   if (links.isPending) {
     return (
@@ -476,7 +537,11 @@ function MemoryTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
           return (
             <li key={memoryId}>
               <Link
-                to={`/memory/${encodeURIComponent(memoryId)}`}
+                to={withReturn(
+                  `/memory/${encodeURIComponent(memoryId)}`,
+                  location.pathname,
+                  location.search,
+                )}
                 className="block rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well transition-colors duration-instant hover:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
               >
                 <span className="flex flex-wrap items-center gap-2">
@@ -528,11 +593,12 @@ function MemoryTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
   );
 }
 
-/** «Детали»: summary readable, spec pre-wrap, honest metadata table. */
-function DetailsTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
+/** «Детали»: summary readable, spec pre-wrap, honest metadata table. The row
+ * arrives as a prop so ARCHIVED tasks (UI-18 pair 4 — no board row) render
+ * too; the old inner useTask() re-query silently hid their details tab. */
+function DetailsTab({ task, lang }: { task: BoardTask; lang: "ru" | "en" }) {
   const t = useT();
-  const task = useTask(taskId);
-  const current = task.data;
+  const current = task;
   if (!current) return null;
 
   return (
@@ -541,15 +607,31 @@ function DetailsTab({ taskId, lang }: { taskId: string; lang: "ru" | "en" }) {
         <h2 className="text-sm font-medium text-foreground-secondary">
           {t("tasks.detailsSummaryLabel")}
         </h2>
-        <p className="mt-1 whitespace-pre-wrap text-sm">{current.summary || "—"}</p>
+        {current.summary ? (
+          /* UI-27: summary is author text — through the TextEngine primitive. */
+          <TextEngine
+            text={current.summary}
+            variant="compact"
+            className="mt-1 text-sm"
+          />
+        ) : (
+          <p className="mt-1 text-sm">—</p>
+        )}
       </section>
       <section aria-label={t("tasks.detailsSpecLabel")}>
         <h2 className="text-sm font-medium text-foreground-secondary">
           {t("tasks.detailsSpecLabel")}
         </h2>
-        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-well p-3 font-mono text-xs leading-relaxed text-foreground-secondary">
-          {current.spec || "—"}
-        </pre>
+        {current.spec ? (
+          /* UI-27: the spec is the task's markdown document (headings,
+           * checklists, code) — formatted in the well box; plain specs keep
+           * the legacy pre-wrap look inside the same box. */
+          <div className="mt-1 rounded-md border border-border-subtle bg-well p-3">
+            <TextEngine text={current.spec} variant="full" className="text-sm" />
+          </div>
+        ) : (
+          <p className="mt-1 text-sm">—</p>
+        )}
       </section>
       <section aria-label={t("tasks.detailsMetaLabel")}>
         <h2 className="text-sm font-medium text-foreground-secondary">

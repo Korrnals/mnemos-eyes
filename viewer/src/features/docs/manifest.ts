@@ -1,7 +1,10 @@
 import { useSyncExternalStore } from "react";
 import { DOC_CATEGORIES, docCategory } from "./categories";
+import { docProjectsSorted, projectOfDocSlug } from "./projects";
+import { loadSidecar, type SidecarPage } from "./sidecar";
 import {
   docModuleEntries,
+  hasMarkdown,
   loadMarkdown,
   parseDocPath,
   type DocLocale,
@@ -9,27 +12,46 @@ import {
 import type { Lang } from "@/i18n";
 
 /**
- * Docs manifest (contract §3): frontmatter of every content file, parsed on
- * first request. Loading stays LAZY (the glob is not eager — budget §10):
- * the first /docs mount kicks one round of dynamic md-chunk fetches, then
- * everything is cached. Broken or incomplete frontmatter is reported via
- * console.error and the page is excluded — the app never falls over on
- * content (contract §3).
+ * Docs manifest (contract §3/§4): metadata of every page, WITHOUT loading
+ * the md bodies. Imported pages come from the generated sidecar (ONE lazy
+ * JSON — the perf fix: the first /docs open no longer fetches every chunk);
+ * our own pages still read their frontmatter chunks (15 files — the sidecar
+ * covers the upstream corpus only, W1a scope). Body loading stays LAZY per
+ * slug+locale (budget §10). Broken metadata is reported via console.error
+ * and the page is excluded — the app never falls over on content.
  */
+
+export interface DocProvenance {
+  repo: string;
+  /** Path inside the upstream repository. */
+  path: string;
+  sha: string;
+  /** ISO commit date the corpus was synced at. */
+  syncedAt: string;
+}
 
 export interface DocPage {
   slug: string;
+  /** Owning hub project (`vesmaro-eyes` for our own pages). */
+  project: string;
   /** Per-locale titles; the fallback chain lives in `titleFor`. */
   titles: Partial<Record<DocLocale, string>>;
   category: string;
   order: number;
   lastVerified: string;
-  /** Locales this page is published in (contract §6 — from day one). */
+  /** Locales this page is published in (contract §6). */
   locales: DocLocale[];
+  /**
+   * The locale the content ORIGINATES in — the fallback target when the UI
+   * language is not published (design spec §7.1: «язык оригинала»).
+   */
+  originalLocale: DocLocale;
+  /** Present for imported pages only (sidecar provenance, contract §4). */
+  provenance?: DocProvenance;
 }
 
 export interface DocsManifest {
-  /** Valid pages sorted by category order → page order. */
+  /** Valid pages sorted by project → category → page order. */
   pages: DocPage[];
 }
 
@@ -72,16 +94,38 @@ export function parseFrontmatter(raw: string): ParsedDoc | null {
 
 /**
  * The page h1 is rendered from frontmatter (design spec §6: «h1 … вне
- * md-тела»), so the corpus convention of starting the body with `# Title`
- * is stripped before rendering — one h1 per page (WCAG 1.3.1).
+ * md-тела»), so the body's own h1 is stripped before rendering — one h1 per
+ * page (WCAG 1.3.1). Our corpus opens with the h1; imported bodies carry it
+ * AFTER the GENERATED comment + curator preamble — so the FIRST ATX h1
+ * before any code fence goes (fence-aware: `#` lines inside code are code,
+ * never headings).
  */
 export function stripLeadingH1(body: string): string {
-  return body.replace(/^\s*#\s+[^\n]*\n+/, "").trimStart();
+  const fenceAt = body.search(/^\s*```/m);
+  const head = fenceAt === -1 ? body : body.slice(0, fenceAt);
+  const headStripped = head.replace(/^#\s+[^\n]*\n+/m, "");
+  const stripped =
+    fenceAt === -1 ? headStripped : headStripped + body.slice(fenceAt);
+  return stripped.trimStart();
 }
 
 /** First non-empty paragraph of a body — the category-row description. */
+/**
+ * Leading provenance banners (GENERATED/curated whole-line `<!-- ... -->`
+ * comments) are presentation noise — the sidecar badge carries provenance
+ * (АРХКОМ-8 verdict 1). Line-based by design: a comment embedded inside a
+ * content paragraph is NOT stripped here. Shared by the article pipeline
+ * (Markdown.tsx) and every description/snippet consumer.
+ */
+export function stripLeadingBanners(source: string): string {
+  const lines = source.split("\n");
+  let index = 0;
+  while (index < lines.length && /^\s*<!--.*-->\s*$/.test(lines[index])) index += 1;
+  return index === 0 ? source : lines.slice(index).join("\n").replace(/^\s+/, "");
+}
+
 export function firstParagraph(body: string): string {
-  const plain = stripLeadingH1(body)
+  const plain = stripLeadingBanners(body)
     // Fence contents are code, not prose — drop whole fenced blocks.
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```[\s\S]*$/g, " ");
@@ -100,20 +144,23 @@ export function firstParagraph(body: string): string {
   return "";
 }
 
-/** Title in the UI language, falling back to ru, then to any locale. */
+/** Title in the UI language, falling back to the original, then to any. */
 export function titleFor(page: DocPage, lang: Lang): string {
   return (
-    page.titles[lang] ?? page.titles.ru ?? Object.values(page.titles)[0] ?? page.slug
+    page.titles[lang] ??
+    page.titles[page.originalLocale] ??
+    Object.values(page.titles)[0] ??
+    page.slug
   );
 }
 
 /**
- * Locale policy (contract §6): UI=ru always reads the ru file; UI=en reads
- * the en file when published, else falls back to ru (the UI shows the
- * locale badge — DocsPage owns that).
+ * Effective locale of a page under a UI language (contract §6, spec §7.1):
+ * the UI language when published, else the page's ORIGINAL language — the
+ * badge «на языке оригинала» replaces the old «always ru» fallback.
  */
 export function localeForPage(page: DocPage, lang: Lang): DocLocale {
-  return page.locales.includes(lang) ? (lang as DocLocale) : "ru";
+  return page.locales.includes(lang) ? (lang as DocLocale) : page.originalLocale;
 }
 
 function requireNumber(value: string | undefined): number | null {
@@ -121,12 +168,101 @@ function requireNumber(value: string | undefined): number | null {
   return Number(value);
 }
 
+/** Shape sidecar provenance into the DocPage form; undefined when partial. */
+function provenanceOf(entry: SidecarPage): DocProvenance | undefined {
+  const raw = entry.provenance;
+  if (
+    !raw ||
+    typeof raw.repo !== "string" ||
+    typeof raw.source_path !== "string" ||
+    typeof raw.sha !== "string" ||
+    typeof raw.commit_date !== "string" ||
+    raw.repo === "" ||
+    raw.source_path === "" ||
+    raw.sha === "" ||
+    raw.commit_date === ""
+  ) {
+    return undefined;
+  }
+  return {
+    repo: raw.repo,
+    path: raw.source_path,
+    sha: raw.sha,
+    syncedAt: raw.commit_date,
+  };
+}
+
 /**
- * Build the manifest from every content file. Invalid files are announced
- * and skipped (never thrown): docs render is content-tolerant by contract.
+ * Imported pages from the sidecar (no body fetches). Invalid entries are
+ * announced and skipped; a page whose chunk is missing for ANY declared
+ * locale is excluded whole — the manifest never promises what cannot load.
+ */
+function pagesFromSidecar(sidecar: Awaited<ReturnType<typeof loadSidecar>>): Map<string, DocPage> {
+  const bySlug = new Map<string, DocPage>();
+  if (!sidecar) return bySlug;
+  for (const entry of sidecar.pages) {
+    if (typeof entry.slug !== "string" || entry.slug === "") {
+      console.error("[docs] sidecar entry without a slug, skipped");
+      continue;
+    }
+    const project = projectOfDocSlug(entry.slug);
+    if (project === "vesmaro-eyes") {
+      console.error(
+        `[docs] sidecar slug "${entry.slug}" collides with the default project namespace, skipped`,
+      );
+      continue;
+    }
+    const category = docCategory(entry.category);
+    if (!category) {
+      console.error(
+        `[docs] sidecar ${entry.slug}: unknown category "${entry.category}", page excluded`,
+      );
+      continue;
+    }
+    const locales = (Array.isArray(entry.locales) ? entry.locales : []).filter(
+      (locale): locale is DocLocale => locale === "ru" || locale === "en",
+    );
+    if (locales.length === 0 || locales.some((locale) => !hasMarkdown(entry.slug, locale))) {
+      console.error(
+        `[docs] sidecar ${entry.slug}: declared locale without a content file, page excluded`,
+      );
+      continue;
+    }
+    const provenance = provenanceOf(entry);
+    if (provenance === undefined) {
+      // Gate §6.5 (spec §6.2): an imported page without full provenance is a
+      // broken import, not a style issue — exclude and say so.
+      console.error(
+        `[docs] sidecar ${entry.slug}: incomplete provenance, page excluded`,
+      );
+      continue;
+    }
+    if (typeof entry.order !== "number") {
+      console.error(`[docs] sidecar ${entry.slug}: order must be a number, page excluded`);
+      continue;
+    }
+    bySlug.set(entry.slug, {
+      slug: entry.slug,
+      project,
+      titles: entry.titles ?? {},
+      category: category.slug,
+      order: entry.order,
+      lastVerified: String(entry.lastVerified ?? ""),
+      locales,
+      originalLocale: locales[0],
+      provenance,
+    });
+  }
+  return bySlug;
+}
+
+/**
+ * Build the manifest: sidecar pages first, then our own pages from their
+ * frontmatter chunks. Invalid files are announced and skipped (never
+ * thrown): docs render is content-tolerant by contract.
  */
 async function buildManifest(): Promise<DocsManifest> {
-  const bySlug = new Map<string, { page: DocPage; path: string }>();
+  const bySlug = pagesFromSidecar(await loadSidecar());
 
   await Promise.all(
     docModuleEntries().map(async ([path, load]) => {
@@ -135,6 +271,9 @@ async function buildManifest(): Promise<DocsManifest> {
         console.error(`[docs] ${path}: file outside content/<locale>/ layout, skipped`);
         return;
       }
+      // Imported pages take their metadata from the sidecar above — no
+      // chunk fetch for them here (the perf fix, contract §4).
+      if (parsedPath.project !== undefined) return;
       const { slug, locale } = parsedPath;
       let raw: string;
       try {
@@ -175,37 +314,39 @@ async function buildManifest(): Promise<DocsManifest> {
       }
       const existing = bySlug.get(slug);
       if (existing) {
-        existing.page.titles[locale] = fields.title;
-        existing.page.locales.push(locale);
+        existing.titles[locale] = fields.title;
+        existing.locales.push(locale);
         return;
       }
       bySlug.set(slug, {
-        path,
-        page: {
-          slug,
-          titles: { [locale]: fields.title },
-          category: fields.category,
-          order,
-          lastVerified: fields.last_verified,
-          locales: [locale],
-        },
+        slug,
+        project: "vesmaro-eyes",
+        titles: { [locale]: fields.title },
+        category: fields.category,
+        order,
+        lastVerified: fields.last_verified,
+        locales: [locale],
+        originalLocale: locale,
       });
     }),
   );
 
+  const projectOrder = new Map(docProjectsSorted().map((p) => [p.slug, p.order]));
   const categoryOrder = new Map(
     DOC_CATEGORIES.map((category) => [category.slug, category.order]),
   );
-  const pages = [...bySlug.values()]
-    .map(({ page }) => page)
-    .sort((a, b) => {
-      const catDelta =
-        (categoryOrder.get(a.category) ?? Number.MAX_SAFE_INTEGER) -
-        (categoryOrder.get(b.category) ?? Number.MAX_SAFE_INTEGER);
-      return catDelta !== 0
-        ? catDelta
-        : a.order - b.order || a.slug.localeCompare(b.slug);
-    });
+  const pages = [...bySlug.values()].sort((a, b) => {
+    const projectDelta =
+      (projectOrder.get(a.project) ?? Number.MAX_SAFE_INTEGER) -
+      (projectOrder.get(b.project) ?? Number.MAX_SAFE_INTEGER);
+    if (projectDelta !== 0) return projectDelta;
+    const catDelta =
+      (categoryOrder.get(a.category) ?? Number.MAX_SAFE_INTEGER) -
+      (categoryOrder.get(b.category) ?? Number.MAX_SAFE_INTEGER);
+    return catDelta !== 0
+      ? catDelta
+      : a.order - b.order || a.slug.localeCompare(b.slug);
+  });
   return { pages };
 }
 
@@ -226,7 +367,7 @@ export function getManifest(): Promise<DocsManifest> {
 }
 
 /**
- * Synchronous access for pure helpers (crumbsFor, sidebar section match).
+ * Synchronous access for pure helpers (crumbsFor, sidebar group matching).
  * null until the first getManifest() resolves — the /docs pages hydrate it
  * on mount, so pre-hydration trails simply carry less detail.
  */

@@ -56,12 +56,24 @@ describe("TaskInboxPage (mock adapter)", () => {
   it("renders queue records with server provenance, priority and specialist", async () => {
     const html = await renderInbox(new MockAdapter({ latency: false }));
     expect(html).toContain("Inbox");
-    expect(html).toContain("server: laptop");
-    expect(html).toContain("critical");
     expect(html).toContain("@GCW: Senior System Engineer");
     // The mock has 3 not-adopted records (the 4th is adopted).
     expect(html).toContain("records — 3");
     expect(html).toContain("scan: 19/09/2026");
+  });
+
+  it("renders UI-25 key:value colored chips (priority / project / server)", async () => {
+    const html = await renderInbox(new MockAdapter({ latency: false }));
+    // Key:value format per owner feedback, one colored chip per field.
+    expect(html).toContain("priority: high");
+    expect(html).toContain("priority: critical");
+    expect(html).toContain("project: mnemos");
+    expect(html).toContain("project: vesmaro");
+    expect(html).toContain("server: laptop");
+    // The edited fixture row carries the overlay badge…
+    expect(html).toContain("edited");
+    // …and shows the EFFECTIVE priority (high), not the base normal.
+    expect(html).not.toContain("priority: normal");
   });
 
   it("hides adopted rows by default; ?adopted=1 brings them back with a link", async () => {
@@ -76,7 +88,8 @@ describe("TaskInboxPage (mock adapter)", () => {
     );
     expect(htmlAdopted).toContain("records — 4");
     expect(htmlAdopted).toContain("adopted → TB-3");
-    expect(htmlAdopted).toMatch(/href="\/tasks\/TB-3"/);
+    // UI-18 pair 3: the inbox URL rides as `return=` on the task link.
+    expect(htmlAdopted).toMatch(/href="\/tasks\/TB-3\?return=%2Ftasks%2Finbox%3Fadopted%3D1"/);
     // The toggle itself is a labelled checkbox bound to the URL state.
     expect(htmlAdopted).toContain('type="checkbox"');
   });

@@ -1,17 +1,18 @@
 import type { MemoryGateway } from "./MemoryGateway";
 import type { InboxParams } from "./BoardAdapter";
 import { resolveRoutingAnnotation } from "./routing";
-import { KNOWN_HARNESSES } from "./harnesses";
 import { ApiError } from "@/lib/errors";
-import { MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
+import { MOCK_INBOX_MEMORY, MOCK_MEMORIES, MOCK_SESSIONS, MOCK_TRACES } from "./fixtures";
 import {
   MOCK_ARCHIVED_TASK,
   MOCK_ASSIGNMENTS,
+  MOCK_AUTOMATION_SETTINGS,
   MOCK_AUTOMATION_STATUS,
   MOCK_BOARD,
   MOCK_EXECUTORS,
   MOCK_EXECUTORS_META,
   MOCK_EXECUTION_SETTINGS,
+  MOCK_HARNESSES,
   MOCK_HISTORY,
   MOCK_HOOKS,
   MOCK_INBOX,
@@ -31,6 +32,8 @@ import type {
   AssignmentLifecycleState,
   AssignmentListParams,
   AssignmentsPage,
+  AutomationSettings,
+  AutomationSettingsInput,
   AutomationStatus,
   BoardHealthDetail,
   BoardSummary,
@@ -46,10 +49,20 @@ import type {
   EnrollmentItem,
   EnrollmentRevokeResult,
   EnrollmentsPage,
+  ProvisionCreateInput,
+  ProvisionCreatedResult,
+  ProvisionEnrollmentStatus,
+  ProvisionJobState,
+  ProvisionJobStatus,
+  HarnessCreateInput,
+  HarnessesPage,
+  HarnessItem,
+  HarnessStateResult,
   HookCreateInput,
   HookPatchInput,
   HookRule,
   HooksPage,
+  InboxEditInput,
   InboxRefreshResult,
   LaunchRow,
   LaunchesPage,
@@ -101,6 +114,18 @@ const DEFAULT_RECALL_LIMIT = 5;
 const DEFAULT_LAUNCH_LIMIT = 50;
 /** Launch journal page cap (server `_AUTOMATION_PAGE_CAP` mirror). */
 const LAUNCH_PAGE_CAP = 200;
+
+/**
+ * Pulse preview overrides (mock-only). The shared corpus stays plain prose
+ * so every index/count assertion keeps holding; the pulse mapping decorates
+ * two rows instead, to exercise every TextEngine path in dev and dev-test:
+ * mem-0004 carries a small markdown fragment (heading + list → lazy
+ * renderer chunk), mem-0005 carries no fragment at all (honest absence).
+ */
+const MOCK_PULSE_CONTENT_OVERRIDES: Readonly<Record<string, string | null>> = {
+  "mem-0004": "# Decision log\n\n- namespaced tags only\n- `topic:` slugs reviewed weekly",
+  "mem-0005": null,
+};
 
 /** BE-12 content window: tasks older than this are 423-locked without force. */
 const LOCK_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -170,6 +195,9 @@ export class MockAdapter implements MemoryGateway {
   // --- AGW-1 mutable agents state (same clone-per-instance discipline) --------
   private assignments: AssignmentItem[];
   private executors: ExecutorItem[];
+  /** Harness dictionary (wave 3C): live playground state seeded from the
+   * fixture corpus; the nomination gates read THIS, like the server. */
+  private harnesses: HarnessItem[];
   private executionSettings: ExecutionSettings;
   /** Per-project defaults (board_meta `default_executor:project:<slug>`
    * mirror) — modelled through PUT /settings/execution with a project scope. */
@@ -177,10 +205,23 @@ export class MockAdapter implements MemoryGateway {
   private schedules: ScheduleRule[];
   private hooks: HookRule[];
   private launches: LaunchRow[];
+  /** UI-21 settings hub: the live kill-switch/cap pair (store.py defaults). */
+  private automationSettings: {
+    enabled: boolean;
+    cap_global_per_day: number;
+  };
   /** AGW-5 phase 2: enrollment tokens minted at RUNTIME (playground starts
    * clean — the fixtures carry none, minting is an owner action). */
   private enrollments: EnrollmentItem[];
   private nextEnrollmentNo = 1;
+  /** AGW-11 provision jobs (runtime). The state machine below is
+   * READ-DRIVEN — one phase per getProvisionJob call — so tests advance
+   * it deterministically and the playground paces it off the connect
+   * card's poll (no timers to fake). */
+  private provisionJobs: MockProvisionJob[] = [];
+  private nextProvisionNo = 1;
+  /** Test/dev steering: "ok", or the typed code the next job fails with. */
+  private provisionOutcome: "ok" | { readonly failCode: string } = "ok";
   private nextAssignmentNo = 1;
   private nextRuleNo = 1;
   private nextLaunchNo = 1;
@@ -197,10 +238,15 @@ export class MockAdapter implements MemoryGateway {
     this.inboxItems = MOCK_INBOX.items.map((item) => ({ ...item }));
     this.assignments = MOCK_ASSIGNMENTS.map((assignment) => ({ ...assignment }));
     this.executors = MOCK_EXECUTORS.map((executor) => ({ ...executor }));
+    this.harnesses = MOCK_HARNESSES.map((harness) => ({ ...harness }));
     this.executionSettings = { ...MOCK_EXECUTION_SETTINGS };
     this.schedules = MOCK_SCHEDULES.map((rule) => ({ ...rule }));
     this.hooks = MOCK_HOOKS.map((rule) => ({ ...rule }));
     this.launches = MOCK_LAUNCHES.map((row) => ({ ...row }));
+    this.automationSettings = {
+      enabled: MOCK_AUTOMATION_SETTINGS.enabled,
+      cap_global_per_day: MOCK_AUTOMATION_SETTINGS.cap_global_per_day,
+    };
     this.enrollments = [];
     // Fresh ids never collide with the corpus rows.
     this.nextAssignmentNo =
@@ -263,7 +309,9 @@ export class MockAdapter implements MemoryGateway {
     signal?: AbortSignal,
   ): Promise<Memory> {
     await this.delay(signal);
-    const memory = MOCK_MEMORIES.find((candidate) => candidate.id === id);
+    const memory =
+      (id === MOCK_INBOX_MEMORY.id ? MOCK_INBOX_MEMORY : undefined) ??
+      MOCK_MEMORIES.find((candidate) => candidate.id === id);
     if (!memory) {
       throw new ApiError(404, `Memory "${id}" not found`, {
         url: `mock:/memories/${id}`,
@@ -475,6 +523,13 @@ export class MockAdapter implements MemoryGateway {
         status: memory.status,
         created_at: memory.created_at ?? "",
         server: scope || "mock-store",
+        // Server-contract mirror: ≤400-char fragment (plain corpus prose or
+        // a documented mock override — see MOCK_PULSE_CONTENT_OVERRIDES).
+        content:
+          memory.id !== undefined &&
+          Object.hasOwn(MOCK_PULSE_CONTENT_OVERRIDES, memory.id)
+            ? MOCK_PULSE_CONTENT_OVERRIDES[memory.id]
+            : pulseContentFragment(memory.content),
       }));
     return {
       ok: scope !== "mock-store-paused",
@@ -579,11 +634,17 @@ export class MockAdapter implements MemoryGateway {
   }
 
   async taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask> {
+    // BE-16 mirror: one handler for BOTH active and archived rows — the
+    // wire's single GET /api/tasks/{id} applies no archived filter, so the
+    // mock's archivedTasks split (a fixture detail, not a wire behaviour)
+    // stays invisible here.
     await this.delay(signal);
-    const task = this.tasks.find((candidate) => candidate.id === taskId);
+    const task =
+      this.tasks.find((candidate) => candidate.id === taskId) ??
+      this.archivedTasks.find((candidate) => candidate.id === taskId);
     if (!task) {
-      throw new ApiError(404, `task '${taskId}' not found on the board`, {
-        url: "mock:/api/board",
+      throw new ApiError(404, `task '${taskId}' not found`, {
+        url: `mock:/api/tasks/${taskId}`,
       });
     }
     return { ...task };
@@ -793,6 +854,59 @@ export class MockAdapter implements MemoryGateway {
     return created;
   }
 
+  /**
+   * UI-25 pre-adoption edit. The mock mirrors the wire semantics: the patch
+   * merges into the row's `edits` overlay and the row fields shown here ARE
+   * the effective projection (the playground keeps a single flat copy — the
+   * server keeps base + overlay separately; documented divergence).
+   */
+  async patchInboxItem(
+    memoryId: string,
+    patch: InboxEditInput,
+    signal?: AbortSignal,
+  ): Promise<TaskInboxEntry> {
+    await this.delay(signal);
+    const index = this.inboxItems.findIndex((row) => row.memory_id === memoryId);
+    if (index === -1) {
+      throw new ApiError(404, `inbox row '${memoryId}' not found`, {
+        url: `mock:/api/tasks/inbox/${memoryId}`,
+      });
+    }
+    const item = this.inboxItems[index];
+    if (item.adopted) {
+      throw new ApiError(409, "inbox record already adopted", {
+        url: `mock:/api/tasks/inbox/${memoryId}`,
+      });
+    }
+    if (patch.title != null && patch.title.trim().length === 0) {
+      // Wire parity: TaskInboxEditSpec.title is min_length=1 server-side.
+      throw new ApiError(422, "title must be 1..200 characters", {
+        url: `mock:/api/tasks/inbox/${memoryId}`,
+      });
+    }
+    const overlay: Record<string, string> = { ...(item.edits ?? {}) };
+    const next = { ...item };
+    if (patch.title != null && patch.title !== "") {
+      overlay.title = patch.title;
+      next.title = patch.title;
+    }
+    if (patch.summary != null) {
+      overlay.summary = patch.summary;
+      next.excerpt = patch.summary;
+    }
+    if (patch.priority != null) {
+      overlay.priority = patch.priority;
+      next.priority = patch.priority;
+    }
+    if (patch.project != null) {
+      overlay.project = patch.project;
+      next.project = patch.project;
+    }
+    const updated: TaskInboxEntry = { ...next, edits: overlay };
+    this.inboxItems[index] = updated;
+    return { ...updated };
+  }
+
   async refreshInbox(signal?: AbortSignal): Promise<InboxRefreshResult> {
     await this.delay(signal);
     // The mock re-sees its whole mirror set; nothing new appears because the
@@ -833,6 +947,15 @@ export class MockAdapter implements MemoryGateway {
     signal?: AbortSignal,
   ): Promise<AssignmentCreatedResult> {
     await this.delay(signal);
+    // Server mirror (assignment create gate, wave 3C): an unknown harness
+    // can never launch — refuse early against the live dictionary.
+    if (!this.harnessNames().includes(payload.harness)) {
+      throw new ApiError(
+        422,
+        `unknown harness: ${payload.harness}; known: ${this.harnessNames().join(", ")}`,
+        { url: "mock:/api/assignments" },
+      );
+    }
     const assignment = this.createAssignmentRow(
       payload.task_id,
       payload.specialist,
@@ -910,6 +1033,117 @@ export class MockAdapter implements MemoryGateway {
       items: this.executors.map((executor) => ({ ...executor })),
       meta: MOCK_EXECUTORS_META,
     };
+  }
+
+  // --- harness dictionary (wave 3C, design 2026-09-22 §C) ---------------------
+  // Server mirrors: name rule and dictionary ceiling (store.py HARNESS_*),
+  // in-use delete gates (executor / non-terminal assignment / schedule /
+  // hook condition). The playground dictionary state is what its OWN
+  // nomination gates read — same as the server.
+
+  /** Live dictionary snapshot — the mock's nomination gates use it. */
+  private harnessNames(): string[] {
+    return this.harnesses.map((harness) => harness.name);
+  }
+
+  async listHarnesses(signal?: AbortSignal): Promise<HarnessesPage> {
+    await this.delay(signal);
+    return {
+      ok: true,
+      count: this.harnesses.length,
+      items: [...this.harnesses].sort((a, b) => a.name.localeCompare(b.name)),
+      meta: { seed_min_count: 10 },
+    };
+  }
+
+  async createHarness(
+    payload: HarnessCreateInput,
+    signal?: AbortSignal,
+  ): Promise<HarnessStateResult> {
+    await this.delay(signal);
+    const name = payload.name.trim();
+    if (!/^[a-z0-9][a-z0-9._-]{0,59}$/.test(name)) {
+      throw new ApiError(
+        422,
+        `invalid harness name: '${name}' (lowercase latin/digits first, then [a-z0-9._-], max 60 chars)`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    if (this.harnesses.length >= 64) {
+      throw new ApiError(
+        422,
+        "the harness dictionary is capped at 64 — remove unused entries before adding more",
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    if (this.harnessNames().includes(name)) {
+      throw new ApiError(409, `harness '${name}' is already registered`, {
+        url: "mock:/api/harnesses",
+      });
+    }
+    const row: HarnessItem = {
+      name,
+      added_at: new Date(this.now()).toISOString(),
+      added_via: "owner",
+      note: (payload.note ?? "").trim().slice(0, 200),
+    };
+    this.harnesses.push(row);
+    return { ok: true, harness: { ...row } };
+  }
+
+  async deleteHarness(name: string, signal?: AbortSignal): Promise<void> {
+    await this.delay(signal);
+    const index = this.harnesses.findIndex((harness) => harness.name === name);
+    if (index === -1) {
+      throw new ApiError(404, `harness '${name}' is not registered`, {
+        url: "mock:/api/harnesses",
+      });
+    }
+    if (this.executors.some((executor) => executor.harness === name)) {
+      throw new ApiError(
+        409,
+        `harness '${name}' is used by a registered executor — delete that executor first (revoked executors keep blocking — server parity)`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    if (
+      this.assignments.some(
+        (assignment) =>
+          assignment.harness === name &&
+          ACTIVE_ASSIGNMENT_STATES.includes(assignment.state),
+      )
+    ) {
+      throw new ApiError(
+        409,
+        `harness '${name}' has active assignments — cancel or finish them first`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    // Only ENABLED rules block: rules are soft-deleted (the row survives
+    // retention), a disabled rule cannot fire — counting it would make a
+    // harness undeletable forever (server parity, wave 3C review fix).
+    if (this.schedules.some((rule) => rule.harness === name && rule.enabled)) {
+      throw new ApiError(
+        409,
+        `harness '${name}' is referenced by an automation schedule — delete the schedule first`,
+        { url: "mock:/api/harnesses" },
+      );
+    }
+    for (const hook of this.hooks) {
+      if (!hook.enabled) continue;
+      // HookRule.condition arrives PARSED (ConditionItem[]) — no JSON decode.
+      const hit = hook.condition.some(
+        (clause) => clause.field === "harness" && String(clause.value) === name,
+      );
+      if (hit) {
+        throw new ApiError(
+          409,
+          `harness '${name}' is referenced by automation hook '${hook.name}' — delete the hook first`,
+          { url: "mock:/api/harnesses" },
+        );
+      }
+    }
+    this.harnesses.splice(index, 1);
   }
 
   async getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings> {
@@ -1022,8 +1256,7 @@ export class MockAdapter implements MemoryGateway {
     // Rename guard (AGW-4 P3): pydantic bounds (1..120) + the duplicate
     // check of update_executor. Computed UP FRONT — a local `name` would
     // silently collide with the DOM `window.name` global in the spread.
-    const nextName =
-      patch.name !== undefined ? patch.name.trim() : undefined;
+    const nextName = patch.name !== undefined ? patch.name.trim() : undefined;
     if (nextName !== undefined && (nextName.length === 0 || nextName.length > 120)) {
       throw new ApiError(422, "invalid executor name", {
         url: "mock:/api/executors",
@@ -1070,8 +1303,8 @@ export class MockAdapter implements MemoryGateway {
 
   /**
    * Mint a one-time mne_ token (store.create_enrollment mirror): 422
-   * unknown harness_hint (the allowlist is the closed KNOWN_HARNESSES
-   * mirror), 409 at ENROLLMENT_MAX_LIVE = 3 live tokens with NO auto-revoke
+   * unknown harness_hint (the hint gate reads the live dictionary state,
+   * wave 3C), 409 at ENROLLMENT_MAX_LIVE = 3 live tokens with NO auto-revoke
    * (device-quota principle — the owner revokes by hand). TTL 15 min,
    * server constant. The plaintext token exists ONLY in this answer.
    */
@@ -1083,11 +1316,11 @@ export class MockAdapter implements MemoryGateway {
     if (
       payload.harness_hint !== undefined &&
       payload.harness_hint !== "" &&
-      !(KNOWN_HARNESSES as readonly string[]).includes(payload.harness_hint)
+      !this.harnessNames().includes(payload.harness_hint)
     ) {
       throw new ApiError(
         422,
-        `unknown harness_hint: ${payload.harness_hint}; known: ${KNOWN_HARNESSES.join(", ")}`,
+        `unknown harness_hint: ${payload.harness_hint}; known: ${this.harnessNames().join(", ")}`,
         { url: "mock:/api/executors/enrollment" },
       );
     }
@@ -1163,21 +1396,307 @@ export class MockAdapter implements MemoryGateway {
     return { ok: true, enrollment: { ...updated } };
   }
 
+  // --- SSH provisioner (wave 4 AGW-11; read-driven state machine) -----------
+
+  /**
+   * Test/dev steering for the next job: "ok" walks the full happy path,
+   * a failCode fails the job at the phase that code belongs to (the map
+   * lives in provisionFailPhase). Mock-only surface, no wire counterpart.
+   */
+  setProvisionOutcome(outcome: "ok" | { readonly failCode: string }): void {
+    this.provisionOutcome = outcome;
+  }
+
+  /**
+   * Queue a provision job (route mirror): 422 password auth while the
+   * deployment flag is off (the honest default), 422 unknown harness or
+   * missing secret, 409 one live job per host:port. The enrollment is
+   * minted atomically with the job (store.create_enrollment mirror) and
+   * the token NEVER rides the answer — the mock has no token material
+   * for provisioned legs at all.
+   */
+  async createProvisionJob(
+    payload: ProvisionCreateInput,
+    signal?: AbortSignal,
+  ): Promise<ProvisionCreatedResult> {
+    await this.delay(signal);
+    if (payload.auth.kind === "password") {
+      throw new ApiError(
+        422,
+        "password ssh auth is disabled on this board (default) — use key or alias auth",
+        { url: "mock:/api/executors/provision" },
+      );
+    }
+    if (
+      payload.harness_hint !== undefined &&
+      payload.harness_hint !== "" &&
+      !this.harnessNames().includes(payload.harness_hint)
+    ) {
+      throw new ApiError(
+        422,
+        `unknown harness: ${payload.harness_hint}; known: ${this.harnessNames().join(", ")}`,
+        { url: "mock:/api/executors/provision" },
+      );
+    }
+    if (payload.auth.kind === "key" && !(payload.auth.secret ?? "").trim()) {
+      throw new ApiError(422, "key auth requires secret", {
+        url: "mock:/api/executors/provision",
+      });
+    }
+    const port = payload.port ?? 22;
+    const live = this.provisionJobs.find(
+      (job) =>
+        job.row.host === payload.host &&
+        job.row.port === port &&
+        !isTerminalProvisionState(job.row.state),
+    );
+    if (live) {
+      throw new ApiError(
+        409,
+        `a provisioning job for ${payload.host}:${port} is already live (${live.row.id}, ${live.row.state})`,
+        { url: "mock:/api/executors/provision" },
+      );
+    }
+    const nowMs = this.now();
+    const enrollmentId = `enr-mock-${String(this.nextEnrollmentNo).padStart(4, "0")}`;
+    this.nextEnrollmentNo += 1;
+    this.enrollments.push({
+      enrollment_id: enrollmentId,
+      label: `provision:${payload.host}`,
+      harness_hint: payload.harness_hint ?? "",
+      name_hint: payload.name ?? "",
+      state: "created",
+      created_at: new Date(nowMs).toISOString(),
+      expires_at: new Date(nowMs + ENROLLMENT_TTL_MS).toISOString(),
+      used_at: "",
+      used_ip: "",
+      executor_id: "",
+    });
+    const job: MockProvisionJob = {
+      row: {
+        id: `pj-mock-${String(this.nextProvisionNo).padStart(4, "0")}`,
+        host: payload.host,
+        port,
+        auth_kind: payload.auth.kind,
+        key_fingerprint: "",
+        host_key_fingerprint: "",
+        harness_hint: payload.harness_hint ?? "",
+        board_url_for_host: payload.board_url_for_host ?? "",
+        enrollment_id: enrollmentId,
+        state: "queued",
+        error_code: "",
+        steps: [],
+        created_at: new Date(nowMs).toISOString(),
+        updated_at: new Date(nowMs).toISOString(),
+      },
+      executorName: payload.name ?? payload.host,
+      enrollment: {
+        state: "created",
+        expires_at: new Date(nowMs + ENROLLMENT_TTL_MS).toISOString(),
+        executor_id: "",
+      },
+      failAt: this.provisionOutcome === "ok" ? null : this.provisionOutcome.failCode,
+    };
+    this.nextProvisionNo += 1;
+    // A mismatch scenario needs a pin the job ENFORCED (the second-job-on-
+    // a-pinned-host case): seed the row like the store seeds strict-mode
+    // jobs, so the card can show the expected fingerprint.
+    if (job.failAt === "host_key_mismatch") {
+      job.row.host_key_fingerprint = `SHA256:${mockFingerprintBody(job.row.id)}`;
+    }
+    this.provisionJobs.push(job);
+    return {
+      ok: true,
+      job_id: job.row.id,
+      enrollment_id: enrollmentId,
+      state: "queued",
+    };
+  }
+
+  /**
+   * Job status (route mirror). READ-DRIVEN progression: every call while
+   * the job is live advances ONE phase of the worker script (connect →
+   * TOFU pin → sudo/CA/bootstrap → watching → done + a pending executor
+   * row). Step texts mirror the real worker's EN strings verbatim so the
+   * connect card renders the same log shape against the mock.
+   */
+  async getProvisionJob(
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<ProvisionJobStatus> {
+    await this.delay(signal);
+    const job = this.provisionJobs.find((candidate) => candidate.row.id === jobId);
+    if (!job) {
+      throw new ApiError(404, `provision job ${jobId} not found`, {
+        url: "mock:/api/executors/provision",
+      });
+    }
+    this.advanceProvision(job);
+    return {
+      ok: true,
+      job: { ...job.row, steps: JSON.stringify(job.row.steps) },
+      enrollment: { ...job.enrollment },
+    };
+  }
+
+  /** One phase of the worker script; terminal states never move again. */
+  private advanceProvision(job: MockProvisionJob): void {
+    const row = job.row;
+    if (isTerminalProvisionState(row.state)) return;
+    const phase = row.state;
+    const failHere = job.failAt !== null && provisionFailPhase(job.failAt) === phase;
+    const step = (text: string): void => {
+      row.steps.push(text);
+    };
+    row.updated_at = new Date(this.now()).toISOString();
+    if (failHere && job.failAt !== null) {
+      row.state = "failed";
+      row.error_code = job.failAt;
+      step(`failed: ${job.failAt}`);
+      return;
+    }
+    switch (phase) {
+      case "queued":
+        row.state = "connecting";
+        step(`ssh connect ${row.host}:${row.port}`);
+        return;
+      case "connecting":
+        // TOFU: a deterministic pseudo-fingerprint (canonical SHA256:base64
+        // shape, 43 unpadded chars).
+        row.host_key_fingerprint = `SHA256:${mockFingerprintBody(row.id)}`;
+        step(`host key pinned (TOFU): ${row.host_key_fingerprint}`);
+        row.state = "installing";
+        return;
+      case "installing":
+        step("sudo -n preflight ok");
+        step("running the bootstrap one-liner (pinned TLS)");
+        row.state = "watching";
+        return;
+      case "watching":
+        step("bootstrap finished — watching the enrollment");
+        row.state = "done";
+        this.finishProvisionEnrollment(job);
+        step(`executor ${job.enrollment.executor_id} registered — awaiting owner approval`);
+        return;
+      default:
+        return;
+    }
+  }
+
+  /** The registration leg: enrollment used + a PENDING executor row. */
+  private finishProvisionEnrollment(job: MockProvisionJob): void {
+    const nowIso = new Date(this.now()).toISOString();
+    const executorId = `exec-mock-p${this.nextProvisionNo}`;
+    job.enrollment = {
+      state: "used",
+      expires_at: job.enrollment.expires_at,
+      executor_id: executorId,
+    };
+    const index = this.enrollments.findIndex(
+      (row) => row.enrollment_id === job.row.enrollment_id,
+    );
+    if (index !== -1) {
+      this.enrollments[index] = {
+        ...this.enrollments[index],
+        state: "used",
+        used_at: nowIso,
+        used_ip: "203.0.113.7",
+        executor_id: executorId,
+      };
+    }
+    const executor: ExecutorItem = {
+      id: executorId,
+      name: job.executorName,
+      harness: job.row.harness_hint || "zcode",
+      host: job.row.host,
+      transport: "local-poll",
+      capabilities: [],
+      version: "",
+      enabled: false,
+      state: "pending",
+      last_seen: nowIso,
+      presence: "online",
+      registered_via: `enrollment:${job.row.enrollment_id}`,
+      registered_at: nowIso,
+      updated_at: nowIso,
+    };
+    this.executors.push(executor);
+  }
+
   // --- SCHED-1 automation (ADR 0013 S1: CRUD + journal + manual run-now) -------
 
   async automationStatus(signal?: AbortSignal): Promise<AutomationStatus> {
     await this.delay(signal);
     // Derived from live rule state like the server; engine stays the honest
-    // S1 constant (no loop exists to report live).
+    // S1 constant (no loop exists to report live). The harness values_hint
+    // joins through the LIVE dictionary state (wave 3C — server parity),
+    // never a static fixture list; the kill-switch/cap pair projects from
+    // the SAME live settings the settings form reads/writes (UI-21 —
+    // server parity: app.py automation_status reads
+    // store.automation_settings).
     const schedulesEnabled = this.schedules.filter((rule) => rule.enabled).length;
     const hooksEnabled = this.hooks.filter((rule) => rule.enabled).length;
     return {
       ...MOCK_AUTOMATION_STATUS,
+      condition_meta: {
+        ...MOCK_AUTOMATION_STATUS.condition_meta,
+        values_hint: {
+          // The generated schema types values_hint as `unknown` (anonymous
+          // dict on the wire); the mock owns the fixture shape.
+          ...(MOCK_AUTOMATION_STATUS.condition_meta.values_hint as Record<
+            string,
+            unknown
+          >),
+          harness: this.harnessNames(),
+        },
+      },
+      global_kill_switch: this.automationSettings.enabled,
+      daily_cap: this.automationSettings.cap_global_per_day,
       rules: {
         schedules: { total: this.schedules.length, enabled: schedulesEnabled },
         hooks: { total: this.hooks.length, enabled: hooksEnabled },
       },
     };
+  }
+
+  /** Kill-switch + daily cap (`GET /api/automation/settings` mirror). */
+  async getAutomationSettings(signal?: AbortSignal): Promise<AutomationSettings> {
+    await this.delay(signal);
+    return { ok: true, ...this.automationSettings };
+  }
+
+  /**
+   * Set the kill-switch / daily cap (`PUT /api/automation/settings`
+   * mirror): `None` fields are ignored, an out-of-range cap answers the
+   * SAME 422 text as `store.AutomationValidationError`, effective changes
+   * land in the live pair (the audit log itself is server-side only).
+   */
+  async putAutomationSettings(
+    payload: AutomationSettingsInput,
+    signal?: AbortSignal,
+  ): Promise<AutomationSettings> {
+    await this.delay(signal);
+    if (
+      payload.cap_global_per_day !== null &&
+      payload.cap_global_per_day !== undefined &&
+      (!Number.isInteger(payload.cap_global_per_day) ||
+        payload.cap_global_per_day < 1 ||
+        payload.cap_global_per_day > 1000)
+    ) {
+      throw new ApiError(422, "cap_global_per_day must be an int in 1..1000", {
+        url: "mock:/api/automation/settings",
+      });
+    }
+    if (payload.enabled !== null && payload.enabled !== undefined) {
+      this.automationSettings.enabled = payload.enabled;
+    }
+    if (
+      payload.cap_global_per_day !== null &&
+      payload.cap_global_per_day !== undefined
+    ) {
+      this.automationSettings.cap_global_per_day = payload.cap_global_per_day;
+    }
+    return { ok: true, ...this.automationSettings };
   }
 
   async listSchedules(signal?: AbortSignal): Promise<SchedulesPage> {
@@ -1879,6 +2398,35 @@ function compareCreated(a?: Memory, b?: Memory): number {
   return (b?.created_at ?? "").localeCompare(a?.created_at ?? "");
 }
 
+/** Pulse fragment cap (server `content_fragment` mirror): ≤400 chars. */
+const PULSE_FRAGMENT_MAX = 400;
+
+/** Whitespace set the server cuts at (`content_fragment` `_WS_CHARS` mirror). */
+const PULSE_WS_CHARS = " \t\r\n\f\v";
+
+/**
+ * Mock mirror of the server's `content_fragment()`: the pulse row preview is
+ * a ≤400-char cut at a whitespace boundary. The whitespace set and the
+ * limit+1 search window are the server's exactly, so dev previews cut at
+ * prod positions (a boundary AT the limit is legal; hard cut only when the
+ * window holds no whitespace). Blank or absent content maps to null — the
+ * UI shows honest absence, never an empty shell. Exported for the pulse
+ * contract tests.
+ */
+export function pulseContentFragment(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length <= PULSE_FRAGMENT_MAX) return trimmed;
+  // Last whitespace within limit+1 chars (server rfind(ws, 0, limit + 1)).
+  let boundary = -1;
+  for (const ws of PULSE_WS_CHARS) {
+    boundary = Math.max(boundary, trimmed.lastIndexOf(ws, PULSE_FRAGMENT_MAX));
+  }
+  const cut = boundary > 0 ? boundary : PULSE_FRAGMENT_MAX;
+  return trimmed.slice(0, cut).trimEnd();
+}
+
 function round(value: number, decimals: number): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
@@ -1913,6 +2461,70 @@ function mockTokenMaterial(): string {
   let out = "";
   for (let i = 0; i < 32; i += 1) {
     out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return out;
+}
+
+/** Internal shape of one mock provision job (mutable row + the script). */
+interface MockProvisionJob {
+  row: {
+    id: string;
+    host: string;
+    port: number;
+    auth_kind: string;
+    key_fingerprint: string;
+    host_key_fingerprint: string;
+    harness_hint: string;
+    board_url_for_host: string;
+    enrollment_id: string;
+    state: ProvisionJobState;
+    error_code: string;
+    steps: string[];
+    created_at: string;
+    updated_at: string;
+  };
+  /** name_hint for the pending executor minted at done. */
+  executorName: string;
+  enrollment: ProvisionEnrollmentStatus;
+  /** Typed code the job fails with at its phase; null = happy path. */
+  failAt: string | null;
+}
+
+function isTerminalProvisionState(state: ProvisionJobState): boolean {
+  return state === "done" || state === "failed";
+}
+
+/**
+ * Which phase a typed failure code belongs to (mirrors the real worker):
+ * sudo/CA/bootstrap failures at installing, register.* at watching;
+ * ssh.* / host_key_mismatch and anything unknown at the connecting leg.
+ */
+function provisionFailPhase(code: string): ProvisionJobState {
+  if (
+    code === "ssh.sudo_required" ||
+    code === "ca.unavailable" ||
+    code.startsWith("bootstrap.")
+  ) {
+    return "installing";
+  }
+  if (code.startsWith("register.")) {
+    return "watching";
+  }
+  return "connecting";
+}
+
+/** Deterministic 43-char base64 body for a mock TOFU fingerprint. */
+function mockFingerprintBody(seed: string): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  let out = "";
+  for (let i = 0; i < 43; i += 1) {
+    hash = Math.imul(hash ^ (hash >>> 13), 1274126177);
+    out += alphabet[Math.abs(hash) % alphabet.length];
   }
   return out;
 }

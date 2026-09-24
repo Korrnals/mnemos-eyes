@@ -26,6 +26,10 @@ import type { BoardTask } from "./boardTypes";
  * SCHED-1-UI addition (ADR 0013 §4): the automation-rule family
  * `automation.rule.created/updated/toggled/deleted` — one event per rule
  * mutation, a single list-sync signal for both rule families.
+ *
+ * Wave 3C addition: the harness-dictionary family
+ * `harness.added/removed` — one frame per dictionary mutation; `added`
+ * carries the full row, `removed` the deleted name.
  */
 export type EventSourceFactory = (url: string) => EventSource;
 
@@ -209,6 +213,66 @@ export interface BoardEventMap {
   };
   "enrollment.revoked": EnrollmentEvent & { readonly kind: "enrollment.revoked" };
   "enrollment.expired": EnrollmentEvent & { readonly kind: "enrollment.expired" };
+  // Harness-dictionary kinds (wave 3C, ui-contract §11 дополнение): one
+  // frame per dictionary mutation (add/remove). `added` carries the full
+  // row, `removed` only the name — consumers treat the pair as a single
+  // list-sync signal over the harnesses key.
+  "harness.added": HarnessEvent & { readonly kind: "harness.added" };
+  "harness.removed": HarnessEvent & { readonly kind: "harness.removed" };
+  // Provisioning kinds (wave 4 AGW-11, design 2026-09-23 §B): job
+  // lifecycle HINTS for the connect card — created (202 accepted),
+  // progress (every step; carries the live state), ok (the enrollment was
+  // consumed — executor_id links the pending registry row), failed (typed
+  // error_code + masked detail), repinned (the owner's re-pin action).
+  // Transit invariant: NONE of these ever carries the mne_ token, the ssh
+  // secret or any credential material (server-side broadcast contract).
+  "provisioning.created": ProvisioningEvent & {
+    readonly kind: "provisioning.created";
+    readonly host: string;
+    readonly port: number;
+    readonly enrollment_id: string;
+  };
+  "provisioning.progress": ProvisioningEvent & {
+    readonly kind: "provisioning.progress";
+    readonly state: string;
+    readonly step: string;
+  };
+  "provisioning.ok": ProvisioningEvent & {
+    readonly kind: "provisioning.ok";
+    readonly executor_id: string;
+  };
+  "provisioning.failed": ProvisioningEvent & {
+    readonly kind: "provisioning.failed";
+    readonly error_code: string;
+    readonly detail?: string;
+  };
+  "provisioning.repinned": {
+    readonly kind: "provisioning.repinned";
+    readonly host: string;
+    readonly port: number;
+    readonly fingerprint: string;
+  };
+  // Pairing kinds (CV-7, ADR 0012 §10.3 — ui-contract §11 дополнение):
+  // requested (exchange created→scanned), confirmed (owner allow=true),
+  // revoked (owner deny / cancel / device revoke — pairing_id XOR device_id
+  // depending on WHAT died), expired (TTL sweep). Payload audit rule §3.3:
+  // NEVER code/verify/device_token in any payload — these frames are the
+  // owner panel's change HINTS only (the digits come from
+  // GET /api/pairing/{id} under ui-token, never from the LAN stream).
+  "pairing.requested": PairingEvent & {
+    readonly kind: "pairing.requested";
+    readonly device_name?: string;
+  };
+  "pairing.confirmed": PairingEvent & {
+    readonly kind: "pairing.confirmed";
+    readonly device_name?: string;
+  };
+  "pairing.revoked": {
+    readonly kind: "pairing.revoked";
+    readonly pairing_id?: string;
+    readonly device_id?: string;
+  };
+  "pairing.expired": PairingEvent & { readonly kind: "pairing.expired" };
 }
 
 export interface AssignmentEvent {
@@ -272,6 +336,43 @@ export interface EnrollmentEvent {
   readonly executor_id?: string;
   readonly executor_name?: string;
   readonly used_ip?: string;
+}
+
+/**
+ * Harness-dictionary event payload (wave 3C, ui-contract §11 дополнение):
+ * `{kind, harness|name}` — one frame per dictionary mutation. `added`
+ * carries the full row; `removed` only the name (the row is gone). A pure
+ * list-sync signal: consumers invalidate the harnesses key and refetch.
+ */
+export interface HarnessEvent {
+  /** added only: the full dictionary row. */
+  readonly harness?: Readonly<Record<string, unknown>>;
+  /** removed only: the deleted name. */
+  readonly name?: string;
+}
+
+/**
+ * Provisioning event payload base (wave 4 AGW-11): `{kind, job_id}` —
+ * every member of the family keys off the job except `repinned` (the
+ * owner act speaks about the host:port identity, not a job). A pure
+ * change HINT: the connect card invalidates its job query and refetches
+ * the authoritative GET (invalidation-only bridge, agentsEvents.ts).
+ */
+export interface ProvisioningEvent {
+  readonly job_id: string;
+}
+
+/**
+ * Pairing event payload base (ADR 0012 §10.3): `{kind, pairing_id}`.
+ * Optional `device_name` rides on requested/confirmed (the self-asserted
+ * label — rendered as text, unverified by definition §3.6). The `revoked`
+ * member deliberately does NOT extend this base: the device-revoke emitter
+ * (DELETE /api/devices/{id}) speaks about the SESSION, not the pairing, so
+ * it carries `device_id` instead — the parser demands at least ONE of the
+ * two identifiers on that kind.
+ */
+export interface PairingEvent {
+  readonly pairing_id: string;
 }
 
 /** Every kind the dictionary names (known kinds). */
@@ -441,6 +542,135 @@ export function parseBoardEvent(raw: string): ParsedBoardEvent {
           used_ip: parsed.used_ip,
         },
       };
+    case "harness.added":
+      // The full row is the point of `added` — without it the frame is
+      // malformed (consumers could not render the new entry).
+      if (!isRecord(parsed.harness)) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: { kind, harness: parsed.harness },
+      };
+    case "harness.removed":
+      // Only the deleted name travels; it is mandatory.
+      if (typeof parsed.name !== "string") {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: { kind, name: parsed.name },
+      };
+    case "provisioning.created":
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.host !== "string" ||
+        typeof parsed.port !== "number" ||
+        typeof parsed.enrollment_id !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          job_id: parsed.job_id,
+          host: parsed.host,
+          port: parsed.port,
+          enrollment_id: parsed.enrollment_id,
+        },
+      };
+    case "provisioning.progress":
+      // state + step are the whole point (the connect card's live feed).
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.state !== "string" ||
+        typeof parsed.step !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          job_id: parsed.job_id,
+          state: parsed.state,
+          step: parsed.step,
+        },
+      };
+    case "provisioning.ok":
+      // executor_id links the pending registry row (approve funnel).
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.executor_id !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: { kind, job_id: parsed.job_id, executor_id: parsed.executor_id },
+      };
+    case "provisioning.failed":
+      if (
+        typeof parsed.job_id !== "string" ||
+        typeof parsed.error_code !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          job_id: parsed.job_id,
+          error_code: parsed.error_code,
+          ...(typeof parsed.detail === "string" ? { detail: parsed.detail } : {}),
+        },
+      };
+    case "provisioning.repinned":
+      // The owner re-pin speaks about the host:port identity, not a job.
+      if (
+        typeof parsed.host !== "string" ||
+        typeof parsed.port !== "number" ||
+        typeof parsed.fingerprint !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          host: parsed.host,
+          port: parsed.port,
+          fingerprint: parsed.fingerprint,
+        },
+      };
+    case "pairing.requested":
+    case "pairing.confirmed":
+    case "pairing.expired":
+      return parsePairingEvent(parsed, kind);
+    case "pairing.revoked": {
+      // §10.3: owner deny/cancel speak pairing_id, the DEVICE revoke speaks
+      // device_id — a frame without either identifier is malformed (the
+      // consumers could not tell what died).
+      if (
+        typeof parsed.pairing_id !== "string" &&
+        typeof parsed.device_id !== "string"
+      ) {
+        return ignored("malformed-payload", kind);
+      }
+      return {
+        status: "event",
+        event: {
+          kind,
+          ...(typeof parsed.pairing_id === "string"
+            ? { pairing_id: parsed.pairing_id }
+            : {}),
+          ...(typeof parsed.device_id === "string"
+            ? { device_id: parsed.device_id }
+            : {}),
+        },
+      };
+    }
     default:
       return ignored("unknown-kind", kind);
   }
@@ -465,8 +695,12 @@ function withOptionalNotification<T extends object>(
  */
 function parseExecutorEvent(
   parsed: Record<string, unknown>,
-  kind: "executor.online" | "executor.offline" | "executor.registered" |
-    "executor.updated" | "executor.deleted",
+  kind:
+    | "executor.online"
+    | "executor.offline"
+    | "executor.registered"
+    | "executor.updated"
+    | "executor.deleted",
 ): ParsedBoardEvent {
   if (!isRecord(parsed.executor) || typeof parsed.state !== "string") {
     return ignored("malformed-payload", kind);
@@ -497,6 +731,37 @@ function parseExecutorEvent(
 
 function ignored(reason: IgnoredEventReason, kind: string): ParsedBoardEvent {
   return { status: "ignored", reason, kind };
+}
+
+/**
+ * Pairing frames (ADR 0012 §10.3): the pairing_id is the one mandatory
+ * field on requested/confirmed/expired; the self-asserted device_name is an
+ * optional passthrough on the first two (rendered as text — §3.6) and
+ * contractually absent on expired (the TTL sweep knows no name).
+ */
+function parsePairingEvent(
+  parsed: Record<string, unknown>,
+  kind: "pairing.requested" | "pairing.confirmed" | "pairing.expired",
+): ParsedBoardEvent {
+  if (typeof parsed.pairing_id !== "string") {
+    return ignored("malformed-payload", kind);
+  }
+  if (kind === "pairing.expired") {
+    return {
+      status: "event",
+      event: { kind, pairing_id: parsed.pairing_id },
+    };
+  }
+  return {
+    status: "event",
+    event: {
+      kind,
+      pairing_id: parsed.pairing_id,
+      ...(typeof parsed.device_name === "string"
+        ? { device_name: parsed.device_name }
+        : {}),
+    },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

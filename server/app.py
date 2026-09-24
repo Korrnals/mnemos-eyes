@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import fnmatch
+import hashlib
 import hmac
 import json
 import logging
@@ -21,6 +22,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
@@ -52,6 +54,7 @@ from .store import (
     REAP_QUEUED_AFTER_S,
     AutomationError,
     AutomationValidationError,
+    DEVICE_GRANTS,
     DEVICE_TOKEN_PREFIX,
     DeviceQuotaError,
     ENROLLMENT_MAX_LIVE,
@@ -65,6 +68,10 @@ from .store import (
     ExecutorNotFoundError,
     ExecutorQuotaError,
     ExecutorStateError,
+    HarnessError,
+    HarnessInUseError,
+    HarnessNotFoundError,
+    HarnessQuotaError,
     InvalidTransitionError,
     PRESENCE_ONLINE_S,
     PRESENCE_STALE_S,
@@ -74,15 +81,20 @@ from .store import (
     REPORT_KINDS,
     RuleNotFoundError,
     Store,
+    TASK_PRIORITIES,
     TASK_STATUSES,
     TaskLockedError,
     TaskNotAssignableError,
+    UnknownHarnessError,
     VALID_STATUSES,
     presence_from_last_seen,
 )
+from . import provisioner as provisioning
+from . import provisioner as provisioner_mod
 from .task_inbox import _hits_of as _listing_hits_of
 from .task_inbox import background_refresher as inbox_background_refresher
-from .task_inbox import refresh_inbox
+from .task_inbox import field_edits, parse_edits, refresh_inbox
+from .task_inbox import revision_memory_body
 
 DATA_DIR = Path(os.environ.get("VESMARO_DATA", "/data"))
 DB_PATH = DATA_DIR / "board.db"
@@ -303,7 +315,11 @@ def _assignment_reaper_tick() -> dict[str, int]:
                              row["id"], exc)
             continue
         if moved_from and task is not None:
-            _broadcast({"kind": "task.moved", "task": task})
+            # §A.5 actor: the reaper is server-internal, board-class
+            # trust — no request to classify, the machine prefix says
+            # who moved the card (in-progress → blocked).
+            _broadcast({"kind": "task.moved", "task": task,
+                        "actor": "machine:reaper"})
         _notify_and_broadcast(
             "work", f"{a['task_id']}: назначение истекло (reaper)",
             row["reap_reason"], a["task_id"],
@@ -448,7 +464,8 @@ def _validation_sweep_once() -> int:
         _notify_and_broadcast(
             "work", f"{task['id']}: в валидации >24ч",
             "требуется решение: подтвердить или вернуть",
-            task["id"], {"kind": "task.updated", "task": task})
+            task["id"], {"kind": "task.updated", "task": task,
+                         "actor": "machine:validation-sweep"})
         _validation_sweep_log.info(
             "validation timeout flagged task=%s since=%s",
             task["id"], task.get("validating_since", ""))
@@ -626,6 +643,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     validation_task = asyncio.create_task(_validation_sweeper())
     # ---- CV-7 (ADR 0012 §6): pairing/device TTL sweep (staggered).
     pairing_sweep_task = asyncio.create_task(_pairing_sweeper())
+    # ---- wave 4 provisioning: live jobs die with the old process (their
+    # transit token context is gone) — honest failure at boot, then the
+    # worker accepts new jobs (when provisioner.enabled).
+    restarted = provisioning.fail_stale(store, _broadcast)
+    if restarted:
+        logging.getLogger("vesmaro.provisioner").info(
+            "provision jobs failed on restart: %d", restarted)
     yield
     task.cancel()
     inbox_task.cancel()
@@ -646,7 +670,7 @@ COLUMN_RU = {
 # route on server-loaded /docs (F5/deep-link). Swagger stays reachable at
 # /api/docs; board mode keeps the historical /docs.
 _docs_url = "/api/docs" if ROOT_APP == "app" else "/docs"
-app = FastAPI(title="vesmaro-eyes", version="1.15.0", lifespan=lifespan,
+app = FastAPI(title="vesmaro-eyes", version="1.36.0", lifespan=lifespan,
               docs_url=_docs_url)
 
 
@@ -691,40 +715,143 @@ app.router.route_class = _UiCookieReissueRoute
 # VESMARO_BOARD_TOKEN) keep their existing validation legs byte-for-byte;
 # prefix classification only ADDS the device class.
 #
-# Semantics (ADR §5 table + §10.4):
-#   - route not in the class table → 403: the token's CLASS has no rights
-#     there. A VALID device token on a mutation is 403, never 401 — the
-#     token authenticates fine, the scope does not cover the route.
-#   - route allowed → validate (hash-only lookup, sliding 30 d / hard
-#     90 d TTL, revoke kill-switch); failure → 401.
+# Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): the table became
+# LOAD-BEARING per scope — (method, fnmatch-pattern) pairs. `read` is the
+# v0 GET table plus the reads-добавка (board/tags/archive/notifications/
+# assignments); `control` added board mutations. Owner override
+# 2026-09-23 (§A.7, revocation-first): the load-bearing rights split is
+# now the PER-DEVICE GRANTS set (store.device_sessions.grants), not the
+# scope column — the tables below decompose the old control scope into
+# granules (DEVICE_GRANTS in store.py). New pairings default to control
+# + the full granule set (store layer); the data migrations backfilled
+# active rows in place (Store._migrate_device_scope_v1 /
+# Store._migrate_device_grants_v1).
+#
+# HARD-DENY (never in any scope/grant table — closed for devices ALWAYS;
+# the allow-list below is exhaustive, so anything outside it is already
+# 403 — this list documents the intent so nobody "fixes" the table later):
+#   pairing*, devices*, auth*        — pairing/device/token management is
+#                                      owner-only (a device must never be
+#                                      able to pair, list or revoke peers,
+#                                      or touch the ui-token legs)
+#   assignments* mutations, executors*, harnesses* — the agent loop
+#                                      (queue/claim/heartbeat/complete,
+#                                      registry, enrollment): launch lever
+#   automation* (incl. GET) + /run   — stolen phone ≠ persistent runner
+#                                      (Security verdict over SE's)
+#   memories servers*/groups*, mesh* — connection config and tokens
+#                                      (GET /api/memories/servers is
+#                                      deliberately OUT: it lists URLs and
+#                                      token_refs — the v0 read-gap)
+#   PUT /api/settings/execution      — launch-adjacent (Security)
+#   DELETE /api/tasks/{id}           — irreversible: trusted side only
+#   POST /api/board-reflect          — v1-not-needed (archcom Р5)
+#   POST /api/specialists/refresh-all, GET /api/tags/{tag}/drill,
+#   GET /api/agents/*, POST /api/task-drafts, GET /api/mnemos/search
+#                                    — outside both scopes in v1
+#
+# Semantics (QA matrix v1 + §A.7):
+#   - VALIDATE FIRST: an invalid/revoked/expired mnd_ token answers 401 on
+#     ANY route — an unauthenticated request gets no scope verdict (v0
+#     answered 403 for mutations; that ordering inverted the honest codes).
+#   - GLOBAL READ always: a hit in _DEVICE_READ_ROUTES lets the request
+#     through for EVERY valid device (the owner's «глобальные read
+#     всегда») — grants gate MUTATIONS only.
+#   - mutation route → its granule must be in the device's grants; not
+#     there (or grants empty) → 403: the token authenticates fine, the
+#     owner has not granted this component — 403, never 401.
+#   - route allowed → the handler runs; _guard_write accepts the
+#     middleware's verdict via request.state.device (the choke point —
+#     no per-handler re-derivation).
+#   - allowed MUTATION → the per-device budget (§A.5) is spent first;
+#     exhausted = 429 + Retry-After, reads are never counted.
 # Comparison discipline: classification is prefix-only (no secret
 # material); the digest compare inside the store is constant-time.
 # Registered BEFORE add_security_headers so the header middleware stays
 # outermost and every 401/403 answered here still carries CSP/nosniff.
-_DEVICE_ALLOWED_ROUTES = (
-    "/api/tasks*",     # board/task/history/reports/inbox reads (ADR §10.4)
-    "/api/memories*",  # memory listings/cards/pulse reads
-    "/api/events",     # SSE stream
-    "/api/health",
+_DEVICE_READ_ROUTES: tuple[tuple[str, str], ...] = (
+    ("GET", "/api/tasks*"),      # board/task/history/reports/inbox reads
+    ("GET", "/api/health"),
+    ("GET", "/api/events"),      # SSE stream
+    # memory READS only — the v0 blanket "/api/memories*" narrowed: the
+    # servers*/groups* management shapes are hard-denied (see above).
+    ("GET", "/api/memories"),
+    ("GET", "/api/memories/pulse"),
+    ("GET", "/api/memories/item/*"),
+    # reads-добавка v1 (archcom 2026-09-23 — closing the read-gap)
+    ("GET", "/api/board"),
+    ("GET", "/api/tags"),
+    ("GET", "/api/archive"),
+    ("GET", "/api/notifications"),
+    ("GET", "/api/assignments"),
 )
+
+# The old control scope, decomposed into per-device granules (§A.7). Each
+# key MUST exist in store.DEVICE_GRANTS (pinned by tests); appending a new
+# granule = add it there + add its rows here. fnmatch is whole-string, so
+# the exact "POST /api/tasks" row does NOT swallow the inbox/reports
+# sub-rows — every mutation belongs to EXACTLY one granule.
+_DEVICE_GRANT_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
+    # task mutations (board management proper; DELETE stays hard-denied)
+    "tasks": (
+        ("POST", "/api/tasks"),
+        ("PATCH", "/api/tasks/*"),
+        ("POST", "/api/tasks/*/move"),
+        ("POST", "/api/tasks/*/archive"),
+        ("POST", "/api/tasks/*/unarchive"),
+    ),
+    # reports — the device is the 4th leg of the composition
+    "reports": (
+        ("POST", "/api/tasks/*/reports"),
+    ),
+    # inbox pipeline (mirror queue refresh + adopt into the board)
+    "inbox": (
+        ("POST", "/api/tasks/inbox/refresh"),
+        ("POST", "/api/tasks/inbox/*/adopt"),
+    ),
+    # notification state (mark-read)
+    "notifications": (
+        ("POST", "/api/notifications/read"),
+    ),
+}
+
+# Legacy names kept for the 403 detail + the pairing scope record; NOT
+# consulted by the guard anymore (grants are the single source of truth).
+_DEVICE_SCOPE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
+    "read": _DEVICE_READ_ROUTES,
+    "control": _DEVICE_READ_ROUTES + tuple(
+        row for granule in DEVICE_GRANTS
+        for row in _DEVICE_GRANT_ROUTES[granule]),
+}
+
+# Mutation budget per device (ADR 0012 Amendment §A.5, board backlog
+# t-1790196252894-9b17): a compromised/ runaway mnd_ bearer must not be
+# able to churn the board (or the SSE fan-out) unbounded. 30/60s per
+# DEVICE — flat, same engine as the auth throttling (in-memory sliding
+# window; the EXPONENTIAL lockout stays postponed, ADR 0014 logic: one
+# number is enough to reason about, and the threat is a runaway client,
+# not credential brute force). Symmetry: agents report at 30/60s, login
+# verify sits at 10/60s per IP — 30/60s per device ≈ one card move every
+# 2s sustained, far above any human phone pace, tight enough to cap a
+# script. Keyed by the device id, NOT per granule: the owner granted the
+# DEVICE, the budget is the device's. Reads are never counted; the ui
+# class never enters this middleware.
+_DEVICE_MUTATION_RATE_LIMIT = 30        # mutations per device ...
+_DEVICE_MUTATION_RATE_WINDOW = 60.0     # ... per sliding minute
+_device_mutation_limiter = RateLimiter(
+    limit=_DEVICE_MUTATION_RATE_LIMIT, window=_DEVICE_MUTATION_RATE_WINDOW)
 
 
 @app.middleware("http")
 async def device_scope_guard(request: Request, call_next):
-    """Classify bearers by token prefix (ADR 0012 §5). Everything not
-    starting with ``Bearer mnd_`` rides the existing guards unchanged."""
+    """Classify bearers by token prefix (ADR 0012 §5 + Amendment §A.7).
+    Everything not starting with ``Bearer mnd_`` rides the existing guards
+    unchanged."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith(f"Bearer {DEVICE_TOKEN_PREFIX}"):
         return await call_next(request)
-    path = request.url.path
-    allowed = request.method == "GET" and any(
-        fnmatch.fnmatch(path, p) for p in _DEVICE_ALLOWED_ROUTES)
-    if not allowed:
-        return JSONResponse(
-            status_code=403,
-            content={"detail": "device tokens are read-only (scope v0: "
-                               "read); pairing and device management "
-                               "require the ui token"})
+    # Order (QA matrix v1): validate → rights. An invalid token is 401 on
+    # ANY route; only a VALID session earns a rights verdict.
     device = store.validate_device_token(
         auth[len("Bearer "):].strip(),
         ua=request.headers.get("User-Agent", ""),
@@ -734,7 +861,44 @@ async def device_scope_guard(request: Request, call_next):
         return JSONResponse(
             status_code=401,
             content={"detail": "device token is invalid, expired or revoked"})
-    # identity for downstream handlers/audit; nothing reads it in v0 reads
+    path = request.url.path
+    is_read = any(request.method == method and fnmatch.fnmatch(path, pattern)
+                  for method, pattern in _DEVICE_READ_ROUTES)
+    granted: frozenset[str] = frozenset(device.get("grants") or [])
+    allowed = is_read or any(
+        request.method == method and fnmatch.fnmatch(path, pattern)
+        for granule in granted
+        for method, pattern in _DEVICE_GRANT_ROUTES.get(granule, ()))
+    if not allowed:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": f"device grants {sorted(granted)} do not "
+                               "cover this route (global reads are open "
+                               "to every valid device; mutations need a "
+                               "granule the owner granted; closed for "
+                               "devices always: pairing/devices/auth "
+                               "management, agent loop, automation, "
+                               "memory-server config, task DELETE)"})
+    # Mutation budget (§A.5): only ROUTES the grants already opened get
+    # counted — a 403 noise flood burns nothing, and the budget answers
+    # "how much can this device WRITE", not "how much can it probe".
+    if not is_read:
+        key = str(device["id"])
+        if not _device_mutation_limiter.acquire(key):
+            retry_after = _device_mutation_limiter.retry_after(key)
+            logging.getLogger("vesmaro.device").warning(
+                "device mutation budget exhausted id=%s retry_after=%ss",
+                device["id"], retry_after)
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+                content={
+                    "detail": "device mutation rate limit exceeded "
+                              f"({_DEVICE_MUTATION_RATE_LIMIT} mutations "
+                              f"per {_DEVICE_MUTATION_RATE_WINDOW:.0f}s "
+                              "per device) — wait and retry"})
+    # identity for downstream handlers/audit (task-history actor,
+    # reports composition); nothing else reads it
     request.state.device = device
     return await call_next(request)
 
@@ -764,7 +928,18 @@ async def add_security_headers(request: Request, call_next):
 
 
 # --------------------------------------------------------------------- models
+# BE-15: unknown keys are an honest 422 (extra="forbid") — silently dropping
+# a typo'd field (QA lesson 2026-09-22: "description" vanished) hides client
+# bugs. Declared-but-ignored keys are the documented exceptions, each pinned
+# by a test:
+#   - TaskCreate.id      — UI-7 v1.1.3-era clients still send it; the
+#                          server-generated id stays authoritative (never
+#                          honored — see store.create_task callers).
+#   - TaskPatch.col      — v1 semantics: columns move via POST /move, a
+#                          PATCH carrying col is a no-op for that key.
 class TaskCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(min_length=1, max_length=200)
     summary: str = ""
     spec: str = ""
@@ -780,15 +955,23 @@ class TaskCreate(BaseModel):
     project: str = ""
     memory_ids: list[str] = []
     mnemos_tags: list[str] = []
+    # Legacy tolerated key (UI-7 v1.1.3-era clients): accepted, never
+    # honored — the response always carries the server-generated id.
+    id: str | None = None
 
 
 class TaskPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = None
     summary: str | None = None
     spec: str | None = None
     # BE-10: full workflow dictionary (incl. `withdrawn`, which has no
     # board column); lives until the next column move — see store.move_task.
     status: str | None = None
+    # Legacy no-op (pinned v1 semantics): columns move via POST /move —
+    # the store allow-list silently skips this key (NOT a 422).
+    col: str | None = None
     # BE-12: content edit of a task older than 24h (EDITABLE_FIELDS) is
     # rejected with 423 unless the request opts in here. Status changes are
     # workflow transitions and stay free at any age (UI-8 «Вернуть в работу»).
@@ -1010,7 +1193,10 @@ class TaskDraftOut(_ApiModel):
 # Task inbox mirror (AGG-1). ``created_at`` is the SOURCE memory's creation
 # timestamp; ``stale`` means the record stopped coming back from its server
 # (last_seen older than Store.INBOX_STALE_SECONDS); ``adopted`` means a
-# native board task was created from it.
+# native board task was created from it. ``edits`` (UI-25) is the owner's
+# pre-adoption overlay (title/summary/priority/project; None = unedited) —
+# the sibling ``title``/``project``/``priority``/``excerpt`` fields already
+# carry the EFFECTIVE (overlay-applied) values.
 class TaskInboxItem(_ApiModel):
     memory_id: str
     server: str
@@ -1025,6 +1211,18 @@ class TaskInboxItem(_ApiModel):
     stale: bool
     adopted: bool
     adopted_task_id: str | None = None
+    edits: dict[str, str] | None = None
+
+
+class TaskInboxEditSpec(_ApiModel):
+    """Owner corrections to a queue record BEFORE adoption (UI-25). Partial:
+    omitted fields stay at their mirror/edited value. ``summary`` becomes
+    the native task's summary on adopt (and the revision record's content);
+    ``project``/``priority`` ride the task and the revision tags."""
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    summary: str | None = Field(default=None, max_length=4000)
+    priority: str | None = None
+    project: str | None = Field(default=None, max_length=80)
 
 
 class TaskInboxOut(_ApiModel):
@@ -1292,6 +1490,86 @@ class ExecutorRegisteredOut(_ApiModel):
     executor_secret: str               # shown EXACTLY once — never again
 
 
+# Harness dictionary contracts (wave 3C, design 2026-09-22 §C): the
+# owner-managed nomination registry. Reads are open (a dictionary, same
+# boundary as GET /api/executors); writes are ui-token. ``seed_min_count``
+# tells clients how many entries the boot seed guarantees minimum — the UI
+# never hardcodes the set.
+class HarnessCreateBody(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    note: str = Field(default="", max_length=200)
+
+
+class HarnessOut(_ApiModel):
+    name: str
+    added_at: str = ""
+    added_via: str = "seed"            # seed | owner
+    note: str = ""
+
+
+class HarnessListOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[HarnessOut]
+    meta: dict[str, Any]               # seed_min_count — the guaranteed seed size
+
+
+class HarnessStateOut(_ApiModel):
+    ok: bool
+    harness: HarnessOut
+
+
+# Provisioner contracts (wave 4, blocks A/B/D variant α): the owner hands
+# the board an install-time SSH job; the board runs the FROZEN bootstrap
+# one-liner remotely and watches the enrollment. The enrollment token and
+# the ssh secret NEVER appear in a response (transit-only invariant).
+class ProvisionAuth(BaseModel):
+    kind: str = Field(pattern="^(password|key|alias)$")
+    secret: str = Field(default="", max_length=8192)
+    passphrase: str = Field(default="", max_length=8192)
+
+
+# Injection boundary (design §B, security P1-1): host/name ride into the
+# SSH command line and into SSE/audit/step texts — strict charsets here,
+# shlex.quote in the worker as the second layer. host is a lowercase
+# FQDN/IP charset label sequence WITHOUT a trailing dot; name is the
+# executor registry charset.
+_PROVISION_HOST_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
+_PROVISION_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$")
+
+
+class ProvisionBody(BaseModel):
+    name: str = Field(default="", max_length=120,
+                      pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$")
+    host: str = Field(min_length=1, max_length=253,
+                      pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+                              r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
+    port: int = Field(default=22, ge=1, le=65535)
+    auth: ProvisionAuth
+    harness_hint: str = Field(default="zcode", max_length=60)
+    board_url_for_host: str = Field(default="", max_length=200)
+    expected_host_key_fingerprint: str = Field(default="", max_length=128)
+    reuse_enrollment_id: str = Field(default="", max_length=64)
+
+
+class ProvisionCreatedOut(_ApiModel):
+    ok: bool
+    job_id: str
+    enrollment_id: str
+    state: str = "queued"
+
+
+class ProvisionJobOut(_ApiModel):
+    ok: bool
+    job: dict[str, Any]
+    enrollment: dict[str, Any]
+
+
+class HostRepinBody(BaseModel):
+    fingerprint: str = Field(min_length=8, max_length=128)
+
+
 # Enrollment contracts (ADR 0009 Amd 2 §4 supplement): one-time mne_ tokens
 # the owner mints from the UI; the executor presents one on POST
 # /api/executors. Hints are advisory UI material (bootstrap-command text),
@@ -1319,6 +1597,11 @@ class EnrollmentCreatedOut(_ApiModel):
     ok: bool
     enrollment: EnrollmentOut
     token: str                         # the ONLY place mne_… ever appears
+    # AGW-9 (АРХКОМ-8 В1): the lab-CA fingerprint in the board canon
+    # (SHA256:base64 over DER, provisioner parity). The UI embeds it into
+    # the bootstrap command as --expect-fp. Advisory like the hints: ''
+    # when the CA is not mounted (the front then omits the anchor flag).
+    ca_fingerprint: str = ""
 
 
 class EnrollmentListOut(_ApiModel):
@@ -1682,12 +1965,18 @@ async def create_task(body: TaskCreate, request: Request) -> TaskOut:
     if body.col not in VALID_STATUSES:
         raise HTTPException(422, f"invalid col: {body.col}")
     _validate_agents(body.agents)  # ADR 0005: harnesses only
+    dump = body.model_dump()
+    # Legacy tolerated key (UI-7 v1.1.3-era clients): accepted, NEVER
+    # honored — the server-generated id stays authoritative (store.create_task
+    # would otherwise adopt payload["id"]).
+    dump.pop("id", None)
     # store raises ValueError on unknown env/col — surface as 422, not 500
     try:
-        task = store.create_task(body.model_dump())
+        task = store.create_task(dump,
+                                 actor=_device_actor(request))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task})
+    _notify_and_broadcast("work", f"{task['id']}: новая задача", task["title"][:120], task["id"], {"kind": "task.created", "task": task, "actor": _sse_actor(request)})
     return task
 
 
@@ -1714,7 +2003,8 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
     force = dump.pop("force", False)  # request mode — not part of the payload
     # store raises ValueError on unknown env/priority — surface as 422, not 500
     try:
-        task = store.update_task(task_id, dump, force=force)
+        task = store.update_task(task_id, dump, force=force,
+                                 actor=_device_actor(request))
     except TaskLockedError:
         raise HTTPException(
             423,
@@ -1728,7 +2018,8 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
     if force:
         # extra="allow" keeps the flag in the serialized TaskOut
         task["forced"] = True
-    _broadcast({"kind": "task.updated", "task": task})
+    _broadcast({"kind": "task.updated", "task": task,
+                "actor": _sse_actor(request)})
     return task
 
 
@@ -1736,7 +2027,8 @@ async def patch_task(task_id: str, body: TaskPatch, request: Request) -> TaskOut
 async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
     _guard_write(request, classes=("ui",))
     try:
-        task = store.move_task(task_id, body.col, body.position)
+        task = store.move_task(task_id, body.col, body.position,
+                               actor=_device_actor(request))
     except InvalidTransitionError as exc:
         # WF-1 v1 transition mirror: blocked → done/resolved is refused
         # with a hint (422, owner-facing message from the store).
@@ -1745,7 +2037,7 @@ async def move_task(task_id: str, body: MoveBody, request: Request) -> TaskOut:
         raise HTTPException(422, str(exc)) from exc
     if task is None:
         raise HTTPException(404, "task not found")
-    _notify_and_broadcast("work", f"{task['id']}: статус → {COLUMN_RU.get(task['col'], task['col'])}", "", task["id"], {"kind": "task.moved", "task": task})
+    _notify_and_broadcast("work", f"{task['id']}: статус → {COLUMN_RU.get(task['col'], task['col'])}", "", task["id"], {"kind": "task.moved", "task": task, "actor": _sse_actor(request)})
     return task
 
 
@@ -1754,7 +2046,7 @@ async def delete_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request, classes=("ui",))
     if not store.delete_task(task_id):
         raise HTTPException(404, "task not found")
-    _notify_and_broadcast("work", f"{task_id}: удалена", "", task_id, {"kind": "task.deleted", "task_id": task_id})
+    _notify_and_broadcast("work", f"{task_id}: удалена", "", task_id, {"kind": "task.deleted", "task_id": task_id, "actor": _sse_actor(request)})
     return {"ok": True}
 
 
@@ -2765,9 +3057,9 @@ async def archive(
 @app.post("/api/tasks/{task_id}/archive")
 async def archive_task(task_id: str, request: Request) -> OkOut:
     _guard_write(request, classes=("ui",))
-    if not store.archive_task(task_id):
+    if not store.archive_task(task_id, actor=_device_actor(request)):
         raise HTTPException(404, "task not found or already archived")
-    _notify_and_broadcast("work", f"{task_id}: в архиве", "задача архивирована", task_id, {"kind": "task.archived", "task_id": task_id})
+    _notify_and_broadcast("work", f"{task_id}: в архиве", "задача архивирована", task_id, {"kind": "task.archived", "task_id": task_id, "actor": _sse_actor(request)})
     return {"ok": True}
 
 
@@ -2776,10 +3068,10 @@ async def unarchive_task(task_id: str, request: Request) -> UnarchiveOut:
     """Restore an archived task to its pre-archive column (BE-11b); rows
     archived before ``archived_from`` existed fall back to ``open``."""
     _guard_write(request, classes=("ui",))
-    task = store.unarchive_task(task_id)
+    task = store.unarchive_task(task_id, actor=_device_actor(request))
     if task is None:
         raise HTTPException(404, "task not found or not archived")
-    _notify_and_broadcast("work", f"{task_id}: из архива", "задача возвращена на доску", task_id, {"kind": "task.unarchived", "task_id": task_id})
+    _notify_and_broadcast("work", f"{task_id}: из архива", "задача возвращена на доску", task_id, {"kind": "task.unarchived", "task_id": task_id, "actor": _sse_actor(request)})
     return {"ok": True, "task": task}
 
 
@@ -2799,19 +3091,27 @@ async def create_task_report(task_id: str, body: ReportCreate,
     exhausted. A second kind="final" supersedes previous live finals
     (history kept, flagged).
 
-    Auth composition (ADR 0009 A1 + Amd 2 §2): the owner UI writes with
-    the ui-class token; the machine loop writes with the board (machine)
-    token OR an approved executor token (the mesh leg reports with its
-    own credential). When the report is executor-token-backed, a declared
-    ``agent`` string that references neither the executor's registered
-    name nor its harness lands in the audit trail flagged
-    ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
-    refusal: the report is still accepted)."""
+    Auth composition (ADR 0009 A1 + Amd 2 §2 + scope v1): the owner UI
+    writes with the ui-class token; the machine loop writes with the board
+    (machine) token OR an approved executor token (the mesh leg reports
+    with its own credential); a paired device writes on its mnd_ leg when
+    the scope middleware validated it AND matched this route against the
+    device scope table (control scope). When the report is executor-
+    token-backed, a declared ``agent`` string that references neither the
+    executor's registered name nor its harness lands in the audit trail
+    flagged ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not
+    a refusal: the report is still accepted)."""
     executor = None
+    device = getattr(request.state, "device", None)
     header_present = bool(request.headers.get("Authorization", ""))
     cookie_ui = not header_present and _cookie_ui_ok(request)
-    if (cookie_ui or _bearer_is_class(request, "ui")
-            or not _token_classes().get("machine")):
+    if device is not None:
+        # Device leg (scope v1): the middleware's verdict IS the auth —
+        # checked FIRST so a device bearer never falls into the machine
+        # leg (the machine guard would answer 401 for an mnd_ bearer).
+        pass
+    elif (cookie_ui or _bearer_is_class(request, "ui")
+          or not _token_classes().get("machine")):
         # Leg pick (ADR 0014 Ф2 + review gap matrix): a live `vesmaro_ui`
         # cookie picks the ui leg ONLY when no header rides along — the
         # determinism rule keeps a header-present request on its own leg
@@ -2934,12 +3234,13 @@ def _assignment_public(a: dict[str, Any], include_snapshot: bool = False) -> dic
 
 def _assignment_http(exc: AssignmentError) -> HTTPException:
     """Map store assignment errors onto the HTTP contract (ADR 0009):
-    404 unknown id / 403 token / 422 not assignable / 409 state+invariant."""
+    404 unknown id / 403 token / 422 not assignable or unknown harness /
+    409 state+invariant."""
     if isinstance(exc, AssignmentNotFoundError):
         return HTTPException(404, str(exc))
     if isinstance(exc, AssignmentTokenError):
         return HTTPException(403, str(exc))
-    if isinstance(exc, TaskNotAssignableError):
+    if isinstance(exc, (TaskNotAssignableError, UnknownHarnessError)):
         return HTTPException(422, str(exc))
     if isinstance(exc, AssignmentConflictError):
         return HTTPException(409, str(exc))
@@ -3031,16 +3332,13 @@ async def create_assignment(body: AssignmentCreate,
                             request: Request) -> AssignmentCreatedOut:
     """Queue an execution attempt on a task (ADR 0009 §3). UI-token class
     (A1) — the owner nominates, the poller decides (A3). 404 unknown task;
-    422 archived/terminal task; 409 while another active assignment holds
-    the task (≤1 invariant)."""
+    422 archived/terminal task or unknown harness; 409 while another active
+    assignment holds the task (≤1 invariant). The harness gate lives IN the
+    store's in-transaction assignment core (wave 3C) — the same gate the
+    manual run-now goes through, so no window can mint a nomination on a
+    DELETED harness (a zombie queued row launchable by nobody)."""
     _guard_ui_write(request)
     _assignment_rate_limit(request, ui=True)
-    if body.harness not in Store.KNOWN_HARNESSES:
-        # assignments feed the poller's (harness, specialist) → command
-        # allowlist: an unknown harness can never launch — refuse early
-        raise HTTPException(
-            422, f"unknown harness: {body.harness}; "
-                 f"known: {sorted(Store.KNOWN_HARNESSES)}")
     try:
         a = store.create_assignment(
             body.task_id, body.specialist, body.harness,
@@ -3084,7 +3382,8 @@ async def claim_assignment(assignment_id: int, body: AssignmentClaimBody,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved and task is not None:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _machine_actor(executor)})
     _broadcast({"kind": "assignment.claimed",
                 "assignment": _assignment_public(a),
                 "task_id": a["task_id"]})
@@ -3175,7 +3474,8 @@ async def complete_assignment(assignment_id: int,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _machine_actor(executor)})
     _notify_and_broadcast(
         "work", f"{a['task_id']}: назначение выполнено",
         (final or "финальный отчёт отсутствует")[:120], a["task_id"],
@@ -3210,7 +3510,8 @@ async def fail_assignment(assignment_id: int, body: AssignmentFailBody,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _machine_actor(executor)})
     _notify_and_broadcast(
         "work", f"{a['task_id']}: назначение провалено",
         body.reason[:120], a["task_id"],
@@ -3235,7 +3536,8 @@ async def cancel_assignment(assignment_id: int, body: AssignmentCancelBody,
     except AssignmentError as exc:
         raise _assignment_http(exc) from exc
     if moved_from:
-        _broadcast({"kind": "task.moved", "task": task})
+        _broadcast({"kind": "task.moved", "task": task,
+                    "actor": _sse_actor(request)})
     _notify_and_broadcast(
         "work", f"{a['task_id']}: назначение отменено",
         body.reason[:120], a["task_id"],
@@ -3279,6 +3581,13 @@ _ENROLLMENT_REVOKE_RATE_LIMIT = 10      # revokes per client ...
 _ENROLLMENT_REVOKE_RATE_WINDOW = 60.0   # ... per sliding minute (ui family)
 _enrollment_revoke_limiter = RateLimiter(
     limit=_ENROLLMENT_REVOKE_RATE_LIMIT, window=_ENROLLMENT_REVOKE_RATE_WINDOW)
+# Harness dictionary (wave 3C): adds/deletes are rare owner actions — the
+# enrollment-revoke budget (10/60 s per client) is the right shape. The
+# dictionary CAP (HARNESS_MAX_COUNT) bounds volume; this bounds pace.
+_HARNESS_WRITE_RATE_LIMIT = 10          # mutations per client ...
+_HARNESS_WRITE_RATE_WINDOW = 60.0       # ... per sliding minute (ui family)
+_harness_write_limiter = RateLimiter(
+    limit=_HARNESS_WRITE_RATE_LIMIT, window=_HARNESS_WRITE_RATE_WINDOW)
 
 
 def _executor_http(exc: ExecutorError) -> HTTPException:
@@ -3291,6 +3600,17 @@ def _executor_http(exc: ExecutorError) -> HTTPException:
     if isinstance(exc, (ExecutorConflictError, ExecutorStateError)):
         return HTTPException(409, str(exc))
     return HTTPException(409, str(exc))  # defensive: unknown subclass → 409
+
+
+def _harness_http(exc: HarnessError) -> HTTPException:
+    """Map store harness-dictionary errors onto HTTP: 404 unknown name /
+    409 duplicate or still-in-use / 422 bad name or dictionary cap (an
+    entry-validation class, not a rate guard)."""
+    if isinstance(exc, HarnessNotFoundError):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, HarnessQuotaError):
+        return HTTPException(422, str(exc))
+    return HTTPException(409, str(exc))  # conflict + in-use (defensive: base)
 
 
 @app.post("/api/executors", status_code=201)
@@ -3389,6 +3709,47 @@ async def list_executors() -> ExecutorListOut:
 # the parametric /api/executors/{executor_id} routes — same-prefix paths must
 # not depend on FastAPI match order. Fail-closed 503 while the ui token is
 # not configured (the _guard_ui_write pattern): no owner, no minting.
+
+# AGW-9: the lab-CA fingerprint for the enrollment response — SAME canon as
+# provisioner.fingerprint_of_bytes (SHA256:base64 over DER), computed over
+# the SAME certificate /api/poller/artifacts/ca.crt serves (the
+# VESMARO_TLS_CA_FILE mount). Lazy + cached by (path, mtime, size) so cert
+# rotation re-computes and tests can repoint the env per-case. '' whenever
+# the CA is unknown (unmounted/missing/not PEM) — the field is advisory:
+# the mint itself must not fail on display data.
+_CA_FINGERPRINT_CACHE: dict[str, str] = {}
+
+
+def _board_ca_fingerprint() -> str:
+    ca_file = os.environ.get(_TLS_CA_FILE_ENV, "").strip()
+    if not ca_file:
+        return ""
+    path = Path(ca_file)
+    try:
+        stat = path.stat()
+        cache_key = f"{path}|{stat.st_mtime_ns}|{stat.st_size}"
+    except OSError:
+        return ""
+    if _CA_FINGERPRINT_CACHE.get("key") == cache_key:
+        return _CA_FINGERPRINT_CACHE.get("fp", "")
+    fingerprint = ""
+    data = path.read_bytes()
+    if data.lstrip().startswith(b"-----BEGIN CERTIFICATE-----"):
+        body = b"".join(
+            line for line in data.splitlines()
+            if line and not line.startswith(b"-----"))
+        try:
+            der = base64.b64decode(body, validate=True)
+        except Exception:
+            der = b""
+        if der:
+            fingerprint = provisioning.fingerprint_of_bytes(der)
+    _CA_FINGERPRINT_CACHE.clear()
+    _CA_FINGERPRINT_CACHE["key"] = cache_key
+    _CA_FINGERPRINT_CACHE["fp"] = fingerprint
+    return fingerprint
+
+
 @app.post("/api/executors/enrollment", status_code=201)
 async def create_enrollment(body: EnrollmentCreateBody,
                             request: Request) -> EnrollmentCreatedOut:
@@ -3399,7 +3760,9 @@ async def create_enrollment(body: EnrollmentCreateBody,
     (pairing-create pattern); live tokens capped at ENROLLMENT_MAX_LIVE →
     409 with NO auto-revoke (the owner chooses, device-quota principle).
     422 unknown harness_hint (the hint feeds the bootstrap command — a
-    bogus hint would mislead the remote leg)."""
+    bogus hint would mislead the remote leg). ``ca_fingerprint`` rides
+    along (AGW-9): the UI bakes it into the bootstrap command as
+    --expect-fp, the installer then fail-closes on a wrong CA."""
     _guard_ui_write(request)
     client_ip = request.client.host if request.client else "unknown"
     if not _enrollment_create_limiter.acquire(client_ip):
@@ -3420,7 +3783,8 @@ async def create_enrollment(body: EnrollmentCreateBody,
     _broadcast({"kind": "enrollment.created",
                 "enrollment_id": row["enrollment_id"],
                 "label": row["label"]})
-    return {"ok": True, "enrollment": row, "token": token}
+    return {"ok": True, "enrollment": row, "token": token,
+            "ca_fingerprint": _board_ca_fingerprint()}
 
 
 @app.get("/api/executors/enrollment")
@@ -3459,6 +3823,22 @@ async def revoke_enrollment(enrollment_id: str,
         _broadcast({"kind": "enrollment.revoked",
                     "enrollment_id": enrollment_id})
     return {"ok": True, "enrollment": row}
+
+
+@app.get("/api/executors/{executor_id}")
+async def get_executor(executor_id: str) -> ExecutorOut:
+    """One registry row — OPEN read, the same boundary as GET /api/executors
+    (the cluster ingress is the auth boundary); unknown id → 404. The answer
+    is the SAME _executor_public projection as the list — secret_hash never
+    leaves the store, presence is computed from last_seen on read.
+
+    Declared AFTER the literal /api/executors/enrollment routes (FastAPI
+    matches in declaration order): "enrollment" must keep resolving to the
+    token list, never as an executor id."""
+    row = store.get_executor(executor_id)
+    if row is None:
+        raise HTTPException(404, f"executor {executor_id} not found")
+    return _executor_public(row)
 
 
 @app.post("/api/executors/{executor_id}/heartbeat")
@@ -3535,6 +3915,450 @@ async def delete_executor(executor_id: str, request: Request) -> OkOut:
          "prev_state": row["state"], "state": row["state"]},
     )
     return {"ok": True}
+
+
+# ----------------------------------------- harness dictionary (wave 3C)
+# The owner-managed nomination registry (design 2026-09-22 §C) that replaced
+# the closed KNOWN_HARNESSES gate (the constant survives as the SEED).
+# Nomination hygiene lives HERE — every gate (registration, enrollment hint,
+# assignment create, automation payloads, rule conditions) reads the table —
+# while launching stays gated by the poller's local allowlist (A3): adding
+# "myagent" only lets the owner NOMINATE it, no poller will ever run it
+# until its own config says so. GET is an open read (a dictionary, same
+# boundary as GET /api/executors); POST/DELETE are ui-token.
+@app.get("/api/harnesses")
+async def list_harnesses() -> HarnessListOut:
+    """The harness dictionary (open read). ``meta.seed_min_count`` is the
+    size of the boot seed — clients learn the guaranteed minimum and never
+    hardcode the set. Alphabetical; ``added_via`` distinguishes ``seed``
+    rows from owner-added ones."""
+    rows = store.list_harnesses()
+    return {
+        "ok": True,
+        "count": len(rows),
+        "items": rows,
+        "meta": {"seed_min_count": len(Store.KNOWN_HARNESSES)},
+    }
+
+
+@app.post("/api/harnesses", status_code=201)
+async def create_harness(body: HarnessCreateBody,
+                         request: Request) -> HarnessStateOut:
+    """Add a harness to the dictionary (ui-token; wave 3C). 201 → row;
+    422 invalid name (``^[a-z0-9][a-z0-9._-]{0,59}$``) or dictionary cap
+    (≤64 — entry validation, not a rate guard); 409 duplicate. Audit
+    ``harness.added`` + SSE — the UI select refreshes from the frame."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _harness_write_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"harness dictionary rate limit exceeded "
+            f"({_HARNESS_WRITE_RATE_LIMIT} per "
+            f"{_HARNESS_WRITE_RATE_WINDOW:.0f}s per client)",
+        )
+    try:
+        row = store.add_harness(body.name, body.note)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except HarnessError as exc:
+        raise _harness_http(exc) from exc
+    _broadcast({"kind": "harness.added", "harness": row})
+    return {"ok": True, "harness": row}
+
+
+@app.delete("/api/harnesses/{name}")
+async def delete_harness(name: str, request: Request) -> OkOut:
+    """Remove a harness from the dictionary (ui-token; wave 3C). 404
+    unknown; 409 while the name is LIVE anywhere an executor could act on
+    it — a registered executor, a non-terminal assignment or an automation
+    rule (schedule field / hook condition). Terminal history does NOT
+    block: it is archival and stays verbatim. Audit ``harness.removed`` +
+    SSE. Seed rows are deletable like any other (the seed does not
+    resurrect across restarts — it fills an EMPTY table only)."""
+    _guard_ui_write(request)
+    client_ip = request.client.host if request.client else "unknown"
+    if not _harness_write_limiter.acquire(client_ip):
+        raise HTTPException(
+            429,
+            f"harness dictionary rate limit exceeded "
+            f"({_HARNESS_WRITE_RATE_LIMIT} per "
+            f"{_HARNESS_WRITE_RATE_WINDOW:.0f}s per client)",
+        )
+    try:
+        row = store.delete_harness(name)
+    except HarnessError as exc:
+        raise _harness_http(exc) from exc
+    _broadcast({"kind": "harness.removed", "name": row["name"]})
+    return {"ok": True}
+
+
+# --------------------------------------- provisioner (wave 4, blocks A/B/D)
+# Variant α: the BOARD drives an install-time SSH job to run the frozen
+# bootstrap one-liner on the remote machine. Security posture (design
+# review): one global active-job cap (2) + one active job per host:port +
+# a per-host cooldown + a dedicated rate limit tighter than the ui one;
+# password auth is a deployment flag (default OFF); the enrollment token
+# and the ssh secret are TRANSIT-ONLY (worker task context, never SQLite/
+# logs/SSE); host keys are TOFU+pin with re-pin as a separate owner act.
+_PROVISION_RATE_LIMIT = 5        # creations per client ...
+_PROVISION_RATE_WINDOW = 60.0    # ... per sliding minute (tighter than ui)
+_provision_limiter = RateLimiter(
+    limit=_PROVISION_RATE_LIMIT, window=_PROVISION_RATE_WINDOW)
+_PROVISION_COOLDOWN_S = 90.0     # per host:port
+_PROVISION_ACTIVE_CAP = 2        # global active jobs
+_PROVISION_BOARD_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d{1,5})?$")
+
+
+def _created_ts(iso: str) -> float:
+    """Epoch seconds of a stored UTC ISO timestamp. P3: the old
+    mktime(timezone double-correction) math drifted on any non-UTC host
+    (cooldown age went negative — the gate silently disarmed).
+    fromisoformat is offset-aware and host-TZ neutral."""
+    try:
+        return datetime.fromisoformat(iso).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _provisioner_enabled() -> bool:
+    return os.environ.get("VESMARO_PROVISIONER_ENABLED", "1") == "1"
+
+
+def _provision_password_auth() -> bool:
+    return os.environ.get("VESMARO_PROVISION_PASSWORD_AUTH", "0") == "1"
+
+
+@app.post("/api/executors/provision", status_code=202)
+async def provision_executor(body: ProvisionBody,
+                             request: Request) -> ProvisionCreatedOut:
+    """Queue an install-time provisioning job (ui-token; wave 4). 202
+    carries the job id and the enrollment id — NEVER the mne_ token (the
+    worker consumes it transit-only). Anti-spray: a global cap of 2 live
+    jobs, one live job per host:port (409), a 90 s per-host cooldown
+    (429), and a dedicated 5/60 s rate limit. password auth answers 422
+    while the deployment flag is off."""
+    _guard_ui_write(request)
+    if not _provisioner_enabled():
+        raise HTTPException(
+            503, "the provisioner is disabled on this board (fail-closed; "
+                 "enable via the chart value provisioner.enabled)")
+    if body.auth.kind == "password" and not _provision_password_auth():
+        raise HTTPException(
+            422, "password ssh auth is disabled on this board (default) — "
+                 "use key or alias auth, or enable it via the chart value "
+                 "provisioner.passwordAuth")
+    client_ip = request.client.host if request.client else "unknown"
+    if not _provision_limiter.acquire(client_ip):
+        raise HTTPException(429, f"provision rate limit exceeded "
+                                 f"({_PROVISION_RATE_LIMIT} per "
+                                 f"{_PROVISION_RATE_WINDOW:.0f}s per client)")
+    if (body.auth.kind in ("password", "key")
+            and not body.auth.secret.strip()):
+        raise HTTPException(422, f"{body.auth.kind} auth requires secret")
+    # Injection boundary (P1-1): the harness hint feeds the remote command
+    # line — validated against the LIVE dictionary on EVERY path here
+    # (the reuse_enrollment_id branch never calls create_enrollment, whose
+    # allowlist gate is the only other one), before anything is stored.
+    harness_hint = body.harness_hint.strip()
+    if harness_hint and harness_hint not in store.harness_names():
+        raise HTTPException(
+            422, f"unknown harness: {harness_hint}; "
+                 f"known: {sorted(store.harness_names())}")
+    # P1-3: both owner-supplied forms (ssh-keygen base64 AND hex64)
+    # normalize to the canonical form the worker compares against — one
+    # format everywhere (job row, pins, audit).
+    expected_fp = ""
+    if body.expected_host_key_fingerprint.strip():
+        expected_fp = provisioner_mod.normalize_fingerprint(
+            body.expected_host_key_fingerprint)
+        if not expected_fp:
+            raise HTTPException(
+                422, "expected_host_key_fingerprint must be SHA256:base64 "
+                     "(ssh-keygen form) or hex sha256")
+
+    host = body.host.strip()
+    if live := store.active_job_for_host(host, body.port):
+        raise HTTPException(409, f"a provisioning job for {host}:{body.port} "
+                                 f"is already live ({live['id']}, {live['state']})")
+    if (last := store.last_provision_job_for_host(host, body.port)) is not None:
+        age = time.time() - _created_ts(last["created_at"])
+        if age < _PROVISION_COOLDOWN_S:
+            raise HTTPException(
+                429, f"host {host}:{body.port} is in cooldown — retry in "
+                     f"{int(_PROVISION_COOLDOWN_S - age)}s")
+    if store.count_active_provision_jobs() >= _PROVISION_ACTIVE_CAP:
+        raise HTTPException(429, f"the global live-job cap "
+                                 f"({_PROVISION_ACTIVE_CAP}) is reached — wait "
+                                 "for a job to finish")
+
+    board_url = (body.board_url_for_host.strip()
+                 or os.environ.get("VESMARO_PUBLIC_BOARD_URL", "").strip())
+    # P1-1: charset-strict URL (no path, no query — the host part rides the
+    # command line twice); anything the regex refuses cannot be quoted into
+    # an argument boundary anyway, but refusing HERE keeps bad values out of
+    # job facts, steps and SSE.
+    if not _PROVISION_BOARD_URL_RE.match(board_url):
+        raise HTTPException(
+            422, "board_url_for_host must be https://host[:port] that "
+                 "resolves FROM the target machine (or set "
+                 "VESMARO_PUBLIC_BOARD_URL)")
+
+    name = (body.name.strip() or host)
+    if not _PROVISION_NAME_RE.match(name):
+        # the host-fallback name is charset-covered by the host pattern;
+        # this guard keeps an owner-supplied name honest at the boundary
+        raise HTTPException(
+            422, "name must start with an alphanumeric and contain only "
+                 "letters, digits, '.', '_' and '-'")
+    # A live enrollment may be reused; otherwise the route mints one
+    # ATOMICALLY with the job (the token goes to the worker's transit
+    # context, never into the response or the DB).
+    if body.reuse_enrollment_id:
+        row = store.get_enrollment(body.reuse_enrollment_id.strip())
+        if row is None or row.get("state") != "created":
+            raise HTTPException(422, "reuse_enrollment_id is not a live token")
+        enrollment_id = row["id"]
+        mne_token = provisioning.reveal_by_enrollment(enrollment_id)
+        if not mne_token:
+            raise HTTPException(
+                422, "reuse_enrollment_id has no live token material — hash-only "
+                     "storage makes UI-minted tokens unreusable; leave the field "
+                     "empty to mint a fresh one")
+    else:
+        try:
+            row, mne_token = store.create_enrollment(
+                label=f"provision:{host}", harness_hint=harness_hint,
+                name_hint=name)
+        except EnrollmentQuotaError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        enrollment_id = row["enrollment_id"]
+
+    # P2-2 (CWE-759): ZERO derivations of the ssh secret in the DB or the
+    # API. The old code stored unsalted sha256(password) and returned it
+    # to the owner. For key auth the fingerprint of the PUBLIC half is
+    # display material (useful, comparable with ssh-keygen -lf).
+    if body.auth.kind == "password":
+        key_fp = "password"
+    elif body.auth.kind == "alias":
+        key_fp = "alias:" + host
+    else:
+        key_fp = provisioner_mod.public_key_fingerprint(
+            body.auth.secret, body.auth.passphrase)
+    job = store.create_provision_job(
+        host=host, port=body.port, auth_kind=body.auth.kind,
+        key_fingerprint=key_fp, harness_hint=harness_hint,
+        board_url_for_host=board_url, enrollment_id=enrollment_id,
+        expected_host_key_fingerprint=expected_fp)
+    provisioning.remember(job["id"], enrollment_id, mne_token)
+    provisioning.get(store, _broadcast).start_job(provisioner_mod.JobFacts(
+        job_id=job["id"], host=host, port=body.port, auth_kind=body.auth.kind,
+        secret=provisioner_mod.Redacted(body.auth.secret) if body.auth.secret else None,
+        passphrase=(provisioner_mod.Redacted(body.auth.passphrase)
+                    if body.auth.passphrase else None),
+        username="", harness_hint=harness_hint,
+        enrollment_id=enrollment_id, executor_name=name, board_url=board_url,
+        bootstrap_token=provisioner_mod.Redacted(mne_token),
+        expected_host_key_fingerprint=expected_fp))
+    _notify_and_broadcast(
+        "system", f"Подключение {host}:{body.port} запущено",
+        f"provision job {job['id']} ({body.auth.kind})",
+        None, {"kind": "provisioning.created", "job_id": job["id"],
+               "host": host, "port": body.port,
+               "enrollment_id": enrollment_id})
+    return {"ok": True, "job_id": job["id"], "enrollment_id": enrollment_id,
+            "state": job["state"]}
+
+
+@app.get("/api/executors/provision/{job_id}")
+async def provision_job_status(job_id: str, request: Request) -> ProvisionJobOut:
+    """Job progress for the owner UI (ui-token): state, steps, the pinned
+    host-key fingerprint and the linked enrollment. No secrets travel."""
+    _guard_ui_write(request)
+    row = store.get_provision_job(job_id)
+    if row is None:
+        raise HTTPException(404, f"provision job {job_id} not found")
+    enrollment: dict[str, Any] = {}
+    if row["enrollment_id"]:
+        erow = store.get_enrollment(row["enrollment_id"])
+        if erow is not None:
+            enrollment = {"state": erow["state"], "expires_at": erow["expires_at"],
+                          "executor_id": erow.get("executor_id", "")}
+    return {"ok": True, "job": row, "enrollment": enrollment}
+
+
+@app.post("/api/executors/provision/host/{host}/repin")
+async def provision_repin(host: str, body: HostRepinBody, request: Request,
+                          port: int = Query(default=22, ge=1, le=65535)) -> OkOut:
+    """Re-pin a host key (ui-token): a separate OWNER action with the
+    old→new pair in the audit (provisioning.host_key_repinned). Use after
+    a deliberate host reinstall — never to silence a mismatch. P2-1: the
+    pin identity is (host, port); live jobs of that identity are failed
+    (pin.invalidated) — they were authenticating against the old pin."""
+    _guard_ui_write(request)
+    if not _PROVISION_HOST_RE.match(host):
+        # P1-1 charset gate: the host rides audit payloads and SSE frames
+        raise HTTPException(422, "host must be a lowercase FQDN/IP name")
+    # P1-3: same normalization as strict mode — hex64 input becomes the
+    # canonical ssh-keygen form before it lands in the pin table.
+    fp = provisioner_mod.normalize_fingerprint(body.fingerprint)
+    if not fp:
+        raise HTTPException(
+            422, "fingerprint must be SHA256:base64 (ssh-keygen form) or "
+                 "hex sha256")
+    old = store.get_host_pin(host, port)
+    store.set_host_pin(host, port, fp)
+    store.log_board_event("provisioning.host_key_repinned", {
+        "host": host, "port": port,
+        "old": old["fingerprint"] if old else "",
+        "new": fp,
+    })
+    invalidated = store.fail_live_provision_jobs_for_host(
+        host, port, "pin.invalidated")
+    for row in invalidated:
+        _broadcast({"kind": "provisioning.failed", "job_id": row["id"],
+                    "error_code": "pin.invalidated"})
+    _broadcast({"kind": "provisioning.repinned", "host": host, "port": port,
+                "fingerprint": fp})
+    return {"ok": True}
+
+
+# ------------------------------------- poller bootstrap (wave 3D, design §D)
+# The ONE-COMMAND onboarding: the board serves its own installer and the
+# runtime artifacts it needs, straight from the packaged files — always in
+# sync with the RUNNING board (no version skew; the snapshot-discipline
+# answer to installer staleness). All four routes are OPEN READS (the
+# script and the artifacts carry NO secret material — the enrollment token
+# travels as a command ARGUMENT typed on the VPS, never in a URL:
+# ADR 0012 §9). Cache-Control: no-store rides the global /api/* middleware.
+#
+#   bootstrap.sh   — deploy/poller/bootstrap.sh in the repo;
+#   poller.py      — scripts/assignment_poller.py in the repo;
+#   the unit       — deploy/poller/vesmaro-assignment-poller.service;
+#   ca.crt         — the lab CA (the self-signed leaf cert IS its own
+#                    anchor). It is PUBLIC material, but it does not live in
+#                    the image: TLS terminates on the ingress (traefik) and
+#                    the cert lives in the k8s secret `vesmaro-eyes-tls`.
+#                    The chart mounts the PUBLIC tls.crt into the container
+#                    (see values `pollerBootstrap.caFile`) and points
+#                    VESMARO_TLS_CA_FILE at it. Without the mount the route
+#                    answers an HONEST 503 with the fix in the message —
+#                    fail-closed, never a guess.
+#
+# Resolution order for the packaged dir: VESMARO_POLLER_DIR (the image
+# keeps /app/poller) first; the repo layout second (dev/tests run from a
+# checkout where the artifacts live under scripts/ and deploy/poller/).
+_POLLER_DIR_ENV = "VESMARO_POLLER_DIR"
+_TLS_CA_FILE_ENV = "VESMARO_TLS_CA_FILE"
+
+
+def _poller_artifact(filename: str) -> Path | None:
+    """Resolve a served bootstrap artifact to an existing file, or None."""
+    env_dir = os.environ.get(_POLLER_DIR_ENV, "").strip()
+    candidates: list[Path] = []
+    if env_dir:
+        candidates.append(Path(env_dir) / filename)
+    else:  # dev/tests: the repo layout
+        repo = Path(__file__).resolve().parents[1]
+        candidates.append(repo / "deploy" / "poller" / filename)
+        if filename == "assignment_poller.py":
+            candidates.append(repo / "scripts" / filename)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _serve_artifact(filename: str, media_type: str) -> Response:
+    path = _poller_artifact(filename)
+    if path is None:
+        raise HTTPException(
+            404,
+            f"bootstrap artifact {filename!r} is not packaged on this board "
+            f"(set {_POLLER_DIR_ENV} to the packaged dir)",
+        )
+    return Response(content=path.read_bytes(), media_type=media_type)
+
+
+@app.get("/api/poller/bootstrap.sh")
+async def poller_bootstrap_script() -> Response:
+    """The one-command installer (open read). Served from the packaged
+    file — the script carries NO secrets: the enrollment token arrives as
+    a CLI argument on the VPS, everything else rides pinned TLS."""
+    return _serve_artifact("bootstrap.sh", "text/x-shellscript; charset=utf-8")
+
+
+@app.get("/api/poller/artifacts/bootstrap.sh.sha256")
+async def poller_bootstrap_script_sha256() -> Response:
+    """SHA256 (hex) of the EXACT installer bytes the sibling route serves
+    (AGW-9, АРХКОМ-8 В1): out-of-band verification of the installer TEXT
+    for the paranoid two-step (fetch, verify, read, run). Same resolution
+    order as /api/poller/bootstrap.sh — the hash can never describe a
+    different file than the one downloadable next to it. Open read: a
+    digest of a secret-free script is not secret material."""
+    path = _poller_artifact("bootstrap.sh")
+    if path is None:
+        raise HTTPException(
+            404,
+            f"bootstrap artifact 'bootstrap.sh' is not packaged on this "
+            f"board (set {_POLLER_DIR_ENV} to the packaged dir)",
+        )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return Response(content=digest + "\n",
+                    media_type="text/plain; charset=utf-8")
+
+
+@app.get("/api/poller/artifacts/poller.py")
+async def poller_artifact_poller_py() -> Response:
+    """The poller itself, always fresh from the RUNNING board — installer
+    re-run doubles as upgrade (no version skew between board and poller)."""
+    return _serve_artifact("assignment_poller.py", "text/x-python; charset=utf-8")
+
+
+@app.get("/api/poller/artifacts/vesmaro-assignment-poller.service")
+async def poller_artifact_unit() -> Response:
+    """The systemd system unit (the bootstrap adapts User/config paths to
+    the target machine with sed — the artifact stays verbatim in the repo)."""
+    return _serve_artifact(
+        "vesmaro-assignment-poller.service", "text/plain; charset=utf-8"
+    )
+
+
+@app.get("/api/poller/artifacts/ca.crt")
+async def poller_artifact_ca() -> Response:
+    """The lab CA for pinning (open read — a certificate is public
+    material). 503 while the CA file is not mounted: the chart ships the
+    optional mount (values `pollerBootstrap.caFile`); the honest refusal
+    names the fix instead of serving a guess."""
+    ca_file = os.environ.get(_TLS_CA_FILE_ENV, "").strip()
+    if not ca_file:
+        raise HTTPException(
+            503,
+            f"the lab CA is not mounted into this container — mount the "
+            f"PUBLIC tls.crt of the board TLS secret and point "
+            f"{_TLS_CA_FILE_ENV} at it (chart values "
+            f"pollerBootstrap.caFile; see deploy/poller/REMOTE-EXECUTOR.md)",
+        )
+    path = Path(ca_file)
+    if not path.is_file():
+        raise HTTPException(
+            503,
+            f"{_TLS_CA_FILE_ENV}={ca_file} does not exist — fix the mount "
+            f"or unset the variable (fail-closed: no CA, no download)",
+        )
+    data = path.read_bytes()
+    # A mispointed variable must not leak an arbitrary file to anonymous
+    # readers: only a PEM certificate is servable here.
+    if not data.lstrip().startswith(b"-----BEGIN CERTIFICATE-----"):
+        raise HTTPException(
+            503,
+            f"{_TLS_CA_FILE_ENV}={ca_file} is not a PEM certificate — "
+            f"refusing to serve it (fail-closed: this route serves "
+            f"certificates only)",
+        )
+    return Response(content=data, media_type="application/x-x509-ca-cert")
 
 
 # ------------------------------------- execution settings (ARCH-9, Amd 2 §5)
@@ -3997,6 +4821,25 @@ async def tasks_inbox(scope: str = "all", project: str = "",
     )
 
 
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str) -> TaskOut:
+    """Task detail by id (BE-16): one handler for BOTH active and archived
+    tasks. The store keeps them in a single ``tasks`` table split only by
+    the ``archived`` flag and ``store.task`` applies no archived filter, so
+    the response shape never diverges from the board/PATCH TaskOut — the
+    SPA may drop its archive-list probe (UI-18 pair 4) without adding a
+    single conditional beyond 404. Read-only: covered by the global device
+    read wildcard (``GET /api/tasks*``) and, like every other task read,
+    open without a token; DELETE hard-deny and archive/unarchive mutations
+    are untouched. Registered AFTER ``GET /api/tasks/inbox`` on purpose:
+    FastAPI matches routes in registration order and ``{task_id}`` would
+    otherwise swallow the static inbox path."""
+    task = store.task(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+    return task
+
+
 @app.post("/api/tasks/inbox/refresh")
 async def tasks_inbox_refresh(request: Request) -> TaskInboxRefreshOut:
     """Force one inbox scan synchronously (mutation-action). The mnemos
@@ -4015,13 +4858,90 @@ async def tasks_inbox_refresh(request: Request) -> TaskInboxRefreshOut:
     return TaskInboxRefreshOut(**result)
 
 
+@app.patch("/api/tasks/inbox/{memory_id}")
+async def tasks_inbox_edit(memory_id: str, body: TaskInboxEditSpec,
+                           request: Request) -> TaskInboxItem:
+    """Owner corrections to a queue record BEFORE adoption (UI-25).
+
+    Stores the provided fields (title/summary/priority/project) as an
+    overlay on the mirror row (``edits`` JSON) — the mirror's base fields
+    stay as the source returned them, and GET /api/tasks/inbox projects the
+    EFFECTIVE values plus the overlay. 409 once the row is adopted (the
+    task exists; edit that instead); 404 unknown; 422 empty/garbage body."""
+    _guard_write(request, classes=("ui",))
+    rec = store.get_inbox_item(memory_id)
+    if rec is None:
+        raise HTTPException(404, "memory not found in task inbox")
+    if rec.get("adopted_task_id"):
+        raise HTTPException(409, "inbox record already adopted")
+    edits = body.model_dump(exclude_none=True)
+    if not edits:
+        raise HTTPException(422, "no fields to edit")
+    if "priority" in edits and edits["priority"] not in TASK_PRIORITIES:
+        raise HTTPException(
+            422, f"priority must be one of {sorted(TASK_PRIORITIES)}")
+    if not store.save_inbox_edits(memory_id, edits):
+        raise HTTPException(404, "memory not found in task inbox")
+    items = store.list_inbox(include_adopted=True, memory_id=memory_id)
+    if not items:
+        raise HTTPException(404, "memory not found in task inbox")
+    logging.getLogger("vesmaro.inbox").info(
+        "task-inbox edit saved: memory=%s fields=%s", memory_id, sorted(edits))
+    return TaskInboxItem(**items[0])
+
+
+async def _sync_inbox_edits_revision(
+        rec: dict[str, Any], edits: dict[str, str]) -> tuple[str | None, str | None]:
+    """Write the EDITED revision of a task:queue record back to mnemos
+    (UI-25 adopt-with-edits sync). Best-effort by design: the adopt contract
+    must not depend on a memory engine round-trip.
+
+    mnemos has no content-update over HTTP (no PATCH/PUT /memories route;
+    verified against prod 4.1.0 and the 4.3.0 source), so the honest
+    minimal mechanism is a NEW revision record via POST /memories on the
+    source server (``metadata.supersedes`` names the original; tags carry
+    the edited project:/severity: values plus a ``task:edit`` provenance
+    tag). Returns ``(revision_id, error)``: ``(None, None)`` = nothing to
+    sync (no field edits); ``(None, detail)`` = the engine kept the old
+    version — logged, notified and documented, never silently dropped.
+    """
+    if not edits:
+        return None, None
+    server_name = rec.get("server") or ""
+    try:
+        _, servers = get_scope_servers(server_name, active_only=True)
+    except HTTPException:
+        servers = []
+    if not servers:
+        detail = f"source server '{server_name}' is not active — revision not written"
+        logging.getLogger("vesmaro.inbox").warning(
+            "adopt sync: %s (memory=%s)", detail, rec.get("memory_id"))
+        return None, detail
+    body = revision_memory_body(rec, edits)
+    code, resp = await mnemos_client.post_json_async(servers[0], "/memories", body)
+    if code in (200, 201) and isinstance(resp, dict) and resp.get("id"):
+        revision_id = str(resp["id"])
+        logging.getLogger("vesmaro.inbox").info(
+            "adopt sync: revision %s written for memory=%s (supersedes)",
+            revision_id, rec.get("memory_id"))
+        return revision_id, None
+    detail = str(resp.get("detail") if isinstance(resp, dict) else resp)[:300]
+    logging.getLogger("vesmaro.inbox").warning(
+        "adopt sync: mnemos rejected the revision write (http=%s) for "
+        "memory=%s: %s", code, rec.get("memory_id"), detail)
+    return None, detail
+
+
 @app.post("/api/tasks/inbox/{memory_id}/adopt", status_code=201)
 async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
     """Adopt a mirrored task:queue record as a NATIVE board task.
 
     The memory content is never copied — the task links it via memory_ids
-    (SEC-4). 409 with the existing ``task_id`` on double adoption; 404 when
-    the mirror row is unknown."""
+    (SEC-4). Owner edits (UI-25 overlay) win over the mirror fields, and a
+    task created from edited fields links an EDITED revision memory written
+    back to the source store (best-effort; a failed sync is logged and
+    notified, never a failed adopt). 409 with the existing ``task_id`` on
+    double adoption; 404 when the mirror row is unknown."""
     _guard_write(request, classes=("ui",))
     rec = store.get_inbox_item(memory_id)
     if rec is None:
@@ -4034,24 +4954,34 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
                 "detail": "inbox record already adopted",
             },
         )
+    edits = field_edits(parse_edits(rec.get("edits")))
+    # Overlay semantics: a CLEARED summary ('') falls back to the standard
+    # provenance line — the adopt text is never empty on a board task.
+    revision_id, sync_error = await _sync_inbox_edits_revision(rec, edits)
+    if revision_id:
+        store.save_inbox_edits(memory_id, {"revision_memory_id": revision_id})
+    elif sync_error:
+        store.save_inbox_edits(memory_id, {"revision_error": sync_error})
     specialist = rec.get("specialist") or ""
     # store raises ValueError on a garbage env/priority in the mirror row —
     # surface as 422, never as a 500
     try:
         task = store.create_task({
-            "title": (rec.get("title") or f"task:queue {memory_id[:8]}")[:200],
-            "summary": (
+            "title": (edits.get("title")
+                      or rec.get("title")
+                      or f"task:queue {memory_id[:8]}")[:200],
+            "summary": edits.get("summary") or (
                 f"Принято из task:queue ({rec['server']}, память {memory_id[:8]}) "
                 "— полное описание в связанной памяти."
             ),
-            "project": rec.get("project", ""),
-            "priority": rec.get("priority", "normal"),
+            "project": edits.get("project", rec.get("project", "")),
+            "priority": edits.get("priority", rec.get("priority", "normal")),
             "env": "laptop",
             "agents": ["zcode"],
             "specialists": [specialist] if specialist else [],
-            "memory_ids": [memory_id],
+            "memory_ids": [memory_id] + ([revision_id] if revision_id else []),
             "mnemos_tags": ["task-queue-import"],
-        })
+        }, actor=_device_actor(request))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if not store.mark_inbox_adopted(memory_id, task["id"]):
@@ -4061,8 +4991,16 @@ async def tasks_inbox_adopt(memory_id: str, request: Request) -> TaskOut:
     _notify_and_broadcast(
         "work", f"{task['id']}: принята из task:queue",
         task["title"][:120], task["id"],
-        {"kind": "task.created", "task": task},
+        {"kind": "task.created", "task": task,
+         "actor": _sse_actor(request)},
     )
+    if sync_error:
+        _notify_and_broadcast(
+            "work", f"{task['id']}: правка НЕ синхронизирована в память",
+            sync_error[:200], task["id"],
+            {"kind": "task.updated", "task": task,
+             "actor": _sse_actor(request)},
+        )
     return task
 
 
@@ -4343,6 +5281,14 @@ def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -
     the tokens; compose.yaml ships dev values for local runs). A
     configured but non-matching bearer is 401. Every comparison is
     constant-time (hmac.compare_digest per class).
+
+    Device leg (scope v1, ADR 0012 Amendment): the scope middleware has
+    ALREADY validated this mnd_ bearer AND matched the (method, path)
+    against the device scope table for this exact route — a non-None
+    ``request.state.device`` is proof; re-comparing the device digest
+    here would only re-derive the choke point's verdict. Deliberately
+    placed AFTER the fail-closed 503: a board with no write tokens
+    configured stays disabled for devices too (fail-closed everywhere).
     """
     effective = _token_classes()
     allowed = [effective[c] for c in classes if effective.get(c)]
@@ -4353,6 +5299,8 @@ def _guard_write(request: Request, *, classes: tuple[str, ...] = ("machine",)) -
             f"mutation auth is not configured: set {envs} to "
             "enable board writes (fail-closed; see compose.yaml for local dev)",
         )
+    if getattr(request.state, "device", None) is not None:
+        return
     auth = request.headers.get("Authorization", "")
     if auth:
         # Determinism rule (ADR 0014 Ф2): a header present → the header leg
@@ -4413,6 +5361,42 @@ def _bearer_is_class(request: Request, cls: str) -> bool:
     auth = request.headers.get("Authorization", "")
     expected = f"Bearer {token}"
     return hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _device_actor(request: Request) -> str:
+    """Task-history actor for a device-driven mutation (scope v1, ADR 0012
+    Amendment): ``device:<id> <name>`` — the audit trail answers WHO rode
+    the mnd_ token without exposing material (same discipline as the
+    pairing.issued token_id hash tail). Empty for every non-device
+    request: the ui/machine legs keep their history shape unchanged."""
+    device = getattr(request.state, "device", None)
+    if not device:
+        return ""
+    return f"device:{device['id']} {device.get('name') or ''}".strip()[:120]
+
+
+def _machine_actor(executor: dict[str, Any] | None) -> str:
+    """Actor for machine-leg task.* SSE frames (§A.5): the board token
+    has no per-caller identity → ``machine:board``; an approved executor
+    token carries its registry id → ``machine:<executor_id>``. Same
+    class:identity grammar as the device/ui legs."""
+    return f"machine:{executor['id']}" if executor else "machine:board"
+
+
+def _sse_actor(request: Request) -> str:
+    """Uniform actor for task.* SSE frames (ADR 0012 Amendment §A.5) —
+    additive: pre-§A.5 viewers ignore the unknown key. The device leg
+    reuses the task-history attribution VERBATIM (``device:<id> <name>``,
+    AUTH-2: one builder, one format across audit trail and stream).
+    Otherwise the actor mirrors the leg the guard accepted (the guards'
+    bearer classification is the single source of truth): every
+    _sse_actor call site is a ui+device guard, so a non-device request
+    is the ui class — header or cookie leg alike, the transition-mode
+    board token included (the guard counts it as ui)."""
+    device = getattr(request.state, "device", None)
+    if device is not None:
+        return _device_actor(request)
+    return "ui"
 
 
 def _cookie_ui_ok(request: Request) -> bool:
@@ -4849,10 +5833,13 @@ class PairingConfirmOut(_ApiModel):
 
 
 class DeviceOut(_ApiModel):
-    """Public device session — token_hash never leaves the store."""
+    """Public device session — token_hash never leaves the store. grants is
+    the live per-device granule set (Amendment §A.7) the owner panel's
+    toggles bind to."""
     id: str
     name: str
     scope: str
+    grants: list[str] = []
     state: str
     created_at: str
     last_seen_at: str = ""
@@ -4870,6 +5857,18 @@ class DevicesOut(_ApiModel):
 
 
 class DeviceRevokedOut(_ApiModel):
+    ok: bool
+    device: DeviceOut
+
+
+class DeviceGrantsBody(_ApiModel):
+    """FULL-REPLACEMENT granule set (PUT semantics). Unknown names → 422
+    (the granule dictionary is server-owned — the viewer mirrors it for
+    labels, never for validation)."""
+    grants: list[str] = Field(default_factory=list)
+
+
+class DeviceGrantsOut(_ApiModel):
     ok: bool
     device: DeviceOut
 
@@ -5129,6 +6128,40 @@ async def revoke_device(device_id: str, request: Request) -> DeviceRevokedOut:
             "system", "Устройство отключено",
             f"device-сессия «{row['name']}» ({device_id}) отозвана", None,
             {"kind": "pairing.revoked", "device_id": device_id})
+    return {"ok": True, "device": row}
+
+
+@app.put("/api/devices/{device_id}/grants")
+async def set_device_grants(device_id: str, body: DeviceGrantsBody,
+                            request: Request) -> DeviceGrantsOut:
+    """Owner sets the per-device granule set (ui-token; Amendment §A.7,
+    owner directive «пользователь-администратор сам определяет кому
+    сколько и куда разрешений выдать и забрать»). FULL replacement (PUT):
+    the sent list IS the set — [] revokes every granule (reads stay open,
+    global-read always). Idempotent 200 on an unchanged set; applies to
+    the LIVE session immediately (the guard reads grants per request —
+    the device's very next call runs under the new set). 404 unknown
+    device; 409 not-active (granting to a dead session is meaningless —
+    revoke/re-pair instead); 422 unknown granule names."""
+    _guard_ui_write(request)
+    unknown = sorted(set(body.grants) - set(DEVICE_GRANTS))
+    if unknown:
+        raise HTTPException(
+            422, f"unknown device grants: {', '.join(unknown)} "
+                 f"(known: {', '.join(DEVICE_GRANTS)})")
+    result = store.set_device_grants(device_id, body.grants)
+    if result is None:
+        raise HTTPException(404, f"device {device_id} not found")
+    row, changed = result
+    if row["state"] != "active":
+        raise HTTPException(
+            409, f"device {device_id} is {row['state']} — grants apply to "
+                 "active sessions only (revoke it or pair a new one)")
+    if changed:
+        _notify_and_broadcast(
+            "system", "Доступы устройства изменены",
+            f"«{row['name']}» ({device_id}): гранулы "
+            f"{row['grants'] or '— ничего —'}")
     return {"ok": True, "device": row}
 
 

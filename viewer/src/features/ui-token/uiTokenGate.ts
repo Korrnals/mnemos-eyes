@@ -52,7 +52,13 @@ export type UiTokenRejectKind = "verify" | "session";
  */
 export type UiTokenGateEvent =
   | { type: "loginStored"; tokenClass: "ui" | "legacy" }
-  | { type: "tokenRejected" };
+  | { type: "tokenRejected" }
+  /** UI-22 (kept for scope v1's read scope): a mutation on a DEVICE-bound
+   * browser whose scope cannot run it (ADR 0012 Amendment — every mutation
+   * is a 403 verdict for `read`). The login window is the 401 affordance
+   * and would lie about the verdict; the provider turns this event into
+   * the honest toast. */
+  | { type: "deviceForbidden" };
 
 export interface UiTokenGateState {
   /** Login-window visibility. */
@@ -84,8 +90,33 @@ interface QueuedRun {
 }
 
 export interface UiTokenGateOptions {
-  /** "Is a ui token available right now?" — adapter policy, injected. */
+  /**
+   * "May this mutation LEAVE THE BROWSER right now?" — the authorization
+   * predicate, injected. Scope v1 (ADR 0012 Amendment): the provider
+   * answers `hasUiToken() || hasDeviceToken()` — a paired device's
+   * mutations go to the server, where the scope table rules (open → run,
+   * closed → 403 on the honest per-action toast). Absent a device token
+   * this is the historical ui-token-only answer.
+   */
   hasToken: () => boolean;
+  /**
+   * Scope v1: the UI-CLASS mirror — what `tokenPresent` keeps meaning
+   * (the owner session). The privilege separation survives the wider
+   * `hasToken`: store-ops/enrollment/devices panels, the TopBar slot and
+   * every `tokenPresent` consumer stay hidden on a phone that only holds
+   * an mnd_ identity. Absent → falls back to `hasToken` (the mock and
+   * legacy wiring have no device concept).
+   */
+  hasUiToken?: () => boolean;
+  /**
+   * Scope v1: the paired device's scope. When the browser is device-bound
+   * WITHOUT an owner session and the scope is NOT "control", every
+   * mutation is a server 403 verdict — the honest `deviceForbidden` toast
+   * fires WITHOUT the round-trip and the login window never lies.
+   * Absent → the UI-22 pre-flight beat keys on `hasDeviceIdentity` alone
+   * (the legacy wiring where hasToken does not include the device).
+   */
+  deviceScope?: () => "control" | "read";
   /** ADR 0014 Ф1: server verify at the door. Absent → legacy
    * paste-and-store (mock adapter / SSR harnesses). */
   verifyToken?: (value: string) => Promise<UiTokenVerifyResult>;
@@ -93,12 +124,20 @@ export interface UiTokenGateOptions {
    * 401 mid-flight, before the window may open. Absent → the window
    * opens immediately (the historical behavior). */
   probe?: () => Promise<boolean>;
+  /** UI-22: "is this browser a PAIRED DEVICE?" (ADR 0012 §5 — the
+   * `vesmaro.deviceToken` identity). With the scope-v1 wiring, gates the
+   * read-scope pre-flight beat; with legacy wiring (hasToken ui-only),
+   * the historical token-less beat. */
+  hasDeviceIdentity?: () => boolean;
 }
 
 export class UiTokenGate {
   private readonly hasToken: () => boolean;
+  private readonly hasUiToken?: () => boolean;
+  private readonly deviceScope?: () => "control" | "read";
   private readonly verifyToken?: (value: string) => Promise<UiTokenVerifyResult>;
   private readonly probe?: () => Promise<boolean>;
+  private readonly hasDeviceIdentity?: () => boolean;
   private readonly listeners = new Set<Listener>();
   private readonly eventListeners = new Set<EventListener>();
   private state: UiTokenGateState;
@@ -106,13 +145,26 @@ export class UiTokenGate {
 
   constructor(options: UiTokenGateOptions) {
     this.hasToken = options.hasToken;
+    this.hasUiToken = options.hasUiToken;
+    this.deviceScope = options.deviceScope;
     this.verifyToken = options.verifyToken;
     this.probe = options.probe;
+    this.hasDeviceIdentity = options.hasDeviceIdentity;
     this.state = {
       open: false,
       reason: "manual",
-      tokenPresent: options.hasToken(),
+      tokenPresent: this.uiPresent(),
     };
+  }
+
+  /**
+   * Scope v1: the ui-class presence — what `tokenPresent` mirrors. When
+   * the provider injects `hasUiToken` this is the owner session ONLY (a
+   * device identity must not unhide store-ops panels); without the
+   * injection it is the plain `hasToken` (mock/legacy wiring).
+   */
+  private uiPresent(): boolean {
+    return this.hasUiToken ? this.hasUiToken() : this.hasToken();
   }
 
   /** Subscribe to session-feedback events; returns the unsubscribe. */
@@ -181,7 +233,7 @@ export class UiTokenGate {
   logout(): void {
     clearUiToken();
     this.pending = null;
-    this.setState({ tokenPresent: this.hasToken() });
+    this.setState({ tokenPresent: this.uiPresent() });
   }
 
   /**
@@ -190,7 +242,7 @@ export class UiTokenGate {
    * tokenPresent (and keeps the login window closed) with no user action.
    */
   refreshPresence(): void {
-    this.setState({ tokenPresent: this.hasToken() });
+    this.setState({ tokenPresent: this.uiPresent() });
   }
 
   private async verifyAndApply(value: string): Promise<void> {
@@ -224,7 +276,7 @@ export class UiTokenGate {
     setUiToken(value);
     this.setState({
       open: false,
-      tokenPresent: this.hasToken(),
+      tokenPresent: this.uiPresent(),
       rejectKind: undefined,
       rejectDetail: undefined,
     });
@@ -242,8 +294,38 @@ export class UiTokenGate {
     isReplay = false,
   ): Promise<void> {
     if (!this.hasToken()) {
+      // UI-22 device beat (legacy wiring — hasToken without the device): a
+      // paired device has IDENTITY but the wiring grants it nothing — the
+      // server would answer 403 to its mutations (ADR 0012 §5). Opening
+      // the login window would promise «sign in and your action
+      // continues» for an action the device can NEVER run. Announce the
+      // honest refusal (the provider toasts it), reset the spinner owner,
+      // drop the run.
+      if (this.hasDeviceIdentity?.()) {
+        this.emit({ type: "deviceForbidden" });
+        onDeferred?.();
+        return;
+      }
       this.pending = onDeferred ? { run, onDeferred } : { run };
       this.setState({ open: true, reason: "required", tokenPresent: false });
+      onDeferred?.();
+      return;
+    }
+    // Scope v1 device beat (ADR 0012 Amendment): the device identity now
+    // COUNTS as hasToken, but a `read`-scope device without an owner
+    // session still cannot mutate — every POST/PATCH is a server 403
+    // verdict. The honest refusal fires WITHOUT the round-trip; a
+    // `control` device falls through and lets the server's scope table
+    // rule (open routes run, closed ones answer 403 on the per-action
+    // toast). Fires only when deviceScope is injected (the scope-v1
+    // wiring) — legacy unit tests keep their byte-for-byte behavior.
+    if (
+      this.deviceScope &&
+      this.hasDeviceIdentity?.() &&
+      !this.uiPresent() &&
+      this.deviceScope() !== "control"
+    ) {
+      this.emit({ type: "deviceForbidden" });
       onDeferred?.();
       return;
     }
@@ -263,7 +345,7 @@ export class UiTokenGate {
         this.setState({
           open: false,
           reason: "rejected",
-          tokenPresent: this.hasToken(),
+          tokenPresent: this.uiPresent(),
           rejectKind: undefined,
           rejectDetail: undefined,
         });

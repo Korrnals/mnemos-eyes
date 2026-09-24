@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type QueryFunctionContext,
+} from "@tanstack/react-query";
 import type { ArchiveParams, BoardSummary } from "@/gateway/boardTypes";
 import type { InboxParams } from "@/gateway/BoardAdapter";
 import { isTaskSource } from "@/gateway/capabilities";
@@ -13,24 +19,47 @@ import { GC_TIMES, STALE_TIMES } from "@/lib/queryClient";
  * stay idle and the pages render their honest unsupported states.
  *
  * Caching decision (instruction: "кешируй через TanStack query key
- * tasks.board"): the board API has NO single-task GET, so `useTask(id)`
- * reads the SHARED `tasks.board` projection through a `select` — the list
- * page, the mini-stats and every detail page share one wire call, and SSE
- * patches to `tasks.board` reach all of them at once.
+ * tasks.board"): `useTask(id)` reads the SHARED `tasks.board` projection
+ * through a `select` — the list page, the mini-stats and every detail page
+ * share one wire call, and SSE patches to `tasks.board` reach all of them
+ * at once. The wire DOES have a single-task GET since BE-16 (one TaskOut
+ * for active and archived rows); it serves only the FALLBACK path
+ * (`useTaskDetail`) for ids the projection misses — switching the primary
+ * read to it would cost an extra call per detail open and cut the detail
+ * page off the SSE patch flow.
+ *
+ * BE-15 (freeze lesson 1.11.4, hard measurement): in TanStack v5 every
+ * `useQuery` re-render runs `observer.setOptions`, which shallow-compares
+ * the new options with the previous ones and notifies the cache
+ * (`observerOptionsUpdated`) when they differ. BOTH the `queryFn` closure
+ * AND the `queryKey` array are compared by reference — an inline arrow (a
+ * new function per render) or a bare `keys.tasks.board()` call (a new array
+ * per render) makes the compare fail EVERY render, so every re-render of
+ * every mount sprays `observerOptionsUpdated` into the cache. That noise is
+ * the fuel of the 1.11.4 freeze loop. Contract for this file: every hook
+ * pins the queryFn with `useCallback` and the queryKey ARRAY with `useMemo`
+ * — re-renders then compare equal and emit nothing. Gate:
+ * useTasks.queryFn.test.tsx.
  */
 
 /** Board projection: rows + per-column counts (list page + mini-stats). */
 export function useBoardTasks() {
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
-  return useQuery({
-    queryKey: keys.tasks.board(),
-    queryFn: ({ signal }) => {
+  // BE-15: stable queryKey reference + stable queryFn identity (see file doc).
+  const queryKey = useMemo(() => keys.tasks.board(), []);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
       if (!isTaskSource(gateway)) {
         throw new Error("useBoardTasks: gateway has no task capability.");
       }
       return gateway.board(undefined, signal);
     },
+    [gateway],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
     enabled: capable,
     staleTime: STALE_TIMES.taskBoard,
     gcTime: GC_TIMES.taskBoard,
@@ -50,14 +79,19 @@ export function useTask(taskId: string | undefined) {
     (board: BoardSummary) => board.tasks.find((task) => task.id === taskId),
     [taskId],
   );
-  return useQuery({
-    queryKey: keys.tasks.board(),
-    queryFn: ({ signal }) => {
+  const queryKey = useMemo(() => keys.tasks.board(), []);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
       if (!isTaskSource(gateway) || taskId === undefined) {
         throw new Error("useTask: gateway has no task capability.");
       }
       return gateway.board(undefined, signal);
     },
+    [gateway, taskId],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
     enabled: capable,
     select,
     staleTime: STALE_TIMES.taskBoard,
@@ -69,14 +103,20 @@ export function useTask(taskId: string | undefined) {
 export function useTaskReports(taskId: string | undefined) {
   const gateway = useGateway();
   const capable = isTaskSource(gateway) && taskId !== undefined;
-  return useQuery({
-    queryKey: keys.tasks.reports.detail(taskId ?? ""),
-    queryFn: ({ signal }) => {
-      if (!isTaskSource(gateway) || taskId === undefined) {
+  const id = taskId ?? "";
+  const queryKey = useMemo(() => keys.tasks.reports.detail(id), [id]);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
+      if (!isTaskSource(gateway) || id === "") {
         throw new Error("useTaskReports: gateway has no task capability.");
       }
-      return gateway.reports(taskId, signal);
+      return gateway.reports(id, signal);
     },
+    [gateway, id],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
     enabled: capable,
     staleTime: STALE_TIMES.taskDetail,
     gcTime: GC_TIMES.taskDetail,
@@ -87,14 +127,20 @@ export function useTaskReports(taskId: string | undefined) {
 export function useTaskHistory(taskId: string | undefined) {
   const gateway = useGateway();
   const capable = isTaskSource(gateway) && taskId !== undefined;
-  return useQuery({
-    queryKey: keys.tasks.history(taskId ?? ""),
-    queryFn: ({ signal }) => {
-      if (!isTaskSource(gateway) || taskId === undefined) {
+  const id = taskId ?? "";
+  const queryKey = useMemo(() => keys.tasks.history(id), [id]);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
+      if (!isTaskSource(gateway) || id === "") {
         throw new Error("useTaskHistory: gateway has no task capability.");
       }
-      return gateway.history(taskId, signal);
+      return gateway.history(id, signal);
     },
+    [gateway, id],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
     enabled: capable,
     staleTime: STALE_TIMES.taskDetail,
     gcTime: GC_TIMES.taskDetail,
@@ -105,14 +151,20 @@ export function useTaskHistory(taskId: string | undefined) {
 export function useTaskMemories(taskId: string | undefined) {
   const gateway = useGateway();
   const capable = isTaskSource(gateway) && taskId !== undefined;
-  return useQuery({
-    queryKey: keys.tasks.memories(taskId ?? ""),
-    queryFn: ({ signal }) => {
-      if (!isTaskSource(gateway) || taskId === undefined) {
+  const id = taskId ?? "";
+  const queryKey = useMemo(() => keys.tasks.memories(id), [id]);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
+      if (!isTaskSource(gateway) || id === "") {
         throw new Error("useTaskMemories: gateway has no task capability.");
       }
-      return gateway.taskMemories(taskId, signal);
+      return gateway.taskMemories(id, signal);
     },
+    [gateway, id],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
     enabled: capable,
     staleTime: STALE_TIMES.taskDetail,
     gcTime: GC_TIMES.taskDetail,
@@ -123,18 +175,64 @@ export function useTaskMemories(taskId: string | undefined) {
 export function useTaskArchive(params: ArchiveParams) {
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
-  return useQuery({
-    queryKey: keys.tasks.archive(params),
-    queryFn: ({ signal }) => {
+  // BE-15: normalize the params object so both the key array and the fetch
+  // closure stay reference-stable while the CONTENTS change (page flips).
+  const { q, status, col, agent, project, limit, offset } = params;
+  const normalized = useMemo<ArchiveParams>(
+    () => ({ q, status, col, agent, project, limit, offset }),
+    [q, status, col, agent, project, limit, offset],
+  );
+  const queryKey = useMemo(() => keys.tasks.archive(normalized), [normalized]);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
       if (!isTaskSource(gateway)) {
         throw new Error("useTaskArchive: gateway has no task capability.");
       }
-      return gateway.archive(params, signal);
+      return gateway.archive(normalized, signal);
     },
+    [gateway, normalized],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
     enabled: capable,
     staleTime: STALE_TIMES.taskArchive,
     gcTime: GC_TIMES.taskArchive,
-    placeholderData: (previous) => previous, // pagination without flicker
+    // keepPreviousData: the module-stable form of `(previous) => previous` —
+    // an inline lambda here would re-introduce the per-render option churn.
+    placeholderData: keepPreviousData, // pagination without flicker
+  });
+}
+
+/**
+ * One task by id via the DIRECT single-task GET (BE-16, ME-003 fold-in):
+ * `GET /api/tasks/{task_id}` resolves BOTH active and archived tasks in one
+ * TaskOut shape, so the old bounded archive-list probe (200 rows + client
+ * search) is gone — an archived row beyond any page cap no longer degrades
+ * to not-found. UI-18 pair 4 fallback: fires ONLY once the board projection
+ * settled empty (`enabled`) — no extra wire call on the happy path, and the
+ * archive PAGE keeps its own list endpoint.
+ */
+export function useTaskDetail(taskId: string | undefined, enabled: boolean) {
+  const gateway = useGateway();
+  const capable = isTaskSource(gateway);
+  const id = taskId ?? "";
+  const queryKey = useMemo(() => keys.tasks.detail(id), [id]);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
+      if (!isTaskSource(gateway) || id === "") {
+        throw new Error("useTaskDetail: gateway has no task capability.");
+      }
+      return gateway.taskById(id, signal);
+    },
+    [gateway, id],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
+    enabled: capable && enabled && id !== "",
+    staleTime: STALE_TIMES.taskDetail,
+    gcTime: GC_TIMES.taskDetail,
   });
 }
 
@@ -142,15 +240,49 @@ export function useTaskArchive(params: ArchiveParams) {
 export function useTaskInbox(params: InboxParams = {}) {
   const gateway = useGateway();
   const capable = isTaskSource(gateway);
-  return useQuery({
-    queryKey: keys.tasks.inbox(params),
-    queryFn: ({ signal }) => {
+  // BE-15: the only param is a boolean — normalize it to keep the key array
+  // and the fetch closure reference-stable across renders.
+  const { include_adopted: includeAdopted } = params;
+  const normalized = useMemo<InboxParams>(
+    () => ({ include_adopted: includeAdopted }),
+    [includeAdopted],
+  );
+  const queryKey = useMemo(() => keys.tasks.inbox(normalized), [normalized]);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => {
       if (!isTaskSource(gateway)) {
         throw new Error("useTaskInbox: gateway has no task capability.");
       }
-      return gateway.inbox(params, signal);
+      return gateway.inbox(normalized, signal);
     },
+    [gateway, normalized],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
     enabled: capable,
+    staleTime: STALE_TIMES.taskInbox,
+    gcTime: GC_TIMES.taskInbox,
+  });
+}
+
+/**
+ * UI-25: the full task:queue memory card behind an inbox row, fetched only
+ * when the owner expands the record (the mirror carries a 300-char excerpt
+ * by design, SEC-4). Reuses the shared memory-detail key so the expanded
+ * card and the memory surfaces stay one cache entry.
+ */
+export function useInboxMemory(memoryId: string, enabled: boolean) {
+  const gateway = useGateway();
+  const queryKey = useMemo(() => keys.memories.detail(memoryId), [memoryId]);
+  const queryFn = useCallback(
+    ({ signal }: QueryFunctionContext) => gateway.getMemory(memoryId, false, signal),
+    [gateway, memoryId],
+  );
+  return useQuery({
+    queryKey,
+    queryFn,
+    enabled: enabled && memoryId.length > 0,
     staleTime: STALE_TIMES.taskInbox,
     gcTime: GC_TIMES.taskInbox,
   });

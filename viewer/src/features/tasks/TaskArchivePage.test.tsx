@@ -63,8 +63,11 @@ describe("TaskArchivePage (mock adapter)", () => {
     expect(html).toContain("RB-1");
     expect(html).toContain("archived from “blocked”");
     expect(html).toContain("Showing 1–1 of 1");
-    // The inline expansion carries the full detail (summary/spec live in
-    // the details pane — archived rows have no /tasks/:id page).
+    // UI-18 pair 4: rows ARE detail links now — the title carries the
+    // archive URL (offset/filters included) as the `return=` context.
+    expect(html).toContain('href="/tasks/RB-1?return=%2Ftasks%2Farchive"');
+    // The inline expansion still carries the full detail (summary/spec live
+    // in the details pane).
     expect(html).toContain("<details");
   });
 

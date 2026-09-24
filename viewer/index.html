@@ -13,10 +13,15 @@
       // Theme bootstrap: resolves the theme before first paint so system-light
       // users never flash the dark :root tokens (design-system.md §9: stored
       // choice wins, else system preference, else dark). Mirrors
-      // src/components/theme-provider.tsx — keep the storage key and
-      // resolution order in sync (guarded by src/styles/tokens.test.ts).
+      // src/components/theme-provider.tsx — keep the storage keys and
+      // resolution order in sync (guarded by src/styles/tokens.test.ts):
+      // UI-23 migration reads vesmaro.theme first, then the legacy
+      // mnemos-eyes:theme, then the OS preference.
       try {
-        var stored = localStorage.getItem("mnemos-eyes:theme");
+        var stored = localStorage.getItem("vesmaro.theme");
+        if (stored !== "light" && stored !== "dark") {
+          stored = localStorage.getItem("mnemos-eyes:theme");
+        }
         var theme =
           stored === "light" || stored === "dark"
             ? stored

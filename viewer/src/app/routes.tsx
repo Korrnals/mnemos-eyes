@@ -77,9 +77,13 @@ const AgentsHarnessesPage = lazy(() =>
     default: m.ExecutorRegistryPage,
   })),
 );
-const ExecutionSettingsPage = lazy(() =>
-  import("@/features/agents/ExecutionSettingsPage").then((m) => ({
-    default: m.ExecutionSettingsPage,
+// Settings hub (UI-21): the /system/settings route composes «Исполнение»
+// (the AGW-3 section, reused verbatim) + «Автоматизация» + «Интерфейс»
+// cross-links. The legacy single-section shell (ExecutionSettingsPage)
+// stays in features/agents for composition + parity tests.
+const SettingsHubPage = lazy(() =>
+  import("@/features/settings/SettingsHubPage").then((m) => ({
+    default: m.SettingsHubPage,
   })),
 );
 const AutomationPage = lazy(() =>
@@ -87,10 +91,17 @@ const AutomationPage = lazy(() =>
     default: m.AutomationPage,
   })),
 );
-const DocsIndexPage = lazy(() =>
-  import("@/features/docs/DocsIndexPage").then((m) => ({
-    default: m.DocsIndexPage,
-  })),
+const DevicesPage = lazy(() =>
+  import("@/features/pairing/DevicesPage").then((m) => ({ default: m.DevicesPage })),
+);
+// The DEVICE pairing leg lives OUTSIDE the Shell: /pair is the
+// unauthenticated public surface (ADR 0012 §2.3) — no sidebar, no session
+// chrome, minimal layout (PairPage renders its own centered shell).
+const PairPage = lazy(() =>
+  import("@/features/pairing/PairPage").then((m) => ({ default: m.PairPage })),
+);
+const DocsHubPage = lazy(() =>
+  import("@/features/docs/DocsHubPage").then((m) => ({ default: m.DocsHubPage })),
 );
 const DocsCategoryPage = lazy(() =>
   import("@/features/docs/DocsCategoryPage").then((m) => ({
@@ -99,6 +110,11 @@ const DocsCategoryPage = lazy(() =>
 );
 const DocsPage = lazy(() =>
   import("@/features/docs/DocsPage").then((m) => ({ default: m.DocsPage })),
+);
+const DocsCategoryLegacyRedirect = lazy(() =>
+  import("@/features/docs/DocsRedirects").then((m) => ({
+    default: m.DocsCategoryLegacyRedirect,
+  })),
 );
 
 /**
@@ -115,6 +131,17 @@ const DocsPage = lazy(() =>
  */
 export function buildRoutes(): RouteObject[] {
   return [
+    // /pair sits OUTSIDE the Shell (ADR 0012 §2.3): the device leg must
+    // work with no session and no owner chrome — it is registered BEFORE
+    // the Shell route, so it never inherits the sidebar layout.
+    {
+      path: "/pair",
+      element: (
+        <Page>
+          <PairPage />
+        </Page>
+      ),
+    },
     {
       element: <Shell />,
       children: [
@@ -215,14 +242,18 @@ export function buildRoutes(): RouteObject[] {
           ],
         },
 
-        // Документация domain (ADR 0015): pure-frontend md section — index,
-        // category lists, article pages. Static siblings (`/docs/c/…`) rank
-        // above the `:slug` route by react-router ranking.
+        // Документация domain (ADR 0015 + ADR 0016): three project hubs.
+        // /docs answers with an instant replace-redirect into the default
+        // hub (design spec §2/§8 — the section root is /docs/vesmaro-eyes);
+        // legacy single-segment URLs resolve through the redirect map in
+        // DocsHubPage (hit → replace, miss → not-found). Static segments
+        // (`c`) outrank the dynamic ones, so /docs/:project/c/:category and
+        // the splat article route rank correctly against each other.
         {
           path: "/docs",
           element: (
             <Page>
-              <DocsIndexPage />
+              <Navigate to="/docs/vesmaro-eyes" replace />
             </Page>
           ),
         },
@@ -230,12 +261,28 @@ export function buildRoutes(): RouteObject[] {
           path: "/docs/c/:category",
           element: (
             <Page>
+              <DocsCategoryLegacyRedirect />
+            </Page>
+          ),
+        },
+        {
+          path: "/docs/:project",
+          element: (
+            <Page>
+              <DocsHubPage />
+            </Page>
+          ),
+        },
+        {
+          path: "/docs/:project/c/:category",
+          element: (
+            <Page>
               <DocsCategoryPage />
             </Page>
           ),
         },
         {
-          path: "/docs/:slug",
+          path: "/docs/:project/*",
           element: (
             <Page>
               <DocsPage />
@@ -252,13 +299,15 @@ export function buildRoutes(): RouteObject[] {
             </Page>
           ),
         },
-        // Owner settings (AGW-3): minimal shell page — one live section
-        // («Исполнение»); further sections join as sibling blocks.
+        // Owner settings (UI-23 hub v2 over the UI-21 shell): one h1 +
+        // six sibling sections «Внешний вид» | «Поведение» | «Доска» |
+        // «Навигация» | «Исполнение» | «Автоматизация», deep-linkable via
+        // #appearance/#behavior/#board/#navigation/#execution/#automation.
         {
           path: "/system/settings",
           element: (
             <Page>
-              <ExecutionSettingsPage />
+              <SettingsHubPage />
             </Page>
           ),
         },
@@ -269,6 +318,16 @@ export function buildRoutes(): RouteObject[] {
           element: (
             <Page>
               <AutomationPage />
+            </Page>
+          ),
+        },
+        // Устройства (CV-7, ADR 0012 Consequences): the paired-device list
+        // + the QR-pairing flow («Подключить → QR → сверка → список»).
+        {
+          path: "/system/devices",
+          element: (
+            <Page>
+              <DevicesPage />
             </Page>
           ),
         },

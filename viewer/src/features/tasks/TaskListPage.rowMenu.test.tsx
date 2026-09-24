@@ -111,7 +111,7 @@ afterEach(() => {
 
 function probeRow(): HTMLTableRowElement {
   const row = container!
-    .querySelector(`a[href="/tasks/RM-1"]`)
+    .querySelector(`a[href^="/tasks/RM-1?"]`)
     ?.closest("tr");
   expect(row).toBeDefined();
   return row as HTMLTableRowElement;

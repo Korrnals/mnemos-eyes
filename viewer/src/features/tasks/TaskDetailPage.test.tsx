@@ -149,7 +149,10 @@ describe("TaskDetailPage (mock adapter)", () => {
       seedAll,
     );
     expect(html).toContain("Specification");
-    expect(html).toContain("<pre");
+    // UI-27: the spec renders through TextEngine — this mock spec is plain
+    // prose (em-dash dashes, no markdown syntax), so the plain path keeps
+    // the verbatim pre-wrap output inside the well box (no <pre> anymore).
+    expect(html).toContain("whitespace-pre-wrap");
     expect(html).toContain("Metadata");
     expect(html).toContain("Acceptance criteria");
     expect(html).toContain("mnemos:decision");
@@ -192,10 +195,27 @@ describe("TaskDetailPage (mock adapter)", () => {
   });
 
   it("not on the board (unknown id) → not-found with the archive escape", async () => {
+    // In a live DOM the detail GET fires after the board settles empty and
+    // 404s (BE-16 resolves every EXISTING row) — the page shows its skeleton
+    // while fetching, then lands here. The seed settles that 404 so SSR
+    // renders the end state.
     const html = await renderTask(
       new MockAdapter({ latency: false }),
       "/tasks/NOPE-404",
-      seedAll,
+      async (client, gw) => {
+        await seedAll(client, gw);
+        if (gw instanceof MockAdapter) {
+          await client.prefetchQuery({
+            queryKey: keys.tasks.detail("NOPE-404"),
+            queryFn: () => gw.taskById("NOPE-404"),
+          });
+          // The 404 settled, but useQuery retries errored queries on mount —
+          // pin it off so SSR renders the settled not-found, not the skeleton.
+          client.setQueryDefaults(keys.tasks.detail("NOPE-404"), {
+            retryOnMount: false,
+          });
+        }
+      },
     );
     expect(html).toContain("No such task");
     expect(html).toContain("NOPE-404");
@@ -237,5 +257,42 @@ describe("TaskDetailPage (mock adapter)", () => {
   it("renders the honest unsupported state on a mnemos gateway", async () => {
     const html = await renderTask(new HttpAdapter("/api"), "/tasks/TB-1");
     expect(html).toContain("The Tasks domain is unavailable in mnemos mode");
+  });
+
+  it("UI-18: tab links preserve ?return= (spec §2.2 rule 4)", async () => {
+    const html = await renderTask(
+      new MockAdapter({ latency: false }),
+      "/tasks/TB-1?return=%2Ftasks%3Fstatus%3Dopen",
+      seedAll,
+    );
+    expect(html).toContain(
+      'href="/tasks/TB-1?return=%2Ftasks%3Fstatus%3Dopen&amp;tab=history"',
+    );
+    expect(html).toContain(
+      'href="/tasks/TB-1?return=%2Ftasks%3Fstatus%3Dopen&amp;tab=memory"',
+    );
+  });
+
+  it("UI-18 pair 4: an archived id renders via the direct detail-GET fallback (BE-16)", async () => {
+    const gateway = new MockAdapter({ latency: false });
+    const html = await renderTask(gateway, "/tasks/RB-1", async (client, gw) => {
+      if (gw instanceof MockAdapter) {
+        await client.prefetchQuery({
+          queryKey: keys.tasks.board(),
+          queryFn: () => gw.board(),
+        });
+        // The board projection misses RB-1 (archived) — the fallback is the
+        // SINGLE-task GET (keys.tasks.detail), which the mock resolves for
+        // archived rows too (BE-16 mirror). The archive LIST endpoint is
+        // the archive page's business, not this path's.
+        await client.prefetchQuery({
+          queryKey: keys.tasks.detail("RB-1"),
+          queryFn: () => gw.taskById("RB-1"),
+        });
+      }
+    });
+    expect(html).toContain("RB-1");
+    expect(html).toContain("регистрац");
+    expect(html).not.toContain("No such task");
   });
 });

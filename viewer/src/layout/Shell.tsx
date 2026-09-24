@@ -1,10 +1,17 @@
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useEffect } from "react";
 import { Outlet, ScrollRestoration, useLocation } from "react-router";
 import { RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { MemoryCardSkeleton } from "@/components/skeletons/Skeletons";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { Button } from "@/components/ui/button";
+import {
+  saveSidebarCollapsed,
+  SIDEBAR_COLLAPSED_STORAGE_KEY,
+  toggleSidebarCollapsed,
+  useSidebarCollapsed,
+} from "@/lib/sidebarState";
+import { useSidebarOverlayOpen } from "@/lib/sidebarOverlayState";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
@@ -24,11 +31,33 @@ import { useT } from "@/i18n";
  * cannot see inner containers. `FocusMain` moves focus to <main> on route
  * change so keyboard/SR users land at the new content (WCAG 2.4.3).
  *
- * Collapse state lives here so it survives route changes.
+ * Collapse state lives here so it survives route changes and persists under
+ * "vesmaro.sidebarCollapsed" (UI-19 owner feedback: the collapsed rail must
+ * survive F5). UI-23 moved the storage + state into lib/sidebarState.ts —
+ * «one state, two controls» (settings-hub spec §4.3): the sidebar button and
+ * the hub's «Сайдбар» control consume the same store; Shell re-affirms the
+ * stored value on every mount exactly as before.
  */
+
+// Re-exported for the persistence tests (the key moved to lib/sidebarState).
+export { SIDEBAR_COLLAPSED_STORAGE_KEY };
+
 export function Shell() {
-  const [collapsed, setCollapsed] = useState(false);
-  const toggle = useCallback(() => setCollapsed((value) => !value), []);
+  const collapsed = useSidebarCollapsed();
+  const toggle = toggleSidebarCollapsed;
+  // ME-002: while the Sidebar's mobile overlay dialog covers the viewport,
+  // everything EXCEPT the dialog subtree leaves the accessibility tree —
+  // `inert` blocks pointer + focus + SR reach natively (baseline 102/15.5;
+  // older engines just ignore the attribute = the pre-ME-002 behaviour).
+  // The toggle that owns focus return lives INSIDE the dialog (sidebar
+  // header), so nothing here blocks the close path. The skip link and the
+  // content column inert here; the toast region and the update banner inert
+  // their own roots off the same store.
+  const sidebarOverlayOpen = useSidebarOverlayOpen();
+  const backgroundInert = sidebarOverlayOpen ? ("" as const) : undefined;
+  // Persist on every change (SSR-safe: effects never run on the server; the
+  // initial render also re-affirms the stored value — a no-op write).
+  useEffect(() => saveSidebarCollapsed(collapsed), [collapsed]);
   const location = useLocation();
   const t = useT();
   // Content-derived docs titles ride crumbs; brand is the fallback.
@@ -47,21 +76,23 @@ export function Shell() {
 
   return (
     <div className="flex min-h-dvh bg-background text-foreground">
-      {/* Bypass the repeated nav (WCAG 2.4.1): visible only on keyboard focus. */}
+      {/* Bypass the repeated nav (WCAG 2.4.1): visible only on keyboard focus.
+       * Inert while the mobile sidebar dialog is open (ME-002). */}
       <a
         href="#main"
+        inert={backgroundInert}
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-well focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-float"
       >
         {t("shell.skipToContent")}
       </a>
       <Sidebar collapsed={collapsed} onToggle={toggle} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col" inert={backgroundInert}>
         <TopBar title={title} />
         {/* Breadcrumb row: sticky under the top bar so the trail stays put
          * while the document scrolls (concept §2.2). */}
         {hasCrumbs ? (
           <div className="sticky top-14 z-20 border-b border-border-subtle bg-background/95 px-3 py-2 backdrop-blur-sm sm:px-6">
-            <Breadcrumbs pathname={location.pathname} />
+            <Breadcrumbs pathname={location.pathname} search={location.search} />
           </div>
         ) : null}
         <main id="main" tabIndex={-1} className="flex-1 p-6 focus:outline-none">

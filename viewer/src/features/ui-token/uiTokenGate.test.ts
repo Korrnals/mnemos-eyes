@@ -267,6 +267,164 @@ describe("UiTokenGate session events (fix/login-feedback toast source)", () => {
 });
 
 /**
+ * UI-22 device beat (ADR 0012 §5): a paired device has IDENTITY but no
+ * write scope — the server answers 403 to its mutations. The login window
+ * is the 401 affordance; opening it would promise «your action continues
+ * after sign-in» for an action the device can NEVER run. Instead the gate
+ * emits `deviceForbidden` (the provider toasts the honest refusal) and
+ * drops the run.
+ */
+describe("UiTokenGate device-bound browser (UI-22)", () => {
+  it("token-less mutation with a device identity: NO window, deviceForbidden emitted, run dropped", async () => {
+    const events: string[] = [];
+    const gate = new UiTokenGate({
+      hasToken: () => false,
+      hasDeviceIdentity: () => true,
+    });
+    gate.listen((event) => events.push(event.type));
+    const run = vi.fn(async () => undefined);
+    const onDeferred = vi.fn();
+    gate.runAuthorized(run, onDeferred);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The honest refusal — no queued run, no window, spinner owner reset.
+    expect(gate.getState()).toMatchObject({ open: false });
+    expect(events).toEqual(["deviceForbidden"]);
+    expect(run).not.toHaveBeenCalled();
+    expect(onDeferred).toHaveBeenCalledTimes(1);
+  });
+
+  it("the same mutation WITHOUT a device identity keeps the login window (required)", async () => {
+    const gate = new UiTokenGate({
+      hasToken: () => false,
+      hasDeviceIdentity: () => false,
+    });
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await vi.waitFor(() =>
+      expect(gate.getState()).toMatchObject({ open: true, reason: "required" }),
+    );
+    // The injection is the only switch: no device identity → the window.
+  });
+
+  it("a token-present browser never reaches the device branch (owner session runs)", async () => {
+    const events: string[] = [];
+    const gate = new UiTokenGate({
+      hasToken: () => true,
+      hasDeviceIdentity: () => true,
+    });
+    gate.listen((event) => events.push(event.type));
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+    expect(gate.getState().open).toBe(false);
+  });
+
+  it("the injection is optional — gates without it keep the historical window path", async () => {
+    const { gate } = gateWithToken(null);
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await vi.waitFor(() =>
+      expect(gate.getState()).toMatchObject({ open: true, reason: "required" }),
+    );
+  });
+});
+
+/**
+ * Scope v1 (ADR 0012 Amendment): `hasToken` becomes ui || device — a
+ * control device's mutations LEAVE the browser and the server's scope
+ * table rules; `tokenPresent` keeps meaning the OWNER session (hasUiToken
+ * injection) so the store-ops panels stay hidden on the phone; a
+ * `read`-scope device still gets the honest pre-flight refusal.
+ */
+describe("UiTokenGate device scope v1 (ADR 0012 Amendment)", () => {
+  it("control device, no owner session: the run flies to the server (no beat, no window)", async () => {
+    const events: string[] = [];
+    const gate = new UiTokenGate({
+      hasToken: () => true, // ui || device — the device identity counts
+      hasUiToken: () => false,
+      hasDeviceIdentity: () => true,
+      deviceScope: () => "control",
+    });
+    gate.listen((event) => events.push(event.type));
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+    expect(gate.getState().open).toBe(false);
+  });
+
+  it("tokenPresent keeps meaning the owner session (ui-only mirror)", () => {
+    const gate = new UiTokenGate({
+      hasToken: () => true, // device identity present
+      hasUiToken: () => false,
+      hasDeviceIdentity: () => true,
+      deviceScope: () => "control",
+    });
+    // the privilege separation: devicePresent ≠ tokenPresent
+    expect(gate.getState().tokenPresent).toBe(false);
+  });
+
+  it("owner session: tokenPresent flips true even beside a device identity", () => {
+    const gate = new UiTokenGate({
+      hasToken: () => true,
+      hasUiToken: () => true,
+      hasDeviceIdentity: () => true,
+      deviceScope: () => "control",
+    });
+    expect(gate.getState().tokenPresent).toBe(true);
+  });
+
+  it("read-scope device, no owner session: honest pre-flight refusal, run dropped", async () => {
+    const events: string[] = [];
+    const gate = new UiTokenGate({
+      hasToken: () => true,
+      hasUiToken: () => false,
+      hasDeviceIdentity: () => true,
+      deviceScope: () => "read",
+    });
+    gate.listen((event) => events.push(event.type));
+    const run = vi.fn(async () => undefined);
+    const onDeferred = vi.fn();
+    gate.runAuthorized(run, onDeferred);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).not.toHaveBeenCalled();
+    expect(onDeferred).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["deviceForbidden"]);
+    expect(gate.getState().open).toBe(false);
+  });
+
+  it("read-scope device WITH an owner session: the run rides the owner leg", async () => {
+    const events: string[] = [];
+    const gate = new UiTokenGate({
+      hasToken: () => true,
+      hasUiToken: () => true,
+      hasDeviceIdentity: () => true,
+      deviceScope: () => "read",
+    });
+    gate.listen((event) => events.push(event.type));
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+  });
+
+  it("without deviceScope injected the pre-flight beat stays off (legacy wiring)", async () => {
+    const gate = new UiTokenGate({
+      hasToken: () => true,
+      hasDeviceIdentity: () => true,
+    });
+    const run = vi.fn(async () => undefined);
+    gate.runAuthorized(run);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
  * ADR 0014 owner session: server verify at the door, the boot/401 probe of
  * the live `vesmaro_ui` cookie, and the honest legacy verdict. The gate
  * keeps the paste-and-store path ONLY when no verify is injected (mock
@@ -390,7 +548,7 @@ describe("UiTokenGate server verify (ADR 0014)", () => {
   it("401 mid-flight + LIVE cookie: re-probe replays on the cookie leg, window never opens", async () => {
     // The adapter policy after a cookie probe: no stored token, live cookie.
     sessionStorage.removeItem(UI_TOKEN_STORAGE_KEY);
-    let cookieLive = true;
+    const cookieLive = true;
     const { gate } = verifiedGate({
       // Mirror the BoardAdapter policy: hasToken = stored || cookieLive.
       hasToken: () => hasUiToken() || cookieLive,

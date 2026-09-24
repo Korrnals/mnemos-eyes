@@ -4,6 +4,7 @@ import type { RequestConfig } from "./http";
 import { EventStream } from "./events";
 import type { BoardEvent } from "./events";
 import { ApiError } from "@/lib/errors";
+import { getDeviceToken } from "./deviceToken";
 import { getUiToken } from "./uiToken";
 import type { UiTokenVerifyResult } from "./uiToken";
 import type {
@@ -14,6 +15,8 @@ import type {
   AssignmentCreatedResult,
   AssignmentListParams,
   AssignmentsPage,
+  AutomationSettings,
+  AutomationSettingsInput,
   AutomationStatus,
   BoardHealth,
   BoardHealthDetail,
@@ -31,19 +34,35 @@ import type {
   EnrollmentCreatedResult,
   EnrollmentRevokeResult,
   EnrollmentsPage,
+  ProvisionCreateInput,
+  ProvisionCreatedResult,
+  ProvisionJobStatus,
+  HarnessCreateInput,
+  HarnessesPage,
+  HarnessStateResult,
   HookCreateInput,
   HookPatchInput,
   HookRule,
   HooksPage,
+  InboxEditInput,
   InboxRefreshResult,
   LaunchesPage,
   LaunchesParams,
+  DeviceGrantsResult,
+  DeviceRevokedResult,
+  DevicesPage,
   MemoryPulse,
   MemoryPulseItem,
   MemoryPulseServerNote,
   MergedMemoriesPage,
   MergedMemoryListItem,
   MergedTags,
+  PairingConfirmResult,
+  PairingCreatedResult,
+  PairingExchangeAwaiting,
+  PairingExchangeInput,
+  PairingIssuedResult,
+  PairingStatus,
   PulseParams,
   RuleDeletedAck,
   ScheduleCreateInput,
@@ -59,6 +78,7 @@ import type {
   TaskCreateInput,
   TaskHistory,
   TaskInbox,
+  TaskInboxEntry,
   TaskMemories,
   TaskMutationAck,
   TaskPatchInput,
@@ -82,10 +102,11 @@ import type {
  * merge-API, not the mnemos wire contract. Lives alongside HttpAdapter /
  * MockAdapter — the mnemos path stays untouched until the Ф1 auth rewrite.
  *
- * Base URL is same-origin "/api" (`VITE_BOARD_API_URL` overrides); auth is
- * deliberately absent: reads are open through Ф0–Ф2 (ADR 0011 §7), so no
- * bearer token is attached, no `Authorization` header is ever sent, and the
- * 401/unauthorized flag is never raised from this adapter.
+ * Base URL is same-origin "/api" (`VITE_BOARD_API_URL` overrides). Auth is
+ * capability-scoped (see `identityTokenSource`): reads stay open through
+ * Ф0–Ф2 (ADR 0011 §7) and ship bare unless a paired DEVICE attaches its
+ * `mnd_…` identity (ADR 0012 §5); the ui token rides only `auth: true`
+ * calls; the 401/unauthorized flag is never raised from this adapter.
  *
  * Wire contract (board-openapi-snapshot.json):
  * - search         GET /api/mnemos/search        ?q&limit&project&scope (proxied)
@@ -101,7 +122,7 @@ import type {
  * - history        GET /api/tasks/{id}/history   (audit + memory timeline, Ф2)
  * - taskMemories   GET /api/tasks/{id}/memories  (resolved links, Ф2)
  * - archive        GET /api/archive              ?q&status&col&agent&project&limit&offset (Ф2)
- * - taskById       GET /api/board                (pick by id — no single GET exists)
+ * - taskById       GET /api/tasks/{id}           (BE-16: one TaskOut for active AND archived)
  * - pulse          GET /api/memories/pulse       ?scope&project&limit (Ф1)
  * - boardHealth    GET /api/health               (per-store detail view, Ф1)
  * - events         GET /api/events               (SSE, see gateway/events.ts)
@@ -133,6 +154,8 @@ import type {
  * - putExecutionSettings PUT  /api/settings/execution             → 200 | 422
  * SCHED-1 automation (ADR 0013 — hooks consume in a later wave):
  * - automationStatus     GET  /api/automation/status
+ * - getAutomationSettings GET /api/automation/settings            (OPEN read)
+ * - putAutomationSettings PUT  /api/automation/settings           → 200 | 422
  * - listSchedules        GET  /api/automation/schedules
  * - createSchedule       POST /api/automation/schedules           → 201 | 422
  * - patchSchedule        PATCH /api/automation/schedules/{id}     → 200 | 404/422
@@ -140,6 +163,18 @@ import type {
  * - runScheduleNow       POST /api/automation/schedules/{id}/run  → 200 | 404/422/409
  * - listHooks / createHook / patchHook / deleteHook               (mirrors schedules)
  * - listLaunches         GET  /api/automation/launches            ?rule_id&kind&decision&limit&cursor
+ *
+ * CV-7 QR pairing + devices (ADR 0012; ui-token class EXCEPT the exchange leg):
+ * - listDevices          GET    /api/devices                      (no token material)
+ * - revokeDevice         DELETE /api/devices/{id}                 → 200 | 404
+ * - setDeviceGrants      PUT    /api/devices/{id}/grants          → 200 | 404/409/422 (§A.7)
+ * - createPairing        POST   /api/pairing                      → 201 code+verify | 429/503
+ * - getPairing           GET    /api/pairing/{id}                 (trusted side; verify)
+ * - confirmPairing       POST   /api/pairing/{id}/confirm {allow} → 200 idempotent | 409/410
+ * - cancelPairing        DELETE /api/pairing/{id}                 → 200 | 409/410
+ * - exchangePairing      POST   /api/pairing/exchange             NO auth (code = credential);
+ *                                                                  202 awaiting | 200 issued (one-shot) |
+ *                                                                  403 foreign IP | 404/410/429/503
  *
  * v0 honestly declares metrics / traces / sessions / agentRecall
  * unsupported (501) — they are mnemos-side views the merge API does not
@@ -259,9 +294,17 @@ export interface BoardGateway extends MemoryGateway {
   /**
    * Adopt an inbox mirror row as a native task
    * (`POST /api/tasks/inbox/{memory_id}/adopt`). 409 on double adoption —
-   * the error body carries the existing `task_id`.
+   * the error body carries the existing `task_id`. Any pre-adoption edits
+   * (UI-25 overlay) win over the mirror fields and sync back to mnemos.
    */
   adoptInboxItem(memoryId: string): Promise<BoardTask>;
+  /**
+   * Correct a queue record BEFORE adoption
+   * (`PATCH /api/tasks/inbox/{memory_id}`, UI-25, ui-token). 409 once the
+   * row is adopted; 422 on an empty/garbage body. Answers the updated row
+   * with effective fields + the `edits` overlay.
+   */
+  patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry>;
   /** Force one synchronous inbox scan (`POST /api/tasks/inbox/refresh`). */
   refreshInbox(): Promise<InboxRefreshResult>;
 
@@ -322,9 +365,7 @@ export interface BoardGateway extends MemoryGateway {
    * auto-revoke — the owner chooses); 422 unknown harness_hint; 429 rate
    * 3/10 min per client; 503 fail-closed while the server has no ui token.
    */
-  createEnrollment(
-    payload: EnrollmentCreateInput,
-  ): Promise<EnrollmentCreatedResult>;
+  createEnrollment(payload: EnrollmentCreateInput): Promise<EnrollmentCreatedResult>;
   /**
    * Enrollment tokens for the owner panel (`GET /api/executors/enrollment`,
    * ui-token) — live tokens plus terminal history, no hash/token material.
@@ -340,6 +381,39 @@ export interface BoardGateway extends MemoryGateway {
   /** Default/fallback executor pair (`GET /api/settings/execution`, open read). */
   getExecutionSettings(signal?: AbortSignal): Promise<ExecutionSettings>;
   /**
+   * Harness dictionary (`GET /api/harnesses`, open read; wave 3C). The
+   * owner-managed nomination registry — meta.seed_min_count is the
+   * guaranteed seed size, the set itself is data, never a UI constant.
+   */
+  listHarnesses(signal?: AbortSignal): Promise<HarnessesPage>;
+  /**
+   * Add a harness (`POST /api/harnesses`, ui-token; wave 3C). 201 row;
+   * 422 bad name (server-side sanitization is authoritative) or
+   * dictionary cap (≤64); 409 duplicate.
+   */
+  createHarness(payload: HarnessCreateInput): Promise<HarnessStateResult>;
+  /**
+   * Remove a harness (`DELETE /api/harnesses/{name}`, ui-token; wave 3C).
+   * 404 unknown; 409 while the name is live in a registered executor, a
+   * non-terminal assignment or an automation rule.
+   */
+  deleteHarness(name: string): Promise<void>;
+  /**
+   * Queue an SSH provision job (`POST /api/executors/provision`, ui-token;
+   * wave 4 AGW-11). 202 {job_id, enrollment_id} — the mne_ token NEVER
+   * rides the answer (transit-only server-side). The ssh secret travels
+   * in the request body ONCE and is never logged by this adapter.
+   */
+  createProvisionJob(
+    payload: ProvisionCreateInput,
+  ): Promise<ProvisionCreatedResult>;
+  /**
+   * Job progress (`GET /api/executors/provision/{job_id}`, ui-token):
+   * state, steps, pinned host-key fingerprint, the linked enrollment.
+   * 404 unknown id; 503 while the provisioner is disabled.
+   */
+  getProvisionJob(jobId: string, signal?: AbortSignal): Promise<ProvisionJobStatus>;
+  /**
    * Set the default/fallback pair (`PUT /api/settings/execution`,
    * ui-token). Amd 2 §5 gates answer 422: a default must exist, be
    * approved, enabled, currently online and travel local-poll.
@@ -350,6 +424,8 @@ export interface BoardGateway extends MemoryGateway {
 
   /** Engine/caps/condition-meta projection (`GET /api/automation/status`). */
   automationStatus(signal?: AbortSignal): Promise<AutomationStatus>;
+  /** Kill-switch + daily cap (`GET /api/automation/settings`, OPEN read). */
+  getAutomationSettings(signal?: AbortSignal): Promise<AutomationSettings>;
   /** Schedule rules incl. soft-deleted (`GET /api/automation/schedules`). */
   listSchedules(signal?: AbortSignal): Promise<SchedulesPage>;
   /** Create a schedule (`POST`, ui-token; created disabled — enable via PATCH). */
@@ -368,8 +444,62 @@ export interface BoardGateway extends MemoryGateway {
   patchHook(ruleId: number, patch: HookPatchInput): Promise<HookRule>;
   /** Soft-disable retention DELETE (same semantics as schedules). */
   deleteHook(ruleId: number): Promise<RuleDeletedAck>;
+  /**
+   * Set the kill-switch / daily cap (`PUT /api/automation/settings`,
+   * ui-token; audited automation.settings.changed old→new). A 422 mirrors
+   * `store.AutomationValidationError` — «cap_global_per_day must be an int
+   * in 1..1000». In S1 flipping `enabled` is INERT data (no engine yet).
+   */
+  putAutomationSettings(payload: AutomationSettingsInput): Promise<AutomationSettings>;
   /** Launch journal page (`GET /api/automation/launches`, cursor contract). */
   listLaunches(params?: LaunchesParams, signal?: AbortSignal): Promise<LaunchesPage>;
+
+  // --- CV-7 QR pairing + devices (ADR 0012; wire in the class docblock) ----
+
+  /** Device sessions (`GET /api/devices`, ui-token) — no token material. */
+  listDevices(signal?: AbortSignal): Promise<DevicesPage>;
+  /**
+   * Revoke a device session (`DELETE /api/devices/{id}`, ui-token).
+   * TERMINAL — only a fresh pairing restores access; SSE pairing.revoked
+   * carries the device_id, the next token-bearing request gets 401.
+   */
+  revokeDevice(deviceId: string): Promise<DeviceRevokedResult>;
+  /**
+   * Start a pairing (`POST /api/pairing`, ui-token). 201 carries the
+   * single-use code + the 4 verify digits EXACTLY once; 429 rate 3/10 min
+   * per client; 503 fail-closed while the server has no ui token.
+   */
+  createPairing(): Promise<PairingCreatedResult>;
+  /**
+   * Trusted-side status (`GET /api/pairing/{id}`, ui-token) — the owner
+   * panel's only source of the verify digits + scan metadata (§3.3: the
+   * digits never ride SSE).
+   */
+  getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus>;
+  /**
+   * Owner decision (`POST /api/pairing/{id}/confirm {allow}`, ui-token).
+   * allow=true → confirmed (SSE pairing.confirmed); false → revoked.
+   * Repeat confirms answer 200 idempotently; confirm before scan → 409;
+   * TTL-passed → 410; rate 3/10 min per client.
+   */
+  confirmPairing(pairingId: string, allow: boolean): Promise<PairingConfirmResult>;
+  /**
+   * Owner cancel before issued (`DELETE /api/pairing/{id}`, ui-token).
+   * Idempotent on revoked (200); issued → 409 (revoke the DEVICE instead);
+   * TTL-passed → 410.
+   */
+  cancelPairing(pairingId: string): Promise<PairingConfirmResult>;
+  /**
+   * The DEVICE leg (`POST /api/pairing/exchange`) — deliberately NO auth:
+   * the single-use code IS the credential (ADR 0012 §2.3). Poll semantics:
+   * 202 awaiting_confirmation (+verify) while unconfirmed/scanned, 200
+   * one-shot issuance ({device_id, device_token: mnd_…}), 404 unknown code,
+   * 410 expired/used/revoked, 403 foreign client IP, 429 rate, 503
+   * fail-closed without a configured ui token.
+   */
+  exchangePairing(
+    payload: PairingExchangeInput,
+  ): Promise<PairingExchangeAwaiting | PairingIssuedResult>;
 }
 
 export interface BoardAdapterOptions {
@@ -385,6 +515,12 @@ export interface BoardAdapterOptions {
    * Bearer <token>` only when it answers non-empty.
    */
   getUiTokenFn?: () => string;
+  /**
+   * Test seam for the device-identity source. Defaults to the
+   * localStorage-backed `getDeviceToken` (gateway/deviceToken.ts) — the
+   * paired device's `mnd_…` fallback identity (ADR 0012 §5).
+   */
+  getDeviceTokenFn?: () => string;
 }
 
 export class BoardAdapter implements BoardGateway {
@@ -392,6 +528,7 @@ export class BoardAdapter implements BoardGateway {
   private readonly fetchImpl?: typeof fetch;
   private readonly timeoutMs: number;
   private readonly getUiTokenFn: () => string;
+  private readonly getDeviceTokenFn: () => string;
   /**
    * ADR 0014 Ф2: the adapter's last knowledge of a live `vesmaro_ui`
    * session cookie. Set only by a 204 boot/re-401 probe (a strict status
@@ -408,6 +545,7 @@ export class BoardAdapter implements BoardGateway {
     this.fetchImpl = opts.fetchImpl;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.getUiTokenFn = opts.getUiTokenFn ?? getUiToken;
+    this.getDeviceTokenFn = opts.getDeviceTokenFn ?? getDeviceToken;
   }
 
   async search(params: SearchParams, signal?: AbortSignal): Promise<SearchResult[]> {
@@ -615,14 +753,12 @@ export class BoardAdapter implements BoardGateway {
   }
 
   async taskById(taskId: string, signal?: AbortSignal): Promise<BoardTask> {
-    const board = await this.board(undefined, signal);
-    const task = board.tasks.find((candidate) => candidate.id === taskId);
-    if (!task) {
-      throw new ApiError(404, `task '${taskId}' not found on the board`, {
-        url: `${this.baseUrl}/board`,
-      });
-    }
-    return task;
+    // BE-16 (#101): GET /api/tasks/{task_id} resolves BOTH active and
+    // archived tasks in one TaskOut shape — the board-projection pick this
+    // method used before (and its 200-row archive probe) are gone.
+    return this.request<BoardTask>(`/tasks/${encodeURIComponent(taskId)}`, {
+      signal,
+    });
   }
 
   // --- Ф3 mutations (ui-token gated; wire contract in the class docblock) ----
@@ -713,6 +849,13 @@ export class BoardAdapter implements BoardGateway {
     return this.request<BoardTask>(
       `/tasks/inbox/${encodeURIComponent(memoryId)}/adopt`,
       { method: "POST", auth: true },
+    );
+  }
+
+  async patchInboxItem(memoryId: string, patch: InboxEditInput): Promise<TaskInboxEntry> {
+    return this.request<TaskInboxEntry>(
+      `/tasks/inbox/${encodeURIComponent(memoryId)}`,
+      { method: "PATCH", auth: true, body: patch },
     );
   }
 
@@ -829,12 +972,81 @@ export class BoardAdapter implements BoardGateway {
     });
   }
 
-  async revokeEnrollment(
-    enrollmentId: string,
-  ): Promise<EnrollmentRevokeResult> {
+  async revokeEnrollment(enrollmentId: string): Promise<EnrollmentRevokeResult> {
     return this.request<EnrollmentCreatedResult>(
       `/executors/enrollment/${encodeURIComponent(enrollmentId)}`,
       { method: "DELETE", auth: true },
+    );
+  }
+
+  async listHarnesses(signal?: AbortSignal): Promise<HarnessesPage> {
+    return this.request<HarnessesPage>("/harnesses", { signal });
+  }
+
+  async createHarness(payload: HarnessCreateInput): Promise<HarnessStateResult> {
+    return this.request<HarnessStateResult>("/harnesses", {
+      method: "POST",
+      // Omitted note stays at the server default (empty string).
+      body: {
+        name: payload.name,
+        ...(payload.note ? { note: payload.note } : {}),
+      },
+      auth: true,
+    });
+  }
+
+  async deleteHarness(name: string): Promise<void> {
+    await this.request<{ ok: boolean }>(`/harnesses/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+      auth: true,
+    });
+  }
+
+  async createProvisionJob(
+    payload: ProvisionCreateInput,
+  ): Promise<ProvisionCreatedResult> {
+    return this.request<ProvisionCreatedResult>("/executors/provision", {
+      method: "POST",
+      // Wire shape mirrors board ProvisionBody: optional keys ride only
+      // when set (server defaults: port 22, harness 'zcode'); the auth
+      // secret/passphrase ride as empty strings when unused. The secret
+      // exists in this ONE request and nowhere else client-side.
+      body: {
+        host: payload.host,
+        ...(payload.port !== undefined ? { port: payload.port } : {}),
+        ...(payload.name ? { name: payload.name } : {}),
+        auth: {
+          kind: payload.auth.kind,
+          secret: payload.auth.secret ?? "",
+          ...(payload.auth.passphrase
+            ? { passphrase: payload.auth.passphrase }
+            : {}),
+        },
+        ...(payload.harness_hint ? { harness_hint: payload.harness_hint } : {}),
+        ...(payload.board_url_for_host
+          ? { board_url_for_host: payload.board_url_for_host }
+          : {}),
+        ...(payload.expected_host_key_fingerprint
+          ? {
+              expected_host_key_fingerprint:
+                payload.expected_host_key_fingerprint,
+            }
+          : {}),
+        ...(payload.reuse_enrollment_id
+          ? { reuse_enrollment_id: payload.reuse_enrollment_id }
+          : {}),
+      },
+      auth: true,
+    });
+  }
+
+  async getProvisionJob(
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<ProvisionJobStatus> {
+    return this.request<ProvisionJobStatus>(
+      `/executors/provision/${encodeURIComponent(jobId)}`,
+      { signal, auth: true },
     );
   }
 
@@ -861,6 +1073,10 @@ export class BoardAdapter implements BoardGateway {
 
   async automationStatus(signal?: AbortSignal): Promise<AutomationStatus> {
     return this.request<AutomationStatus>("/automation/status", { signal });
+  }
+
+  async getAutomationSettings(signal?: AbortSignal): Promise<AutomationSettings> {
+    return this.request<AutomationSettings>("/automation/settings", { signal });
   }
 
   async listSchedules(signal?: AbortSignal): Promise<SchedulesPage> {
@@ -927,6 +1143,21 @@ export class BoardAdapter implements BoardGateway {
     });
   }
 
+  async putAutomationSettings(
+    payload: AutomationSettingsInput,
+  ): Promise<AutomationSettings> {
+    return this.request<AutomationSettings>("/automation/settings", {
+      method: "PUT",
+      // The UI always sends BOTH fields (server PUT is partial — `None`
+      // fields are ignored, audit records only effective changes).
+      body: {
+        enabled: payload.enabled,
+        cap_global_per_day: payload.cap_global_per_day,
+      },
+      auth: true,
+    });
+  }
+
   async listLaunches(
     params: LaunchesParams = {},
     signal?: AbortSignal,
@@ -941,6 +1172,85 @@ export class BoardAdapter implements BoardGateway {
       },
       signal,
     });
+  }
+
+  // --- CV-7 QR pairing + devices (ADR 0012) ----------------------------------
+
+  async listDevices(signal?: AbortSignal): Promise<DevicesPage> {
+    return this.request<DevicesPage>("/devices", { signal, auth: true });
+  }
+
+  async revokeDevice(deviceId: string): Promise<DeviceRevokedResult> {
+    return this.request<DeviceRevokedResult>(
+      `/devices/${encodeURIComponent(deviceId)}`,
+      { method: "DELETE", auth: true },
+    );
+  }
+
+  /**
+   * Set the per-device granule set (`PUT /api/devices/{id}/grants`,
+   * ui-token; Amendment §A.7). FULL replacement — the sent array IS the
+   * set (empty = every granule revoked, global reads stay open). Applies
+   * to the live session on the device's very next request; 404 unknown
+   * device, 409 not-active, 422 unknown granule names.
+   */
+  async setDeviceGrants(
+    deviceId: string,
+    grants: readonly string[],
+  ): Promise<DeviceGrantsResult> {
+    return this.request<DeviceGrantsResult>(
+      `/devices/${encodeURIComponent(deviceId)}/grants`,
+      { method: "PUT", body: { grants: [...grants] }, auth: true },
+    );
+  }
+
+  async createPairing(): Promise<PairingCreatedResult> {
+    // Wire shape: the optional owner label (device_name) stays unset — the
+    // device's self-asserted name at exchange is what the owner confirms.
+    return this.request<PairingCreatedResult>("/pairing", {
+      method: "POST",
+      body: { device_name: "" },
+      auth: true,
+    });
+  }
+
+  async getPairing(pairingId: string, signal?: AbortSignal): Promise<PairingStatus> {
+    return this.request<PairingStatus>(`/pairing/${encodeURIComponent(pairingId)}`, {
+      signal,
+      auth: true,
+    });
+  }
+
+  async confirmPairing(
+    pairingId: string,
+    allow: boolean,
+  ): Promise<PairingConfirmResult> {
+    return this.request<PairingConfirmResult>(
+      `/pairing/${encodeURIComponent(pairingId)}/confirm`,
+      { method: "POST", body: { allow }, auth: true },
+    );
+  }
+
+  async cancelPairing(pairingId: string): Promise<PairingConfirmResult> {
+    return this.request<PairingConfirmResult>(
+      `/pairing/${encodeURIComponent(pairingId)}`,
+      { method: "DELETE", auth: true },
+    );
+  }
+
+  async exchangePairing(
+    payload: PairingExchangeInput,
+  ): Promise<PairingExchangeAwaiting | PairingIssuedResult> {
+    // NO `auth: true` on purpose: the exchange leg answers an unauthenticated
+    // device; a Bearer header here would only leak the owner token to a
+    // route that never asked for it (ADR 0012 §2.3, contract audit point).
+    return this.request<PairingExchangeAwaiting | PairingIssuedResult>(
+      "/pairing/exchange",
+      {
+        method: "POST",
+        body: { code: payload.code, device_name: payload.device_name ?? "" },
+      },
+    );
   }
 
   // --- v0-unsupported mnemos-side views (fail loud, never pretend) ----------
@@ -976,24 +1286,53 @@ export class BoardAdapter implements BoardGateway {
   }
 
   /**
-   * Reads stay unauthenticated (ADR 0011 §7: reads open through Ф0–Ф2).
-   * Ф3 mutations opt into `auth: true` — the stored ui token, when present,
-   * becomes `Authorization: Bearer <token>`; without a token the request
-   * ships bare and the server answers 401, which the UI layer turns into
-   * the token panel (never a hidden affordance). requestJson still maps
-   * every non-2xx to `ApiError` and composes timeouts with external aborts.
+   * Resolve the Authorization source for one request (ADR 0012 §5 device
+   * identity layered over the ADR 0011/0014 ui-token rules):
+   *
+   * - `/pairing/exchange` — NEVER authenticated: the single-use code IS the
+   *   credential (§2.3); neither the ui nor the device token may leak there.
+   * - `/auth/*` — the door speaks for itself (ui token rides the BODY of
+   *   verify, the cookie carries the session): a device `mnd_…` must not
+   *   claim identity at the login endpoints. `auth: true` here keeps the
+   *   plain ui-token source for any future authenticated auth-route call.
+   * - `auth: true` (Ф3 mutations, devices, owner pairing legs) — the ui
+   *   token when present, else the device token; without either the request
+   *   ships bare and the server answers 401 → the token panel.
+   * - Open reads — bare while an owner session speaks for this browser (the
+   *   pinned "reads never carry Authorization"), else the paired device's
+   *   `mnd_…` identity. v0 is read-only for devices (ADR 0012 §5): the
+   *   server answers 403 to device mutations that bypass `auth: true` — the
+   *   honest verdict, not an error to mask.
+   *
+   * requestJson maps every non-2xx to `ApiError` and composes timeouts with
+   * external aborts; an empty-token source simply sends no header.
    */
+  private identityTokenSource(
+    path: string,
+    auth: boolean | undefined,
+  ): (() => string) | undefined {
+    if (path === "/pairing/exchange") return undefined;
+    if (path.startsWith("/auth/")) {
+      return auth ? this.getUiTokenFn : undefined;
+    }
+    if (auth) {
+      return () => this.getUiTokenFn() || this.getDeviceTokenFn();
+    }
+    return () => (this.getUiTokenFn().length > 0 ? "" : this.getDeviceTokenFn());
+  }
+
   private request<T>(
     path: string,
     config: RequestConfig & { auth?: boolean },
   ): Promise<T> {
     const { auth, ...rest } = config;
+    const getToken = this.identityTokenSource(path, auth);
     return requestJson<T>(
       {
         baseUrl: this.baseUrl,
         fetchImpl: this.fetchImpl,
         defaultTimeoutMs: this.timeoutMs,
-        ...(auth ? { getToken: this.getUiTokenFn } : {}),
+        ...(getToken ? { getToken } : {}),
       },
       path,
       rest,
@@ -1124,6 +1463,11 @@ function str(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
+/** Nullable string-tunnel: strings pass, anything absent/foreign is null. */
+function strOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
 function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -1154,6 +1498,9 @@ export function normalizePulse(payload: unknown): MemoryPulse {
         status: str(item.status),
         created_at: str(item.created_at),
         server: str(item.server, "?"),
+        // Server-cut preview fragment (≤400 chars; null when absent) —
+        // tunneled verbatim, the UI renders it through TextEngine.
+        content: strOrNull(item.content),
       };
     }),
     per_server: perServer.map((row): MemoryPulseServerNote => {
@@ -1215,7 +1562,8 @@ export function normalizeTagDrill(payload: unknown, tag: string): TagDrill {
 }
 
 /** `GET /api/health` anonymous dict → `BoardHealthDetail` (per-store rows). */
-export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {  const source = (payload ?? {}) as Record<string, unknown>;
+export function normalizeBoardHealth(payload: unknown): BoardHealthDetail {
+  const source = (payload ?? {}) as Record<string, unknown>;
   const servers = Array.isArray(source.servers) ? source.servers : [];
   return {
     ok: source.ok === true,

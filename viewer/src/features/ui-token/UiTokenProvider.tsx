@@ -3,6 +3,7 @@ import {
   isTaskMutationSource,
   isUiTokenSessionSource,
 } from "@/gateway/capabilities";
+import { getDeviceScope, hasDeviceToken } from "@/gateway/deviceToken";
 import { useGateway } from "@/gateway/GatewayContext";
 import { useToast } from "@/components/Toast/toastContext";
 import { useT } from "@/i18n";
@@ -46,7 +47,32 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
   const gate = useMemo(
     () =>
       new UiTokenGate({
-        hasToken: () => (isTaskMutationSource(gateway) ? gateway.hasUiToken() : false),
+        // Scope v1 (ADR 0012 Amendment): a mutation may LEAVE the browser
+        // on the owner session OR the paired device's identity — the
+        // server's scope table rules from there (open routes run for a
+        // control device; closed ones answer 403).
+        hasToken: () =>
+          isTaskMutationSource(gateway)
+            ? gateway.hasUiToken() || hasDeviceToken()
+            : false,
+        // ...but `tokenPresent` keeps meaning the OWNER session: the
+        // store-ops/enrollment/devices panels stay hidden on a phone that
+        // only holds an mnd_ identity (privilege separation, scope v1).
+        hasUiToken: isTaskMutationSource(gateway)
+          ? () => gateway.hasUiToken()
+          : undefined,
+        // UI-22: only a mutation-capable gateway has the device beat — the
+        // device identity (ADR 0012 §5) lives in localStorage and the fail-soft
+        // read answers "no identity" outside a browser. The mock has no auth
+        // wall (hasToken → true), so the branch stays unreachable there.
+        // The scope drives the read-scope pre-flight beat (every mutation
+        // is a 403 verdict → honest toast without the round-trip).
+        ...(isTaskMutationSource(gateway)
+          ? {
+              hasDeviceIdentity: () => hasDeviceToken(),
+              deviceScope: () => getDeviceScope(),
+            }
+          : {}),
         ...(isUiTokenSessionSource(gateway)
           ? {
               verifyToken: (value: string) => gateway.verifyUiToken(value),
@@ -87,6 +113,18 @@ export function UiTokenProvider({ children }: { children: React.ReactNode }) {
           ...(event.tokenClass === "legacy"
             ? { detail: t("login.toastLegacy") }
             : {}),
+        });
+        return;
+      }
+      if (event.type === "deviceForbidden") {
+        // UI-22 beat, now read-scope-only (ADR 0012 Amendment): a `read`
+        // device's mutations are all 403 verdicts — the honest toast fires
+        // pre-flight; a `control` device mutates and only the server's
+        // closed-route 403s refuse it (honest per-action toast).
+        toast.push({
+          kind: "error",
+          title: t("login.deviceForbidden"),
+          detail: t("login.deviceForbiddenDetail"),
         });
         return;
       }

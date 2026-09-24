@@ -1,5 +1,4 @@
-import { Link, useParams } from "react-router";
-import { ArrowLeft } from "lucide-react";
+import { useParams } from "react-router";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +12,11 @@ import { useT } from "@/i18n";
  * mnemos 4.1 `SessionRead` shape carries counters + metadata only: turn
  * transcripts and linked memories are not exposed, and the page says so
  * instead of leaving empty sections.
+ *
+ * UI-18 (spec §3.1): the old in-page «← Все сессии» BackLink is gone — the
+ * sticky crumb row's back control owns the return now (a validated
+ * `?return=` source, else the sessions list). One pattern instead of
+ * three behaviors.
  */
 export function SessionDetailPage() {
   const t = useT();
@@ -45,7 +49,6 @@ export function SessionDetailPage() {
     const notFound = isApiError(session.error) && session.error.status === 404;
     return (
       <div className="mx-auto max-w-3xl space-y-4">
-        <BackLink>{t("sessions.all")}</BackLink>
         {notFound ? (
           <EmptyState
             variant="not-found"
@@ -73,7 +76,6 @@ export function SessionDetailPage() {
 
   return (
     <article className="mx-auto max-w-3xl space-y-6">
-      <BackLink>{t("sessions.all")}</BackLink>
       <header className="space-y-1">
         <h1
           className="text-xl font-semibold text-iris-bright"
@@ -122,16 +124,5 @@ export function SessionDetailPage() {
         message={t("sessions.transcriptsHiddenMessage")}
       />
     </article>
-  );
-}
-
-function BackLink({ children }: { children: React.ReactNode }) {
-  return (
-    <Link
-      to="/system/sessions"
-      className="inline-flex min-h-6 items-center gap-1 text-sm text-foreground-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
-    >
-      <ArrowLeft className="size-4" aria-hidden="true" /> {children}
-    </Link>
   );
 }

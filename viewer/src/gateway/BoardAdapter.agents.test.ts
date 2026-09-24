@@ -280,7 +280,10 @@ describe("BoardAdapter agents wire — executors + settings", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     await expect(
-      adapter.putExecutionSettings({ default_executor: "exec-x", fallback_executor: "" }),
+      adapter.putExecutionSettings({
+        default_executor: "exec-x",
+        fallback_executor: "",
+      }),
     ).rejects.toMatchObject({
       status: 422,
       message: "executor exec-x is disabled — a default must be enabled",
@@ -432,5 +435,133 @@ describe("BoardAdapter agents wire — automation surface (SCHED-1)", () => {
     await remove.adapter.deleteHook(1);
     expect(remove.calls[0].method).toBe("DELETE");
     expect(remove.calls[0].url).toBe("/api/automation/hooks/1");
+  });
+
+  // UI-21 settings hub (spec 2026-09-23 §2): the kill-switch/cap pair.
+  it("getAutomationSettings: open GET /api/automation/settings", async () => {
+    const get = adapterWith(200, {
+      ok: true,
+      enabled: false,
+      cap_global_per_day: 10,
+    });
+    const settings = await get.adapter.getAutomationSettings();
+    expect(get.calls[0].method).toBe("GET");
+    expect(get.calls[0].url).toBe("/api/automation/settings");
+    expect(get.calls[0].authorization).toBeUndefined();
+    expect(settings.enabled).toBe(false);
+    expect(settings.cap_global_per_day).toBe(10);
+  });
+
+  it("putAutomationSettings: PUT with the ui bearer and BOTH fields", async () => {
+    const put = adapterWith(200, {
+      ok: true,
+      enabled: true,
+      cap_global_per_day: 25,
+    });
+    const saved = await put.adapter.putAutomationSettings({
+      enabled: true,
+      cap_global_per_day: 25,
+    });
+    expect(put.calls[0].method).toBe("PUT");
+    expect(put.calls[0].url).toBe("/api/automation/settings");
+    expect(put.calls[0].authorization).toBe("Bearer ui-test-token");
+    // The wire body carries both keys even when only one changed — the
+    // server PUT is partial (None fields ignored), the full payload is safe.
+    expect(put.calls[0].body).toEqual({
+      enabled: true,
+      cap_global_per_day: 25,
+    });
+    expect(saved.cap_global_per_day).toBe(25);
+  });
+});
+
+describe("BoardAdapter agents wire — harness dictionary (wave 3C)", () => {
+  const HARNESS_ROW = {
+    name: "myagent",
+    added_at: "2026-09-22T00:00:00+00:00",
+    added_via: "owner",
+    note: "custom executor",
+  };
+
+  it("listHarnesses: GET /harnesses is an open read (no bearer)", async () => {
+    const { fetchImpl, calls } = recordingFetch(200, {
+      ok: true,
+      count: 1,
+      items: [HARNESS_ROW],
+      meta: { seed_min_count: 10 },
+    });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const page = await adapter.listHarnesses();
+
+    expect(calls[0].method).toBe("GET");
+    expect(calls[0].url).toBe("/api/harnesses");
+    expect(calls[0].authorization).toBeUndefined();
+    expect(page.items[0]).toEqual(HARNESS_ROW);
+    expect(page.meta.seed_min_count).toBe(10);
+  });
+
+  it("createHarness: POST /harnesses with the bearer; omitted note stays absent", async () => {
+    const { fetchImpl, calls } = recordingFetch(201, {
+      ok: true,
+      harness: HARNESS_ROW,
+    });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getUiTokenFn: () => "ui-test-token",
+    });
+
+    await adapter.createHarness({ name: "myagent" });
+
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].url).toBe("/api/harnesses");
+    expect(calls[0].authorization).toBe("Bearer ui-test-token");
+    expect(calls[0].body).toEqual({ name: "myagent" });
+  });
+
+  it("createHarness forwards the note when provided", async () => {
+    const { fetchImpl, calls } = recordingFetch(201, {
+      ok: true,
+      harness: HARNESS_ROW,
+    });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getUiTokenFn: () => "ui-test-token",
+    });
+
+    await adapter.createHarness({ name: "myagent", note: "on vps" });
+
+    expect(calls[0].body).toEqual({ name: "myagent", note: "on vps" });
+  });
+
+  it("deleteHarness: DELETE /harnesses/{encoded name} with the bearer", async () => {
+    const { fetchImpl, calls } = recordingFetch(200, { ok: true });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getUiTokenFn: () => "ui-test-token",
+    });
+
+    await adapter.deleteHarness("my.agent-2_x");
+
+    expect(calls[0].method).toBe("DELETE");
+    expect(calls[0].url).toBe("/api/harnesses/my.agent-2_x");
+    expect(calls[0].authorization).toBe("Bearer ui-test-token");
+  });
+
+  it("surfaces server errors as ApiError with the server's text (409 duplicate)", async () => {
+    const { fetchImpl } = recordingFetch(409, {
+      detail: "harness 'myagent' is already registered",
+    });
+    const adapter = new BoardAdapter({
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getUiTokenFn: () => "ui-test-token",
+    });
+
+    await expect(adapter.createHarness({ name: "myagent" })).rejects.toMatchObject({
+      status: 409,
+      message: "harness 'myagent' is already registered",
+    });
   });
 });

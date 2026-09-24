@@ -85,9 +85,10 @@ export interface TagDrillStoreError {
 
 /**
  * `GET /api/tags/{tag}/drill` — everything tied to one tag (UI-17 §5).
- * BE-13 honesty: memories ride the search ranker, so `memories` is a
- * SUBSET — the UI states it (`tags.drill.subsetNote`), the header count
- * stays sourced from the full `/api/tags` aggregate.
+ * BE-13 (viewer closed): memories here still ride the search ranker (a
+ * SUBSET — keep the wire type honest), but the drill VIEW no longer renders
+ * them — it lists through `listMemories({ tags })` instead. The header
+ * count stays sourced from the full `/api/tags` aggregate.
  */
 export interface TagDrill {
   readonly ok: boolean;
@@ -175,6 +176,13 @@ export type TaskUnarchiveResult = Schemas["UnarchiveOut"];
  */
 export type InboxRefreshResult = Schemas["TaskInboxRefreshOut"];
 
+/**
+ * Pre-adoption edit payload — board `TaskInboxEditSpec` schema
+ * (`PATCH /api/tasks/inbox/{memory_id}`, UI-25). Partial: omitted fields
+ * stay at their current mirror/edited value; the server stores the overlay
+ * and adopt merges it over the mirror fields.
+ */
+export type InboxEditInput = Schemas["TaskInboxEditSpec"];
 
 // --- AGW-1 agents-domain wire types (ARCH-9, ADR 0009 Amd 2; SCHED-1) ----------
 // Hand-written refinements over the generated schemas where the server
@@ -186,13 +194,7 @@ export type InboxRefreshResult = Schemas["TaskInboxRefreshOut"];
 
 /** Assignment lifecycle — the frozen 7-state dictionary (ADR 0009 §4). */
 export type AssignmentLifecycleState =
-  | "queued"
-  | "claimed"
-  | "running"
-  | "done"
-  | "failed"
-  | "cancelled"
-  | "expired";
+  "queued" | "claimed" | "running" | "done" | "failed" | "cancelled" | "expired";
 
 /**
  * Routing annotation `{resolved, reason}` — computed per GET over the
@@ -265,7 +267,7 @@ export interface AssignmentListParams {
 export interface AssignmentCreateInput {
   readonly task_id: string;
   readonly specialist: string;
-  /** Harness id (KNOWN_HARNESSES server-side; default "zcode"). */
+  /** Harness id (a value of the server harness dictionary, wave 3C; default "zcode"). */
   readonly harness: string;
   /** Explicit executor pin — omitted/empty means chain resolution. */
   readonly executor_id?: string;
@@ -350,11 +352,17 @@ export interface EnrollmentItem {
   readonly executor_id: string;
 }
 
-/** Mint answer — board `EnrollmentCreatedOut`. The token rides HERE ONLY. */
+/**
+ * Mint answer — board `EnrollmentCreatedOut`. The token rides HERE ONLY.
+ * `ca_fingerprint` is the AGW-9 parallel slice (the board's CA fingerprint
+ * for the `--expect-fp` bootstrap flag): OPTIONAL until that slice lands —
+ * the mint screen renders the one-command WITHOUT the flag when absent.
+ */
 export interface EnrollmentCreatedResult {
   readonly ok: boolean;
   readonly enrollment: EnrollmentItem;
   readonly token: string;
+  readonly ca_fingerprint?: string;
 }
 
 /** Revoke answer — board `EnrollmentRevokedOut` (the fresh row; NO token). */
@@ -375,6 +383,94 @@ export interface EnrollmentCreateInput {
   readonly label?: string;
   readonly harness_hint?: string;
   readonly name_hint?: string;
+}
+
+// --- SSH provisioner (wave 4 AGW-11; design 2026-09-23-connect-provisioning) -
+
+/** How the board logs into the target over the install-time SSH channel. */
+export type ProvisionAuthKind = "key" | "password" | "alias";
+
+/** Job lifecycle — board `provision_jobs.state` CHECK set, verbatim. */
+export type ProvisionJobState =
+  | "queued"
+  | "connecting"
+  | "installing"
+  | "watching"
+  | "done"
+  | "failed";
+
+/**
+ * One provision job row — the GET /api/executors/provision/{id} `job`
+ * projection. Carries NO secret material (the ssh secret and the mne_
+ * token are transit-only server-side, never in a column or a frame);
+ * `steps` is the server's JSON array of step strings, `error_code` is the
+ * typed failure code the UI maps through the hint table.
+ */
+export interface ProvisionJobRow {
+  readonly id: string;
+  readonly host: string;
+  readonly port: number;
+  readonly auth_kind: ProvisionAuthKind | string;
+  /** Display fingerprint of the PUBLIC half of the key (never derived
+   * from a password server-side — CWE-759 fix); '' for alias auth. */
+  readonly key_fingerprint: string;
+  /** The pinned/presented HOST key fingerprint (canonical SHA256:base64);
+   * '' until strict mode seeded it or TOFU filled it at first connect. */
+  readonly host_key_fingerprint: string;
+  readonly harness_hint: string;
+  readonly board_url_for_host: string;
+  readonly enrollment_id: string;
+  readonly state: ProvisionJobState;
+  readonly error_code: string;
+  readonly steps: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+/** The enrollment leg of a job status read (used → executor_id is the win). */
+export interface ProvisionEnrollmentStatus {
+  readonly state: EnrollmentState | "";
+  readonly expires_at: string;
+  readonly executor_id: string;
+}
+
+/** GET /api/executors/provision/{job_id} answer (ui-token). */
+export interface ProvisionJobStatus {
+  readonly ok: boolean;
+  readonly job: ProvisionJobRow;
+  readonly enrollment: ProvisionEnrollmentStatus;
+}
+
+/** POST /api/executors/provision answer — 202; the mne_ token NEVER rides. */
+export interface ProvisionCreatedResult {
+  readonly ok: boolean;
+  readonly job_id: string;
+  readonly enrollment_id: string;
+  readonly state: ProvisionJobState;
+}
+
+/** SSH auth leg of the provision request (board `ProvisionAuth`). */
+export interface ProvisionAuthInput {
+  readonly kind: ProvisionAuthKind;
+  /** Password or private-key material (key auth) — transit-only. */
+  readonly secret?: string;
+  readonly passphrase?: string;
+}
+
+/**
+ * POST /api/executors/provision body (board `ProvisionBody`): anti-spray
+ * and charset gates are server-owned; the UI mirrors the host charset for
+ * immediate feedback, never as the enforcement boundary.
+ */
+export interface ProvisionCreateInput {
+  readonly name?: string;
+  readonly host: string;
+  readonly port?: number;
+  readonly auth: ProvisionAuthInput;
+  readonly harness_hint?: string;
+  readonly board_url_for_host?: string;
+  readonly expected_host_key_fingerprint?: string;
+  readonly reuse_enrollment_id?: string;
 }
 
 /**
@@ -415,6 +511,40 @@ export interface ExecutorPatchInput {
 export interface ExecutorStateChangeResult {
   readonly ok: boolean;
   readonly executor: ExecutorItem;
+}
+
+/**
+ * Harness dictionary row (wave 3C, design 2026-09-22 §C) — board
+ * `HarnessOut`. The dictionary is the owner-managed nomination registry
+ * that replaced the former closed-set UI mirror; `added_via` separates
+ * seed rows from owner-added ones.
+ */
+export interface HarnessItem {
+  readonly name: string;
+  readonly added_at: string;
+  readonly added_via: string;
+  readonly note: string;
+}
+
+/** Harness dictionary page — board `HarnessListOut`. `seed_min_count` is
+ * the guaranteed seed size; the UI never hardcodes the set. */
+export interface HarnessesPage {
+  readonly ok: boolean;
+  readonly count: number;
+  readonly items: readonly HarnessItem[];
+  readonly meta: { readonly seed_min_count: number };
+}
+
+/** Add request — board `HarnessCreateBody` (name server-sanitized too). */
+export interface HarnessCreateInput {
+  readonly name: string;
+  readonly note?: string;
+}
+
+/** Add answer — board `HarnessStateOut` (the fresh row echoes back). */
+export interface HarnessStateResult {
+  readonly ok: boolean;
+  readonly harness: HarnessItem;
 }
 
 /** Execution settings read — board `ExecutionSettingsOut`. */
@@ -478,6 +608,16 @@ export type LaunchesPage = Schemas["LaunchesOut"];
 /** Engine/caps/condition-meta projection — board `AutomationStatusOut` schema. */
 export type AutomationStatus = Schemas["AutomationStatusOut"];
 
+/** Kill-switch + daily cap projection — board `AutomationSettingsOut` schema. */
+export type AutomationSettings = Schemas["AutomationSettingsOut"];
+
+/**
+ * Settings PUT payload — board `AutomationSettingsBody` schema (the wire
+ * accepts partial bodies; the settings form sends BOTH fields — the server
+ * ignores `None`s and audits only effective changes, store.py ADR 0013 §6).
+ */
+export type AutomationSettingsInput = Schemas["AutomationSettingsBody"];
+
 /** Launch journal filters (`GET /api/automation/launches`). */
 export interface LaunchesParams {
   readonly rule_id?: number;
@@ -490,7 +630,6 @@ export interface LaunchesParams {
   /** Opaque cursor from a previous page's next_cursor. */
   readonly cursor?: string;
 }
-
 
 // --- Anonymous wire shapes (board answers `dict[str, Any]`) ------------------
 
@@ -552,6 +691,12 @@ export interface MemoryPulseItem {
   readonly created_at: string;
   /** Provenance: the store that contributed the row (server-assigned). */
   readonly server: string;
+  /**
+   * Server-cut content fragment for the inline preview (≤400 chars, cut at
+   * a whitespace boundary); null when the memory has no body. Untrusted
+   * author content — render through TextEngine, never raw interpolation.
+   */
+  readonly content?: string | null;
 }
 
 export interface MemoryPulseServerNote {
@@ -625,3 +770,67 @@ export interface BoardSearchResponse {
     readonly detail?: string | null;
   }[];
 }
+
+// --- CV-7 QR pairing + device sessions (ADR 0012; generated board schemas) ----
+
+/**
+ * One device session — board `DeviceOut` (`GET /api/devices`). NO token
+ * material ever rides it (hash-only storage server-side, ADR 0012 §5);
+ * `state` mirrors the server's active | expired | revoked lifecycle.
+ */
+export type DeviceSession = Schemas["DeviceOut"];
+
+/** Device list — board `DevicesOut` (`GET /api/devices`). */
+export type DevicesPage = Schemas["DevicesOut"];
+
+/** Revoke answer — board `DeviceRevokedOut` (the final row snapshot). */
+export type DeviceRevokedResult = Schemas["DeviceRevokedOut"];
+
+/** Grants answer — board `DeviceGrantsOut` (`PUT /api/devices/{id}/grants`,
+ * ADR 0012 Amendment §A.7): the updated row with its live granule set. */
+export type DeviceGrantsResult = Schemas["DeviceGrantsOut"];
+
+/**
+ * The granule dictionary (ADR 0012 Amendment §A.7) as the viewer mirrors
+ * it — LABELS ONLY. The server owns validation (unknown names → 422);
+ * this list drives the toggle rendering and the PUT payload order.
+ */
+export const DEVICE_GRANULES = [
+  "tasks",
+  "reports",
+  "inbox",
+  "notifications",
+] as const;
+
+/** One granule id (a `DEVICE_GRANULES` member). */
+export type DeviceGranule = (typeof DEVICE_GRANULES)[number];
+
+/** Create answer — board `PairingCreatedOut` (`POST /api/pairing`, 201).
+ * The code appears HERE and NOWHERE else on the owner leg (§2.1). */
+export type PairingCreatedResult = Schemas["PairingCreatedOut"];
+
+/** Owner-side status — board `PairingStatusOut` (`GET /api/pairing/{id}`);
+ * the trusted side's only source of the verify digits + scan metadata. */
+export type PairingStatus = Schemas["PairingStatusOut"];
+
+/** Device-leg awaiting answer — board `PairingExchangeAwaitingOut` (202). */
+export type PairingExchangeAwaiting = Schemas["PairingExchangeAwaitingOut"];
+
+/** Device-leg issued answer — board `PairingIssuedOut` (200, one-shot). The
+ * mnd_ token rides HERE ONLY (§2.5); the /pair page shows it once. */
+export type PairingIssuedResult = Schemas["PairingIssuedOut"];
+
+/** Confirm/cancel answer — board `PairingConfirmOut`. `outcome` is
+ * confirmed | denied | idempotent (confirm) or revoked | idempotent (cancel). */
+export type PairingConfirmResult = Schemas["PairingConfirmOut"];
+
+/** Device exchange body (`POST /api/pairing/exchange`, NO auth). */
+export interface PairingExchangeInput {
+  readonly code: string;
+  readonly device_name?: string;
+}
+
+/** Effective pairing lifecycle (ADR 0012 §10.1), computed client-side:
+ * the wire `state` narrowed + the TTL-passed → expired view rule. */
+export type PairingLifecycle =
+  "created" | "scanned" | "confirmed" | "issued" | "expired" | "revoked";

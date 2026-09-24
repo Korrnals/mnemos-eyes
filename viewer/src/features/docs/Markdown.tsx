@@ -2,21 +2,59 @@ import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import { Check, Copy } from "lucide-react";
 import { Link } from "react-router";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { createHeadingSlugger } from "./headingSlug";
+import { stripLeadingBanners } from "./manifest";
 import { resolveDocImageUrl } from "./docsAssets";
+import { resolveDocLink } from "./docsLinks";
+import { sanitizeSchema } from "./sanitizeSchema";
+import { MermaidDiagram } from "./Mermaid";
 
 /**
- * The SINGLE react-markdown + remark-gfm point (contract §3, gate §9.4).
- * NO rehype-raw: raw HTML in markdown is never rendered, so the sanitization
- * story is the react-markdown default (URL scheme whitelist + HTML skip).
- * Element classes follow the design-spec token table (§6–§7) — no literal
- * colours anywhere. In-body images resolve through docsAssets.ts (the one
- * asset glob); absolute http(s) srcs and unknown paths render as-is.
+ * The SINGLE react-markdown + remark-gfm point (contract §3, gate §9.4; raw
+ * HTML pipeline per АРХКОМ-8): raw HTML IS rendered, but only after
+ * `rehype-raw` → `rehype-sanitize(sanitizeSchema)` IN THAT ORDER — the
+ * defaultSchema-minus schema is the security boundary, this file is its only
+ * call site (ESLint enforces; dangerouslySetInnerHTML stays banned). GitHub
+ * parity: GFM tables, details/summary, kbd/sub/sup, task lists; hostile
+ * content dies in the schema, not in the DOM. Element classes follow the
+ * design-spec token table (§6–§7) — no literal colours anywhere. In-body
+ * images resolve through docsAssets.ts (the one asset glob); absolute
+ * http(s) srcs and unknown paths render as-is (CSP bounds the rest).
+ * Links: /docs* stay SPA Links, anchors stay plain, and corpus-internal
+ * references (our `slug.md`, upstream board slugs like `mnemos/user/sync`)
+ * resolve through the manifest into project-scoped URLs (W1c — дефект из W2).
  */
+
+/**
+ * script/style/iframe subtrees are removed WHOLE, not schema-disallowed:
+ * hast-util-sanitize replaces disallowed elements with their CHILDREN, so a
+ * schema-only ban would leak the JS/CSS/frame source as visible text.
+ * GitHub hides that content — so do we (АРХКОМ-8 hostile gate).
+ */
+const DROPPED_SUBTREES = new Set(["script", "style", "iframe"]);
+
+function rehypeDropSubtrees() {
+  return (tree: HastishNode) => {
+    const walk = (node: HastishNode) => {
+      const children = node.children;
+      if (children === undefined) return;
+      const kept: HastishNode[] = [];
+      for (const child of children) {
+        if (isElement(child) && DROPPED_SUBTREES.has(child.tagName ?? "")) continue;
+        walk(child);
+        kept.push(child);
+      }
+      (node as { children?: HastishNode[] }).children = kept;
+    };
+    walk(tree);
+  };
+}
 
 // Minimal structural hast shape (avoids importing transitive type packages
 // while staying assignable from the real @types/hast elements).
@@ -38,6 +76,16 @@ function nodeText(node: HastishNode | undefined): string {
   return (node.children ?? []).map(nodeText).join("");
 }
 
+/** `language-*` token of a code element (undefined when absent/unmatched). */
+function languageOf(node: HastishNode | undefined): string | undefined {
+  const className = node?.properties?.className;
+  if (!Array.isArray(className)) return undefined;
+  const token = className.find(
+    (name) => typeof name === "string" && name.startsWith("language-"),
+  ) as string | undefined;
+  return token?.slice("language-".length);
+}
+
 /** JetBrains Mono for ALL code (design spec §1: вес 400 — других нет). */
 const MONO: React.CSSProperties = { fontFamily: "var(--font-mono)" };
 
@@ -46,6 +94,10 @@ export const DOCS_MARK_CLASS = "rounded-sm bg-iris/15 px-0.5 text-foreground";
 
 const LINK_CLASS =
   "text-iris-bright underline underline-offset-2 transition-colors duration-instant hover:decoration-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright";
+
+/** Unresolvable .md reference — visibly broken, never a crash (W1c gate). */
+const BROKEN_LINK_CLASS =
+  "text-foreground-muted underline decoration-dashed underline-offset-2";
 
 function CopyButton({ code }: { code: string }) {
   const t = useT();
@@ -93,14 +145,7 @@ function CopyButton({ code }: { code: string }) {
 function CodeBlock({ node }: { node?: HastishNode }) {
   const codeNode = (node?.children ?? []).find((child) => isElement(child));
   const code = nodeText(codeNode);
-  const className = codeNode?.properties?.className;
-  const language = Array.isArray(className)
-    ? (
-        className.find(
-          (name) => typeof name === "string" && name.startsWith("language-"),
-        ) as string | undefined
-      )?.slice("language-".length)
-    : undefined;
+  const language = languageOf(codeNode);
   return (
     <div className="relative my-4">
       {language ? (
@@ -124,7 +169,7 @@ function CodeBlock({ node }: { node?: HastishNode }) {
   );
 }
 
-function buildComponents(): Components {
+function buildComponents(pageSlug: string | undefined): Components {
   const slug = createHeadingSlugger();
   return {
     h1: ({ node, children }) => (
@@ -155,6 +200,14 @@ function buildComponents(): Components {
     ),
     h4: ({ children }) => (
       <h4 className="text-base font-medium text-foreground">{children}</h4>
+    ),
+    // Upstream typography (design spec §9.2): h5–h6 share one honest look —
+    // text-sm/medium. Order stays visible; TOC remains h2/h3 only.
+    h5: ({ children }) => (
+      <h5 className="text-sm font-medium text-foreground">{children}</h5>
+    ),
+    h6: ({ children }) => (
+      <h6 className="text-sm font-medium text-foreground-secondary">{children}</h6>
     ),
     p: ({ children }) => (
       <p className="mb-4 text-base leading-relaxed text-foreground">{children}</p>
@@ -188,6 +241,28 @@ function buildComponents(): Components {
             {children}
           </a>
         );
+      // Corpus-internal references (slug.md / board slugs) → SPA links;
+      // unresolvable .md refs render visibly broken — never a crash.
+      const resolution = resolveDocLink(href, pageSlug);
+      if (resolution.kind === "internal") {
+        return (
+          <Link to={resolution.to} className={LINK_CLASS}>
+            {children}
+          </Link>
+        );
+      }
+      if (resolution.kind === "broken") {
+        // A content bug the integrity gates should catch — signal it here
+        // without crashing the page (W1c gate) and leave a console trace.
+        console.warn(
+          `[docs] unresolved markdown link "${href}" on page "${pageSlug ?? "?"}"`,
+        );
+        return (
+          <a href={href} className={BROKEN_LINK_CLASS}>
+            {children}
+          </a>
+        );
+      }
       return (
         <a href={href} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
           {children}
@@ -200,28 +275,43 @@ function buildComponents(): Components {
       </blockquote>
     ),
     // Block code short-circuits here (the inner `code` never renders).
-    pre: ({ node }) => <CodeBlock node={node} />,
-    // Everything reaching `code` is INLINE code (spec §7.1).
-    code: ({ children }) => (
-      <code
-        style={MONO}
-        className="rounded-sm border border-border-subtle bg-elevated px-1.5 py-px text-sm text-foreground [overflow-wrap:anywhere]"
-      >
-        {children}
-      </code>
-    ),
+    // mermaid fences are intercepted FIRST (АРХКОМ-8): they become
+    // diagrams, not code blocks — the pre wrapper is skipped entirely.
+    pre: ({ node }) => {
+      const codeNode = (node?.children ?? []).find((child) => isElement(child));
+      if (languageOf(codeNode) === "mermaid") {
+        return <MermaidDiagram code={nodeText(codeNode)} />;
+      }
+      return <CodeBlock node={node} />;
+    },
+    // Everything reaching `code` is INLINE code (spec §7.1) — except a
+    // mermaid fence arriving without a pre parent (raw-HTML edge): it goes
+    // to the diagram component as well, never through the inline styling.
+    code: ({ node, children }) => {
+      if (languageOf(node) === "mermaid") {
+        return <MermaidDiagram code={nodeText(node)} />;
+      }
+      return (
+        <code
+          style={MONO}
+          className="rounded-sm border border-border-subtle bg-elevated px-1.5 py-px text-sm text-foreground [overflow-wrap:anywhere]"
+        >
+          {children}
+        </code>
+      );
+    },
     table: ({ children }) => (
       <div className="mb-4 overflow-x-auto rounded-md border border-border-subtle">
         <table className="w-full border-collapse text-sm">{children}</table>
       </div>
     ),
     th: ({ children }) => (
-      <th className="border-b border-border px-3 py-2 text-left text-sm font-medium text-foreground-secondary">
+      <th className="[overflow-wrap:anywhere] border-b border-border px-3 py-2 text-left text-sm font-medium text-foreground-secondary">
         {children}
       </th>
     ),
     td: ({ children }) => (
-      <td className="border-b border-border-subtle px-3 py-2 text-sm text-foreground [tr:last-child_&]:border-b-0">
+      <td className="[overflow-wrap:anywhere] border-b border-border-subtle px-3 py-2 text-sm text-foreground [tr:last-child_&]:border-b-0">
         {children}
       </td>
     ),
@@ -242,17 +332,36 @@ function buildComponents(): Components {
 export interface MarkdownProps {
   source: string;
   className?: string;
+  /**
+   * Slug of the page being rendered — the base for resolving corpus-relative
+   * links (`slug.md`, `../x.md`) through the manifest. Undefined in tests
+   * and previews: relative refs then resolve from the corpus root.
+   */
+  pageSlug?: string;
 }
 
-export function Markdown({ source, className }: MarkdownProps) {
+export function Markdown({ source, className, pageSlug }: MarkdownProps) {
   // Built per render: a fresh object of closures is cheap, and a fresh
   // slug counter per pass keeps h2/h3 anchors deterministic (same heading
   // order → same ids) while restarting per document by construction.
-  const components = buildComponents();
+  const components = buildComponents(pageSlug);
   return (
     <div className={cn("text-base leading-relaxed text-foreground", className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {source}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        // Order IS the security model (АРХКОМ-8): raw HTML must exist as
+        // nodes BEFORE the sanitizer prunes them — sanitize-first would
+        // sanitize nothing (raw text nodes are inert), raw-without-sanitize
+        // is the hole the first wave's gate existed to prevent. The
+        // subtree-drop runs between them: script/style/iframe vanish whole.
+        rehypePlugins={[
+          rehypeRaw,
+          rehypeDropSubtrees,
+          [rehypeSanitize, sanitizeSchema],
+        ]}
+        components={components}
+      >
+        {stripLeadingBanners(source)}
       </ReactMarkdown>
     </div>
   );

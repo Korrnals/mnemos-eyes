@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from conftest import FakeMnemos
+from server import mnemos_client
 
 SERVER_A = "qa-mem-a"
 SERVER_B = "qa-mem-b"
@@ -284,3 +285,100 @@ class TestTagsMerged:
         finally:
             for name, enabled in saved.items():
                 app_module.registry.set_enabled(name, enabled)
+
+
+class TestContentFragment:
+    """Unit contract of mnemos_client.content_fragment — the pulse wire
+    field: <= 400 chars, whitespace-boundary cut, blank -> None."""
+
+    def test_short_content_passes_through(self):
+        assert mnemos_client.content_fragment("hello world") == "hello world"
+
+    def test_exact_limit_kept_whole(self):
+        text = "a" * 50 + " " + "b" * 349  # exactly 400 chars
+        assert mnemos_client.content_fragment(text) == text
+
+    def test_long_content_cut_at_whitespace(self):
+        text = ("lorem " * 200).strip()  # 1199 chars, single-spaced words
+        frag = mnemos_client.content_fragment(text)
+        assert len(frag) <= 400
+        assert text.startswith(frag)
+        assert text[len(frag):len(frag) + 1] in ("", " ", "\t", "\n")
+
+    def test_no_whitespace_in_window_hard_cut(self):
+        assert mnemos_client.content_fragment("x" * 500) == "x" * 400
+
+    @pytest.mark.parametrize("blank", ["", "   ", None])
+    def test_blank_content_maps_to_none(self, blank):
+        assert mnemos_client.content_fragment(blank) is None
+
+    @pytest.mark.parametrize("junk", [{"a": 1}, ["x", "y"], 42, 4.5, True])
+    def test_non_string_content_maps_to_none(self, junk):
+        # A structured record must never surface as its Python repr
+        # (``{'a': 1}``) in the pulse — non-string bodies are absent.
+        assert mnemos_client.content_fragment(junk) is None
+
+
+class TestMemoryPulse:
+    """Pulse items carry a truncated content fragment for the UI TextEngine:
+    on the GET /memories path AND the POST /search fallback path, and
+    through the merged /api/memories/pulse pass-through unchanged."""
+
+    def test_items_carry_content_fragment(self, mem_env, client):
+        r = client.get("/api/memories/pulse")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        items = {i["id"]: i for i in body["items"]}
+        assert set(items) == {"m-a1", "m-a2", "m-a3", "m-b1", "m-b2"}
+        assert all(i["content"] == "body text" for i in items.values())
+        assert items["m-a1"]["server"] == SERVER_A  # attribution intact
+
+    def test_blank_content_is_null_not_missing(self, mem_env, client):
+        _, fake_a, _ = mem_env
+        fake_a.memories_result = [
+            mem("m-blank", "2026-09-10T00:00:00+00:00", content="")]
+        items = {i["id"]: i for i in client.get(
+            "/api/memories/pulse", params={"scope": SERVER_A}).json()["items"]}
+        assert "content" in items["m-blank"]
+        assert items["m-blank"]["content"] is None
+
+    def test_long_content_cut_at_whitespace_boundary(self, mem_env, client):
+        _, fake_a, _ = mem_env
+        text = ("lorem " * 200).strip()
+        fake_a.memories_result = [
+            mem("m-wide", "2026-09-10T00:00:00+00:00", content=text)]
+        (item,) = client.get("/api/memories/pulse",
+                             params={"scope": SERVER_A}).json()["items"]
+        frag = item["content"]
+        assert len(frag) <= 400
+        assert text.startswith(frag)
+        assert text[len(frag):len(frag) + 1] in ("", " ", "\t", "\n")
+
+    def test_search_fallback_yields_fragment(self, mem_env, client):
+        _, fake_a, _ = mem_env
+        fake_a.fail_list = True            # GET /memories -> 500
+        long = ("word " * 150).strip()     # 745 chars
+        fake_a.search_results = [
+            mem("m-fallback", "2026-09-10T00:00:00+00:00", content=long)]
+        r = client.get("/api/memories/pulse", params={"scope": SERVER_A})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        (item,) = body["items"]
+        assert item["id"] == "m-fallback"
+        frag = item["content"]
+        assert len(frag) <= 400 and long.startswith(frag)
+        assert long[len(frag):len(frag) + 1] in ("", " ", "\t", "\n")
+        with fake_a.lock:
+            posts = [q for q in fake_a.requests
+                     if q["method"] == "POST" and q["path"] == "/search"]
+        assert posts, "fallback must hit POST /search"
+
+    def test_scoped_pulse_endpoint_carries_fragment(self, mem_env, client):
+        r = client.get(f"/api/memories/servers/{SERVER_A}/pulse")
+        assert r.status_code == 200, r.text
+        items = r.json()["items"]
+        assert items
+        assert all(i["server"] == SERVER_A for i in items)
+        assert all(i["content"] == "body text" for i in items)

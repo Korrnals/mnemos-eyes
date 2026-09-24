@@ -24,6 +24,12 @@ function seededClient(): QueryClient {
   client.setQueryData(keys.agents.executors.list(), MOCK_EXECUTORS_PAGE);
   // AGW-5 phase 2: the enrollment list is part of the domain cache.
   client.setQueryData(keys.agents.enrollment.list(), { ok: true, count: 0, items: [] });
+  // AGW-11: the connect card's job feed is part of the domain cache.
+  client.setQueryData(keys.agents.provision.job("pj-1"), {
+    ok: true,
+    job: { id: "pj-1", state: "connecting", steps: "[]" },
+    enrollment: { state: "created", executor_id: "" },
+  });
   client.setQueryData(keys.tasks.board(), MOCK_BOARD);
   return client;
 }
@@ -107,6 +113,51 @@ describe("applyAgentsEventToCache — invalidation-only mapping", () => {
     }
   });
 
+  it("every provisioning.* kind invalidates the job family; ok also syncs executors (AGW-11)", () => {
+    const frames = [
+      {
+        kind: "provisioning.created",
+        job_id: "pj-1",
+        host: "vps-1",
+        port: 22,
+        enrollment_id: "enr-1",
+      },
+      {
+        kind: "provisioning.progress",
+        job_id: "pj-1",
+        state: "installing",
+        step: "running the bootstrap one-liner (pinned TLS)",
+      },
+      {
+        kind: "provisioning.failed",
+        job_id: "pj-1",
+        error_code: "ssh.sudo_required",
+        detail: "sudo -n preflight failed",
+      },
+      {
+        kind: "provisioning.repinned",
+        host: "vps-1",
+        port: 22,
+        fingerprint: "SHA256:abc",
+      },
+    ] as const;
+    for (const frame of frames) {
+      const client = seededClient();
+      applyAgentsEventToCache(client, mustEvent(frame));
+      expect(isKeyInvalidated(client, keys.agents.provision.all)).toBe(true);
+      // Hints never mint registry rows — executors stay untouched.
+      expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(false);
+    }
+    // ok DOES mint a pending row (belt-and-braces beside executor.registered).
+    const client = seededClient();
+    applyAgentsEventToCache(
+      client,
+      mustEvent({ kind: "provisioning.ok", job_id: "pj-1", executor_id: "exec-9" }),
+    );
+    expect(isKeyInvalidated(client, keys.agents.provision.all)).toBe(true);
+    expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(true);
+  });
+
   it("task/report events leave the agents keys untouched (task bridge owns them)", () => {
     const client = seededClient();
     applyAgentsEventToCache(
@@ -116,10 +167,7 @@ describe("applyAgentsEventToCache — invalidation-only mapping", () => {
         task: { id: "TB-1", col: "in-progress", status: "in-progress" },
       }),
     );
-    applyAgentsEventToCache(
-      client,
-      mustEvent({ kind: "hello", last_event_id: 7 }),
-    );
+    applyAgentsEventToCache(client, mustEvent({ kind: "hello", last_event_id: 7 }));
     expect(isKeyInvalidated(client, keys.agents.assignments.all)).toBe(false);
     expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(false);
   });
@@ -131,6 +179,8 @@ describe("applyAgentsReconnectToCache — §5.9 reconnect refetch", () => {
     applyAgentsReconnectToCache(client);
     expect(isKeyInvalidated(client, keys.agents.assignments.all)).toBe(true);
     expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(true);
+    // AGW-11: a live job may have moved while the stream was down.
+    expect(isKeyInvalidated(client, keys.agents.provision.all)).toBe(true);
     expect(isKeyInvalidated(client, keys.tasks.all)).toBe(false);
   });
 });
@@ -169,5 +219,38 @@ describe("applyAgentsEventToCache — enrollment family (AGW-5 phase 2)", () => 
     const client = seededClient();
     applyAgentsReconnectToCache(client);
     expect(isKeyInvalidated(client, keys.agents.enrollment.all)).toBe(true);
+  });
+});
+
+describe("harness.* — dictionary sync (wave 3C)", () => {
+  it("added/removed invalidate the harnesses key and nothing else", () => {
+    for (const [kind, payload] of [
+      ["harness.added", { harness: { name: "myagent", added_via: "owner" } }],
+      ["harness.removed", { name: "myagent" }],
+    ] as const) {
+      const client = seededClient();
+      client.setQueryData(keys.agents.harnesses.list(), {
+        ok: true,
+        count: 10,
+        items: [],
+        meta: { seed_min_count: 10 },
+      });
+      applyAgentsEventToCache(client, mustEvent({ kind, ...payload }));
+      expect(isKeyInvalidated(client, keys.agents.harnesses.all)).toBe(true);
+      expect(isKeyInvalidated(client, keys.agents.executors.all)).toBe(false);
+      expect(isKeyInvalidated(client, keys.agents.assignments.all)).toBe(false);
+    }
+  });
+
+  it("reconnect marks the harness dictionary stale too (at-most-once stream)", () => {
+    const client = seededClient();
+    client.setQueryData(keys.agents.harnesses.list(), {
+      ok: true,
+      count: 10,
+      items: [],
+      meta: { seed_min_count: 10 },
+    });
+    applyAgentsReconnectToCache(client);
+    expect(isKeyInvalidated(client, keys.agents.harnesses.all)).toBe(true);
   });
 });

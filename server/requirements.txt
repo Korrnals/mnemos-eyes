@@ -3,3 +3,8 @@ uvicorn[standard]>=0.30
 httpx>=0.27
 pydantic>=2.7
 pyyaml>=6.0
+# The provisioner SSH transport (P1-2): was MISSING from this file —
+# ModuleNotFoundError in prod. Pinned: the worker verifies
+# SSHClient.validate_host_public_key arity and the known_hosts-callable
+# contract against THIS version's source (see provisioner._asyncssh_connect).
+asyncssh==2.24.0

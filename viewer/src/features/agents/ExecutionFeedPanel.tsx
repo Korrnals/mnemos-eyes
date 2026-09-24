@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { ChevronDown, ChevronUp, Radio } from "lucide-react";
 import { useI18n, useT } from "@/i18n";
 import { formatTaskDate } from "@/features/tasks/taskStatus";
+import { withReturn } from "@/lib/returnParams";
 import {
   loadFeedCollapsed,
   saveFeedCollapsed,
@@ -142,6 +143,9 @@ function FeedRow({
 }) {
   // Flash-fade: a background tint that clears after 2 s — colour only, the
   // row never moves (§3.2 Motion; nothing animates, reduced-motion safe).
+  // UI-18 pair 6: the execution URL rides as `return=` on the task link so
+  // the task's back control leads back into this feed.
+  const location = useLocation();
   return (
     <li
       className={
@@ -156,7 +160,11 @@ function FeedRow({
         {t(feedKindKey(item.kind))}
       </span>
       <Link
-        to={`/tasks/${encodeURIComponent(item.taskId)}?tab=execution`}
+        to={withReturn(
+          `/tasks/${encodeURIComponent(item.taskId)}?tab=execution`,
+          location.pathname,
+          location.search,
+        )}
         className="font-mono text-xs text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
       >
         {item.taskId}

@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import { TagBadge } from "@/components/TagBadge/TagBadge";
+import { TextEngine } from "@/components/TextEngine";
 import {
   formatConfidence,
   formatTimestamp,
@@ -24,6 +25,10 @@ export interface MemoryScrollProps {
   className?: string;
 }
 
+/** Token-bound font styles — module constants (memo-stable references). */
+const SCROLL_FONT_STYLE: React.CSSProperties = { fontFamily: "var(--font-scroll)" };
+const MONO_FONT_STYLE: React.CSSProperties = { fontFamily: "var(--font-mono)" };
+
 export function MemoryScroll({
   memory,
   showRaw,
@@ -35,9 +40,13 @@ export function MemoryScroll({
   const effective = memory.clean_content ?? memory.content;
   // Inventory §5.3: the toggle exists only when raw differs from effective.
   const rawDiffers = typeof raw === "string" && raw.length > 0 && raw !== effective;
-  const shown = showRaw && rawDiffers ? raw : effective;
+  const showRawVariant = showRaw && rawDiffers;
+  const shown = showRawVariant ? raw : effective;
   const mono = isMonoMemory(memory);
   const related = (memory.derived_from ?? []).filter((id) => id.length > 0);
+  // Stable font style references keep the TextEngine memo intact (module
+  // constants — never inline object literals).
+  const contentStyle = mono ? MONO_FONT_STYLE : SCROLL_FONT_STYLE;
 
   return (
     <article className={className}>
@@ -70,7 +79,10 @@ export function MemoryScroll({
         ) : null}
       </div>
 
-      {/* 2. Content area — the scroll itself */}
+      {/* 2. Content area — the scroll itself. UI-27: the effective content
+       * renders through the TextEngine primitive (plain prose → the exact
+       * legacy pre-wrap; markdown → formatted). The RAW variant stays plain
+       * ON PURPOSE: it is the source view the owner explicitly opted into. */}
       <div className="mt-4 rounded-lg border border-scroll-border bg-scroll-bg p-8 shadow-well">
         <h1
           className="font-scroll text-xl font-semibold leading-tight"
@@ -78,12 +90,21 @@ export function MemoryScroll({
         >
           {memory.title ?? memory.id}
         </h1>
-        <p
-          className="mt-6 whitespace-pre-wrap text-md leading-relaxed text-foreground"
-          style={{ fontFamily: mono ? "var(--font-mono)" : "var(--font-scroll)" }}
-        >
-          {shown}
-        </p>
+        {showRawVariant ? (
+          <p
+            className="mt-6 whitespace-pre-wrap text-md leading-relaxed text-foreground"
+            style={{ fontFamily: mono ? "var(--font-mono)" : "var(--font-scroll)" }}
+          >
+            {shown}
+          </p>
+        ) : (
+          <TextEngine
+            text={effective}
+            variant="full"
+            className="mt-6 text-md leading-relaxed text-foreground"
+            style={contentStyle}
+          />
+        )}
       </div>
 
       {/* 3. Raw content toggle */}

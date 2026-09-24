@@ -205,6 +205,39 @@ class TestRegistration:
         assert body["meta"]["sweeper_interval_s"] == 60
 
 
+class TestGetSingle:
+    """GET /api/executors/{executor_id} (AGW-6, executor settings card):
+    open read like the list, same _executor_public projection (no secret
+    material), 404 unknown, and the literal enrollment route keeps winning
+    the match order over the parametric id."""
+
+    def test_found_same_projection_as_list(self, client, auth):
+        executor, secret = _make_executor(
+            client, auth, "single-g1", caps=["researcher"], online=True)
+        r = client.get(f"/api/executors/{executor['id']}")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        listed = client.get("/api/executors").json()["items"]
+        expected = next(i for i in listed if i["id"] == executor["id"])
+        assert body == expected  # one projection, two reads
+        assert body["presence"] == "online"
+        assert "secret_hash" not in body
+        assert "executor_secret" not in body
+
+    def test_unknown_404(self, client):
+        r = client.get("/api/executors/no-such-executor")
+        assert r.status_code == 404
+        assert "no-such-executor" in r.json()["detail"]
+
+    def test_enrollment_literal_not_shadowed(self, client, auth):
+        # match-order guard: GET /api/executors/enrollment must stay the
+        # token list (ui-token class), never resolve as executor id 404/200.
+        r = client.get("/api/executors/enrollment", headers=auth)
+        assert r.status_code == 200
+        assert "items" in r.json()
+
+
+
 class TestExecutorToken:
     """AC2-3: third bearer class — presence heartbeat semantics."""
 

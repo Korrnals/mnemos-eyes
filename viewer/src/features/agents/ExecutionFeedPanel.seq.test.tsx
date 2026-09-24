@@ -11,6 +11,8 @@ import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import { I18nProvider } from "@/i18n";
 import { FEED_CAP, pushExecutionEvent, resetFeedStore } from "./executionFeedStore";
+import { actUnmount } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * AGW-3 review P2-2 — the saturation regression: once the ring buffer
@@ -90,15 +92,18 @@ describe("feed panel — novelty by SEQ, not length (P2-2 saturation regression)
     const rowsBefore = document.querySelectorAll("li").length;
     expect(rowsBefore).toBe(FEED_CAP); // saturated — the length is frozen
 
-    // The NEW row: a terminal transition AFTER saturation.
-    pushWire(
-      {
-        kind: "assignment.done",
-        task_id: "TB-NEW",
-        assignment: { id: "999", state: "done", claimed_by: "z:l", created_by: "o" },
-      },
-      RECEIVED + (FEED_CAP + 6) * 1000,
-    );
+    // The NEW row: a terminal transition AFTER saturation. ME-006: the push
+    // notifies store subscribers synchronously — wrap it in act.
+    await act(async () => {
+      pushWire(
+        {
+          kind: "assignment.done",
+          task_id: "TB-NEW",
+          assignment: { id: "999", state: "done", claimed_by: "z:l", created_by: "o" },
+        },
+        RECEIVED + (FEED_CAP + 6) * 1000,
+      );
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -118,6 +123,6 @@ describe("feed panel — novelty by SEQ, not length (P2-2 saturation regression)
     });
     expect(document.querySelector("li.bg-iris\\/10")).toBeNull();
 
-    root.unmount();
+    await actUnmount(root);
   });
 });

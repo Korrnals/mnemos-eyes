@@ -1,4 +1,4 @@
-import { useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { Button } from "@/components/ui/button";
 import { isPulseSource } from "@/gateway/capabilities";
@@ -20,6 +20,9 @@ export function PulsePage() {
   const gateway = useGateway();
   const capable = isPulseSource(gateway);
   const [searchParams, setSearchParams] = useSearchParams();
+  // UI-18 pair 10: the pulse URL (?scope= included) rides as `return=` on
+  // every row link so the memory detail's back control leads back here.
+  const location = useLocation();
   const scope = searchParams.get("scope") ?? "all";
   const pulse = usePulse({ scope, limit: 20 });
 
@@ -91,7 +94,11 @@ export function PulsePage() {
           message={t("pulse.emptyMessage")}
         />
       ) : (
-        <PulseFeed items={pulse.data.items} perServer={pulse.data.per_server} />
+        <PulseFeed
+          items={pulse.data.items}
+          perServer={pulse.data.per_server}
+          returnSource={{ pathname: location.pathname, search: location.search }}
+        />
       )}
     </section>
   );

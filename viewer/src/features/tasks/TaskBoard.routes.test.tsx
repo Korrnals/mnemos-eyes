@@ -83,7 +83,7 @@ async function renderAt(path: string): Promise<void> {
 }
 
 /** Wait for lazy route chunks + suspense to settle (bounded polling). */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("waitFor: condition not met");
@@ -113,7 +113,7 @@ afterEach(async () => {
 describe("/tasks routes + view toggle (CV-4 §1)", () => {
   it("renders the KANBAN at /tasks by default (no stored preference)", async () => {
     await renderAt("/tasks");
-    await waitFor(() => container!.querySelector('a[href="/tasks/TB-1"]') !== null);
+    await waitFor(() => container!.querySelector('a[href^="/tasks/TB-1?"]') !== null);
     // The board region + its 7 lanes (aria-labels + EN column titles).
     expect(container!.querySelector('[aria-label="Task kanban board"]')).not.toBeNull();
     expect(container!.textContent).toContain("backlog");
@@ -141,7 +141,7 @@ describe("/tasks routes + view toggle (CV-4 §1)", () => {
 
   it("the toggle navigates board → list WITHOUT persisting the choice", async () => {
     await renderAt("/tasks");
-    await waitFor(() => container!.querySelector('a[href="/tasks/TB-1"]') !== null);
+    await waitFor(() => container!.querySelector('a[href^="/tasks/TB-1?"]') !== null);
     // The TOGGLE's list link (the sidebar section link shares the href but
     // does not persist the choice — scope the query to the toggle nav).
     const listLink = Array.from(

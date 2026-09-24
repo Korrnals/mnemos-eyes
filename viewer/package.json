@@ -20,7 +20,9 @@
     "codegen": "bash scripts/codegen.sh",
     "codegen:offline": "bash scripts/codegen.sh --from-snapshot",
     "codegen:board": "bash scripts/codegen-board.sh",
-    "codegen:board:offline": "bash scripts/codegen-board.sh --from-snapshot"
+    "codegen:board:offline": "bash scripts/codegen-board.sh --from-snapshot",
+    "sync-docs": "python3 ../scripts/sync_docs.py sync",
+    "docs:drift": "python3 ../scripts/sync_docs.py --check-drift"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -36,10 +38,14 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.46.0",
+    "mermaid": "11.17.2",
+    "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "react-router": "^7.18.4",
+    "rehype-raw": "7.0.0",
+    "rehype-sanitize": "6.0.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.7.0"
   },

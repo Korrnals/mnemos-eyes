@@ -131,6 +131,65 @@ class TestTaskCrudApi:
         assert r.status_code == 404
 
 
+class TestTaskDetailGet:
+    """BE-16: GET /api/tasks/{task_id} resolves a task by id for BOTH
+    active and archived rows with the SAME TaskOut shape — the server fix
+    that lets the SPA drop its archive-list probe (UI-18 pair 4).
+
+    Regression triple: archived task resolvable by id (no shape
+    divergence), active-task response byte-identical to the shipped
+    TaskOut, unknown id still 404. Reads stay open: no token and any
+    token class must pass exactly as for the other task reads."""
+
+    def test_active_task_byte_identical_to_created_and_board(
+            self, client, auth, make_task):
+        task = make_task(title="detail-active")
+        r = client.get(f"/api/tasks/{task['id']}")
+        assert r.status_code == 200, r.text
+        # byte-identical to the TaskOut the create call already returned…
+        assert r.json() == task
+        # …and to the board projection of the same row
+        board_row = next(t for t in client.get("/api/board").json()["tasks"]
+                         if t["id"] == task["id"])
+        assert r.json() == board_row
+
+    def test_archived_task_resolvable_same_shape(
+            self, client, auth, make_task):
+        active = make_task(title="detail-shape-ref")
+        task = make_task(title="detail-archived")
+        assert client.post(f"/api/tasks/{task['id']}/archive",
+                           headers=auth).status_code == 200
+
+        r = client.get(f"/api/tasks/{task['id']}")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["archived"] == 1
+        assert body["archived_from"] == task["col"]
+
+        # no shape divergence: identical key set as an active detail…
+        active_body = client.get(f"/api/tasks/{active['id']}").json()
+        assert set(body) == set(active_body)
+        # …and byte-identical to the archive-list item the SPA probe
+        # (UI-18 pair 4) used to search client-side — the client can drop
+        # the probe without a single new conditional beyond 404.
+        archive_items = client.get("/api/archive?limit=200").json()["items"]
+        assert body == next(i for i in archive_items
+                            if i["id"] == task["id"])
+
+    def test_detail_get_open_without_token(self, client, make_task):
+        task = make_task(title="detail-no-token")
+        assert client.get(f"/api/tasks/{task['id']}").status_code == 200
+
+    def test_detail_get_open_for_machine_token(self, client, auth,
+                                               make_task):
+        task = make_task(title="detail-machine-read")
+        r = client.get(f"/api/tasks/{task['id']}", headers=auth)
+        assert r.status_code == 200
+
+    def test_missing_task_404(self, client):
+        assert client.get("/api/tasks/no-such-id").status_code == 404
+
+
 class TestBE1InvalidEnvIs422Never500:
     """BE-1: store-level ValueError (unknown env / col) must surface as
     HTTP 422 from POST and PATCH, never as an unhandled 500."""
@@ -190,3 +249,69 @@ class TestAgentsAreHarnessesNotRoles:
                          json={"agents": ["zcode", "hermes"]}, headers=auth)
         assert r.status_code == 200
         assert r.json()["agents"] == ["zcode", "hermes"]
+
+
+class TestUnknownFieldsRejected422:
+    """BE-15 (QA lesson 2026-09-22): unknown keys used to be silently
+    dropped (pydantic default) — a client sending ``description`` got 200
+    and the text vanished. Honest contract: unknown keys answer 422 naming
+    the offending field. Declared-but-ignored legacy keys (Create.id,
+    Patch.col) stay tolerated — pinned in test_task_status_field.py and
+    test_task_priority_edit_window.py."""
+
+    def test_create_unknown_field_422_names_it(self, client, auth):
+        r = client.post("/api/tasks",
+                        json={"title": "x", "description": "junk"},
+                        headers=auth)
+        assert r.status_code == 422
+        assert "description" in r.text
+
+    def test_patch_unknown_field_422_names_it(self, client, auth, make_task):
+        task = make_task(title="be15-patch")
+        r = client.patch(f"/api/tasks/{task['id']}",
+                         json={"description": "junk"}, headers=auth)
+        assert r.status_code == 422
+        assert "description" in r.text
+
+    def test_create_accepts_every_known_field(self, client, auth):
+        r = client.post("/api/tasks", json={
+            "title": "be15 full", "summary": "sum", "spec": "spec",
+            "col": "open", "status": "open", "priority": "high",
+            "env": "laptop", "agents": ["zcode"], "specialists": ["@GCW: QA"],
+            "project": "be15", "memory_ids": ["m-1"],
+            "mnemos_tags": ["be15"],
+        }, headers=auth)
+        assert r.status_code == 201, r.text
+        body = r.json()
+        client.delete(f"/api/tasks/{body['id']}", headers=auth)
+        for key, expected in (("summary", "sum"), ("spec", "spec"),
+                              ("col", "open"), ("status", "open"),
+                              ("priority", "high"), ("env", "laptop"),
+                              ("agents", ["zcode"]),
+                              ("specialists", ["@GCW: QA"]),
+                              ("project", "be15"),
+                              ("memory_ids", ["m-1"]),
+                              ("mnemos_tags", ["be15"])):
+            assert body[key] == expected, key
+
+    def test_patch_accepts_every_content_field(self, client, auth, make_task):
+        task = make_task(title="be15 patch-all")
+        r = client.patch(f"/api/tasks/{task['id']}", json={
+            "title": "be15 patched", "summary": "sum2", "spec": "spec2",
+            "priority": "low", "env": "local", "agents": ["hermes"],
+            "specialists": ["@GCW: Tech Lead"], "project": "be15b",
+            "memory_ids": [], "mnemos_tags": [],
+        }, headers=auth)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["title"] == "be15 patched"
+        assert body["env"] == "local"
+        assert body["agents"] == ["hermes"]
+
+    def test_patch_partial_does_not_break(self, client, auth, make_task):
+        task = make_task(title="be15 partial", summary="keep me")
+        r = client.patch(f"/api/tasks/{task['id']}",
+                         json={"summary": "only this"}, headers=auth)
+        assert r.status_code == 200, r.text
+        assert r.json()["summary"] == "only this"
+        assert r.json()["title"] == "be15 partial"

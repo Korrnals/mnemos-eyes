@@ -368,6 +368,9 @@ describe("BoardAdapter wire contract", () => {
         status: "published",
         created_at: "2026-09-19T10:00:00Z",
         server: "stub-store",
+        // Content fragment (server b1030b0): ≤400-char preview, null when
+        // the memory has no body — tunneled verbatim by normalizePulse.
+        content: "Shell plan fragment: converge the card rhythm first.",
       },
       {
         id: "mem-stub-002",
@@ -376,6 +379,7 @@ describe("BoardAdapter wire contract", () => {
         status: "processed",
         created_at: "2026-09-19T09:30:00Z",
         server: "stub-store",
+        content: null, // honest absence (no body on that memory)
       },
     ],
     per_server: [{ server: "stub-store", ok: true, items: 2, detail: null }],
@@ -685,19 +689,31 @@ describe("BoardAdapter Ф2 task reads (recorded corpus)", () => {
     expect(page.projects.mnemos).toHaveLength(1);
   });
 
-  it("taskById: picks the row from the board projection, 404 when absent", async () => {
-    const fetchMock = respondingFetch({
-      columns: ["open", "in-progress"],
-      tasks: [CORPUS_BOARD_TASK],
-      counts: { open: 0, "in-progress": 1 },
-    });
+  it("taskById: direct GET /api/tasks/{id}, one shape for active AND archived, 404 when absent", async () => {
+    // BE-16 wire: the single GET resolves both states server-side, so the
+    // adapter just passes the TaskOut through — no board pick, no archive
+    // probe. First call answers with an ACTIVE row, second with an
+    // ARCHIVED one, third 404s.
+    const fetchMock = vi.fn(
+      async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+        const path = String(url);
+        if (path.endsWith("/api/tasks/T6")) return jsonResponse(CORPUS_BOARD_TASK);
+        if (path.endsWith("/api/tasks/RB-1")) return jsonResponse(CORPUS_ARCHIVED_ROW);
+        return jsonResponse({ detail: "task not found" }, 404);
+      },
+    );
     const adapter = new BoardAdapter({
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
     const task = await adapter.taskById("T6");
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/tasks/T6");
     expect(task.id).toBe("T6");
     expect(task.priority).toBe("normal");
+
+    const archived = await adapter.taskById("RB-1");
+    expect((fetchMock.mock.calls[1] as [string])[0]).toBe("/api/tasks/RB-1");
+    expect(archived.archived).toBe(1);
 
     const error = (await adapter.taskById("NOPE").catch((e: unknown) => e)) as ApiError;
     expect(error).toBeInstanceOf(ApiError);

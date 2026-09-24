@@ -274,7 +274,8 @@ describe("parseBoardEvent — executor.* presence family (AGW-1)", () => {
           state: "approved",
         }),
       );
-      if (bare.kind !== "executor.registered" && bare.kind !== "executor.deleted") return;
+      if (bare.kind !== "executor.registered" && bare.kind !== "executor.deleted")
+        return;
       expect("notification" in bare).toBe(false);
     }
   });
@@ -282,23 +283,31 @@ describe("parseBoardEvent — executor.* presence family (AGW-1)", () => {
   it("classifies truncated/broken executor frames as malformed", () => {
     // No executor row.
     expect(
-      parseIgnored('{"kind":"executor.online","state":"online","last_seen_at":"x"}').reason,
+      parseIgnored('{"kind":"executor.online","state":"online","last_seen_at":"x"}')
+        .reason,
     ).toBe("malformed-payload");
     // No transition state.
     expect(
-      parseIgnored(
-        JSON.stringify({ kind: "executor.updated", executor: EXECUTOR }),
-      ).reason,
+      parseIgnored(JSON.stringify({ kind: "executor.updated", executor: EXECUTOR }))
+        .reason,
     ).toBe("malformed-payload");
     // Presence kinds refuse to parse without their timestamp (§5.2).
     expect(
       parseIgnored(
-        JSON.stringify({ kind: "executor.online", executor: EXECUTOR, state: "online" }),
+        JSON.stringify({
+          kind: "executor.online",
+          executor: EXECUTOR,
+          state: "online",
+        }),
       ).reason,
     ).toBe("malformed-payload");
     expect(
       parseIgnored(
-        JSON.stringify({ kind: "executor.offline", executor: EXECUTOR, state: "offline" }),
+        JSON.stringify({
+          kind: "executor.offline",
+          executor: EXECUTOR,
+          state: "offline",
+        }),
       ).reason,
     ).toBe("malformed-payload");
   });
@@ -326,7 +335,11 @@ describe("parseBoardEvent — automation.rule.* family (SCHED-1, ADR 0013 §4)",
 
   it("parses created/updated/toggled/deleted with rule_kind + row (+changes)", () => {
     const created = parseEvent(
-      JSON.stringify({ kind: "automation.rule.created", rule_kind: "schedule", rule: RULE }),
+      JSON.stringify({
+        kind: "automation.rule.created",
+        rule_kind: "schedule",
+        rule: RULE,
+      }),
     );
     if (created.kind !== "automation.rule.created") return;
     expect(created.rule_kind).toBe("schedule");
@@ -354,7 +367,8 @@ describe("parseBoardEvent — automation.rule.* family (SCHED-1, ADR 0013 §4)",
       parseIgnored('{"kind":"automation.rule.deleted","rule_kind":"schedule"}').reason,
     ).toBe("malformed-payload"); // no rule row
     expect(
-      parseIgnored('{"kind":"automation.rule.enabled","rule_kind":"x","rule":{}}').reason,
+      parseIgnored('{"kind":"automation.rule.enabled","rule_kind":"x","rule":{}}')
+        .reason,
     ).toBe("unknown-kind"); // enabled/disabled are NOT kinds — toggled is one
   });
 });
@@ -437,7 +451,11 @@ describe("EventStream wiring", () => {
 
 describe("enrollment.* (AGW-5 phase 2, ui-contract §11)", () => {
   it("parses created/revoked/expired on the enrollment_id alone", () => {
-    for (const kind of ["enrollment.created", "enrollment.revoked", "enrollment.expired"]) {
+    for (const kind of [
+      "enrollment.created",
+      "enrollment.revoked",
+      "enrollment.expired",
+    ]) {
       const parsed = parseBoardEvent(JSON.stringify({ kind, enrollment_id: "enr-1" }));
       expect(parsed.status).toBe("event");
       if (parsed.status !== "event") continue;
@@ -490,5 +508,167 @@ describe("enrollment.* (AGW-5 phase 2, ui-contract §11)", () => {
     expect(parsed.status).toBe("event");
     if (parsed.status !== "event") return;
     expect(JSON.stringify(parsed.event)).not.toContain("mne_leak");
+  });
+});
+
+describe("harness.* (wave 3C, ui-contract §11 дополнение)", () => {
+  it("parses added WITH the full dictionary row", () => {
+    const row = {
+      name: "myagent",
+      added_at: "2026-09-22T00:00:00+00:00",
+      added_via: "owner",
+      note: "custom executor",
+    };
+    const parsed = parseBoardEvent(
+      JSON.stringify({ kind: "harness.added", harness: row }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({ kind: "harness.added", harness: row });
+  });
+
+  it("an added frame WITHOUT the row is malformed, not thin", () => {
+    const parsed = parseBoardEvent(JSON.stringify({ kind: "harness.added" }));
+    expect(parsed).toMatchObject({ status: "ignored", reason: "malformed-payload" });
+  });
+
+  it("parses removed on the name alone", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({ kind: "harness.removed", name: "myagent" }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({ kind: "harness.removed", name: "myagent" });
+  });
+
+  it("a removed frame WITHOUT the name is malformed", () => {
+    const parsed = parseBoardEvent(JSON.stringify({ kind: "harness.removed" }));
+    expect(parsed).toMatchObject({ status: "ignored", reason: "malformed-payload" });
+  });
+});
+
+describe("provisioning.* (AGW-11, ui-contract §11 дополнение)", () => {
+  it("parses created with the host:port + enrollment link", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.created",
+        job_id: "pj-1",
+        host: "vps-1",
+        port: 22,
+        enrollment_id: "enr-1",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({
+      kind: "provisioning.created",
+      job_id: "pj-1",
+      host: "vps-1",
+      port: 22,
+      enrollment_id: "enr-1",
+    });
+  });
+
+  it("parses progress with the live state + step text", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.progress",
+        job_id: "pj-1",
+        state: "installing",
+        step: "running the bootstrap one-liner (pinned TLS)",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({
+      kind: "provisioning.progress",
+      job_id: "pj-1",
+      state: "installing",
+      step: "running the bootstrap one-liner (pinned TLS)",
+    });
+  });
+
+  it("parses ok with the minted executor link; failed with the typed code", () => {
+    const ok = parseBoardEvent(
+      JSON.stringify({ kind: "provisioning.ok", job_id: "pj-1", executor_id: "exec-9" }),
+    );
+    expect(ok.status).toBe("event");
+    if (ok.status !== "event") return;
+    expect(ok.event).toMatchObject({
+      kind: "provisioning.ok",
+      job_id: "pj-1",
+      executor_id: "exec-9",
+    });
+    const failed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.failed",
+        job_id: "pj-1",
+        error_code: "ssh.sudo_required",
+        detail: "sudo -n preflight failed",
+      }),
+    );
+    expect(failed.status).toBe("event");
+    if (failed.status !== "event") return;
+    expect(failed.event).toMatchObject({
+      kind: "provisioning.failed",
+      job_id: "pj-1",
+      error_code: "ssh.sudo_required",
+      detail: "sudo -n preflight failed",
+    });
+  });
+
+  it("parses repinned on the host:port identity + fingerprint (no job_id)", () => {
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.repinned",
+        host: "vps-1",
+        port: 22,
+        fingerprint: "SHA256:abc",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    expect(parsed.event).toMatchObject({
+      kind: "provisioning.repinned",
+      host: "vps-1",
+      port: 22,
+      fingerprint: "SHA256:abc",
+    });
+  });
+
+  it("frames missing their mandatory fields are malformed, not thin", () => {
+    for (const frame of [
+      { kind: "provisioning.created", job_id: "pj-1" },
+      { kind: "provisioning.progress", job_id: "pj-1", state: "installing" },
+      { kind: "provisioning.ok", job_id: "pj-1" },
+      { kind: "provisioning.failed", job_id: "pj-1" },
+      { kind: "provisioning.repinned", host: "vps-1" },
+    ]) {
+      expect(parseBoardEvent(JSON.stringify(frame))).toMatchObject({
+        status: "ignored",
+        reason: "malformed-payload",
+      });
+    }
+  });
+
+  it("no secret material is allowed to ride ANY provisioning frame", () => {
+    // Contractual (design §B transit invariant): the parser passes frames
+    // through, so the EXCLUSION test is on the parsed shape — only the
+    // declared fields may exist, an injected token/secret never lands.
+    const parsed = parseBoardEvent(
+      JSON.stringify({
+        kind: "provisioning.progress",
+        job_id: "pj-1",
+        state: "installing",
+        step: "…",
+        token: "mne_leak",
+        secret: "ssh-key-material",
+      }),
+    );
+    expect(parsed.status).toBe("event");
+    if (parsed.status !== "event") return;
+    const wire = JSON.stringify(parsed.event);
+    expect(wire).not.toContain("mne_leak");
+    expect(wire).not.toContain("ssh-key-material");
   });
 });

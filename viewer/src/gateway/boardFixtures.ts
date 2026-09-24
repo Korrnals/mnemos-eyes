@@ -2,11 +2,13 @@ import type {
   ArchivePage,
   AssignmentItem,
   AssignmentsPage,
+  AutomationSettings,
   AutomationStatus,
   BoardSummary,
   ExecutionSettings,
   ExecutorItem,
   ExecutorsPage,
+  HarnessItem,
   HookRule,
   LaunchRow,
   ScheduleRule,
@@ -539,13 +541,16 @@ export const MOCK_INBOX: TaskInbox = {
       title: "Спроектировать PWA-минимум для /app",
       excerpt: "manifest + theme-color + иконки 192/512 + passthrough SW…",
       tags: ["project:vesmaro", "task:queue"],
-      priority: "normal",
+      // UI-25: pre-adoption owner edit — the row fields already carry the
+      // EFFECTIVE projection (priority raised); `edits` names the overlay.
+      priority: "high",
       specialist: "",
       created_at: "2026-09-17T16:30:00+00:00",
       last_seen: "2026-09-19T09:00:00+00:00",
       stale: false,
       adopted: false,
       adopted_task_id: null,
+      edits: { priority: "high" },
     },
     {
       memory_id: "d41b22c4-6b55-4cc8-8e1f-7a8b3c4d5e6f",
@@ -739,6 +744,33 @@ export const MOCK_EXECUTORS_PAGE: ExecutorsPage = {
   items: MOCK_EXECUTORS.map((executor) => ({ ...executor })),
   meta: MOCK_EXECUTORS_META,
 };
+
+/**
+ * Harness dictionary corpus (wave 3C, design 2026-09-22 §C) — the
+ * playground's START state: exactly the server's boot seed (10 rows,
+ * added_via 'seed'). This is FIXTURE data for the mock adapter, not a
+ * mirror of a UI constant: the live dictionary is `MockAdapter` state
+ * mutated through createHarness/deleteHarness, and the real UI reads
+ * GET /api/harnesses. The former closed-set mirror module is DELETED
+ * (the drift class died with the dictionary).
+ */
+export const MOCK_HARNESSES: HarnessItem[] = [
+  "aider",
+  "claude-code",
+  "cline",
+  "continue",
+  "copilot",
+  "cursor",
+  "hermes",
+  "pi",
+  "windsurf",
+  "zcode",
+].map((name) => ({
+  name,
+  added_at: "2026-09-22T00:00:00+00:00",
+  added_via: "seed",
+  note: "",
+}));
 
 /**
  * Assignment queue corpus — all 7 lifecycle states, plus queued rows
@@ -1085,18 +1117,36 @@ export const MOCK_LAUNCHES: LaunchRow[] = [
   },
 ];
 
-/** Status projection — engine false is the honest S1 constant (no loop). */
+/**
+ * Kill-switch + daily cap starting values — the store defaults VERBATIM
+ * (store.py ADR 0013 §6: enabled=false disable-by-default C-1,
+ * cap=AUTOMATION_DEFAULT_GLOBAL_CAP=10, clamp 1..1000).
+ */
+export const MOCK_AUTOMATION_SETTINGS: AutomationSettings = {
+  ok: true,
+  enabled: false,
+  cap_global_per_day: 10,
+};
+
+/**
+ * Status projection — engine false is the honest S1 constant (no loop).
+ * `global_kill_switch`/`daily_cap` are overridden by MockAdapter from the
+ * LIVE settings pair (server parity); the values here are the same store
+ * defaults, kept only as the static fallback shape.
+ */
 export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
   ok: true,
   engine: false,
   global_kill_switch: false,
-  daily_cap: 50,
+  daily_cap: 10,
   daily_used: 0,
   // condition_meta mirrors the SERVER dictionaries VERBATIM
   // (store.RULE_CONDITION_FIELD_ENUMS / HOOK_EVENT_WHITELIST): fields with
   // closed enums get values_hint; project/specialist/executor_id are
-  // free-form (null); harness joins through KNOWN_HARNESSES. The form is
-  // BUILT from it, never from UI constants (review SCHED-1-UI P2-1).
+  // free-form (null); harness joins through the harness DICTIONARY corpus
+  // (wave 3C — MockAdapter.automationStatus re-derives the live list from
+  // its dictionary state). The form is BUILT from it, never from UI
+  // constants (review SCHED-1-UI P2-1).
   condition_meta: {
     fields: [
       "col",
@@ -1112,21 +1162,18 @@ export const MOCK_AUTOMATION_STATUS: AutomationStatus = {
     ],
     ops: ["eq", "ne"],
     values_hint: {
-      col: ["backlog", "validating", "open", "in-progress", "blocked", "resolved", "done"],
+      col: [
+        "backlog",
+        "validating",
+        "open",
+        "in-progress",
+        "blocked",
+        "resolved",
+        "done",
+      ],
       env: ["cluster", "laptop", "local", "cloud", "unknown"],
       executor_id: null,
-      harness: [
-        "zcode",
-        "hermes",
-        "pi",
-        "copilot",
-        "claude-code",
-        "cursor",
-        "aider",
-        "continue",
-        "cline",
-        "windsurf",
-      ],
+      harness: MOCK_HARNESSES.map((harness) => harness.name),
       priority: ["critical", "high", "normal", "low"],
       project: null,
       specialist: null,

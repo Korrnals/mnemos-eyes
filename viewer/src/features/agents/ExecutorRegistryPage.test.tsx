@@ -11,6 +11,8 @@ import { GatewayContext } from "@/gateway/GatewayContext";
 import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
+import { actFlush, actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * `/agents/harnesses` integration (AGW-4): the REAL MockAdapter registry
@@ -23,6 +25,7 @@ import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 
 async function mountPage(
   seedEmpty = false,
+  path = "/agents/harnesses",
 ): Promise<{ root: Root; container: HTMLElement; gateway: MockAdapter }> {
   const gateway = new MockAdapter({ latency: false });
   if (seedEmpty) {
@@ -46,7 +49,7 @@ async function mountPage(
           <ToastProvider>
             <UiTokenProvider>
               <I18nProvider initialLang="en">
-                <MemoryRouter initialEntries={["/agents/harnesses"]}>
+                <MemoryRouter initialEntries={[path]}>
                   <ExecutorRegistryPage />
                 </MemoryRouter>
               </I18nProvider>
@@ -58,7 +61,7 @@ async function mountPage(
   });
   // The registry loads through the REAL query path (no seeded cache) —
   // wait for the skeleton to resolve into bands or the honest empty state.
-  await vi.waitFor(() => {
+  await actWaitUntil(() => {
     const text = container.textContent ?? "";
     expect(text.includes("Awaiting approval") || text.includes("No executors connected")).toBe(
       true,
@@ -137,7 +140,7 @@ describe("Registry bands (layer order)", () => {
     const revoked = band(container, "Revoked")!;
     expect(revoked.textContent).toContain("copilot@old-host");
     expect(revoked.textContent).toContain("trust is not restorable");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("every row wears the unverified identity chip; capabilities are chips", async () => {
@@ -155,7 +158,7 @@ describe("Registry bands (layer order)", () => {
     expect(connected.textContent).toContain("@GCW: Senior Frontend Developer");
     // The zero-capability row says so instead of an empty group.
     expect(connected.textContent).toContain("no capabilities declared");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -169,7 +172,7 @@ describe("Registry management (gated write path)", () => {
     await act(async () => {
       approve.click();
     });
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(band(container, "Awaiting approval")).toBeNull();
     });
     // The row landed in the connected band, disabled (honest approve).
@@ -178,17 +181,17 @@ describe("Registry management (gated write path)", () => {
     const row = (await gateway.listExecutors()).items.find((r) => r.id === "exec-copilot-pending");
     expect(row?.state).toBe("approved");
     expect(row?.enabled).toBe(false);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("enable/disable toggles the routing flag through the same path", async () => {
     const { root, container, gateway } = await mountPage();
     await menuAction(container, "zcode@laptop", "Disable");
-    await vi.waitFor(async () => {
+    await actWaitUntil(async () => {
       const page = await gateway.listExecutors();
       expect(page.items.find((r) => r.id === "exec-laptop-zcode")?.enabled).toBe(false);
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("revoke confirms the terminal honesty, then the row goes dead", async () => {
@@ -198,11 +201,11 @@ describe("Registry management (gated write path)", () => {
     expect(confirmSpy).toHaveBeenCalledWith(
       expect.stringContaining("Trust is not restorable"),
     );
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       const revoked = band(container, "Revoked")!;
       expect(revoked.textContent).toContain("hermes@laptop");
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("delete confirm carries the hard-removal honesty; the row disappears", async () => {
@@ -215,24 +218,24 @@ describe("Registry management (gated write path)", () => {
     expect(confirmSpy).toHaveBeenCalledWith(
       expect.stringContaining("name is freed for re-registration"),
     );
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(band(container, "Revoked")).toBeNull();
     });
     expect(
       (await gateway.listExecutors()).items.some((r) => r.id === "exec-copilot-revoked"),
     ).toBe(false);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a declined confirm touches nothing", async () => {
     const { root, container, gateway } = await mountPage();
     stubConfirm(false);
     await menuAction(container, "zcode@laptop", "Delete");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await actFlush();
     expect(
       (await gateway.listExecutors()).items.some((r) => r.id === "exec-laptop-zcode"),
     ).toBe(true);
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -243,7 +246,7 @@ describe("Empty registry and the connect guide", () => {
     expect(container.textContent).toContain("connect the first one");
     // No bands render for an empty registry (no zero furniture).
     expect(band(container, "Awaiting approval")).toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the connect guide is always available; it expands into 5 steps", async () => {
@@ -256,8 +259,96 @@ describe("Empty registry and the connect guide", () => {
       toggle.click();
     });
     expect(container.querySelectorAll("ol li")).toHaveLength(5);
-    expect(container.textContent).toContain("machine-class API");
-    root.unmount();
+    // Connect hotfix: the guide teaches the ONE-command flow, not the old
+    // manual runbook.
+    expect(container.textContent).toContain("ONE command");
+    expect(container.textContent).toContain("deploy/poller/REMOTE-EXECUTOR.md");
+    await actUnmount(root);
+  });
+});
+
+describe("AGW-6 link check + settings card", () => {
+  it("«Check connection» in the row menu invalidates the registry and shows the verdict + disclaimer", async () => {
+    const { root, container, gateway } = await mountPage();
+    const spy = vi.spyOn(gateway, "listExecutors");
+    const callsBefore = spy.mock.calls.length;
+    const row = [...band(container, "Connected")!.querySelectorAll("li")].find((li) =>
+      li.textContent?.includes("zcode@laptop"),
+    )!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 50 }),
+      );
+    });
+    const item = [...row.querySelectorAll<HTMLButtonElement>("[role='menuitem']")].find(
+      (button) => button.textContent?.includes("Check connection"),
+    );
+    expect(item).toBeDefined();
+    await act(async () => {
+      item!.click();
+    });
+    // The verdict renders INSIDE the open popup, the disclaimer rides under
+    // it, and the "check" actually refetched the registry (no fake ping).
+    expect(row.textContent).toContain("The board never pings agents (outbound-only)");
+    expect(row.querySelector("[data-testid='link-verdict-exec-laptop-zcode']")).not.toBeNull();
+    await actWaitUntil(() => {
+      expect(spy.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+    await actUnmount(root);
+  });
+
+  it("a revoked row has NO check item; its menu opens the read-only settings card", async () => {
+    const { root, container } = await mountPage();
+    const revoked = band(container, "Revoked")!;
+    const row = [...revoked.querySelectorAll("li")].find((li) =>
+      li.textContent?.includes("copilot@old-host"),
+    )!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 50 }),
+      );
+    });
+    const items = [...row.querySelectorAll<HTMLButtonElement>("[role='menuitem']")];
+    expect(items.some((button) => button.textContent?.includes("Check connection"))).toBe(false);
+    const card = items.find((button) => button.textContent?.includes("Settings card"));
+    expect(card).toBeDefined();
+    await act(async () => {
+      card!.click();
+    });
+    // Radix portals the drawer into the body.
+    await actWaitUntil(() => {
+      expect(document.body.textContent).toContain("Executor card");
+    });
+    expect(document.body.textContent).toContain("read-only except Delete");
+    expect(document.body.textContent).toContain("revoked — presence is gone");
+    await actUnmount(root);
+  });
+
+  it("the #executor-sheet-<id> hash deep-link opens the card (the enrollment «Open card» target)", async () => {
+    const { root, container } = await mountPage(
+      false,
+      "/agents/harnesses#executor-sheet-exec-laptop-zcode",
+    );
+    await actWaitUntil(() => {
+      expect(document.body.textContent).toContain("Executor card");
+    });
+    expect(document.body.textContent).toContain("silently desync the board from poller.yaml");
+    // The scroll-into-view hash (#executor-<id>) must NOT open the card.
+    expect(container.textContent).not.toContain("read-only except Delete");
+    await actUnmount(root);
+  });
+
+  it("P3: %-garbage in either hash form never takes the page down", async () => {
+    // Both decode sites (scroll + card deep-link) must swallow the URIError.
+    const { root, container } = await mountPage(false, "/agents/harnesses#executor-sheet-%zz");
+    await actWaitUntil(() => {
+      expect(container.textContent).toContain("Awaiting approval");
+    });
+    expect(document.body.textContent).not.toContain("Executor card");
+    const scroll = await mountPage(false, "/agents/harnesses#executor-%zz");
+    expect(scroll.container.textContent).toContain("Awaiting approval");
+    await actUnmount(scroll.root);
+    await actUnmount(root);
   });
 });
 
@@ -286,6 +377,6 @@ describe("AGW-5 registry row context menu", () => {
     expect(items.some((text) => text?.includes("Delete"))).toBe(true);
     // The registry rows never carry the strip's «Open registry» escape.
     expect(items.some((text) => text?.includes("Open registry"))).toBe(false);
-    root.unmount();
+    await actUnmount(root);
   });
 });

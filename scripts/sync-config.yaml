@@ -1,0 +1,471 @@
+# ============================================================================
+# Docs upstream import — L1 configuration (ARCHCOM-7 contract 2026-09-23,
+# §2 layers, §3 selection matrix). Consumed by scripts/sync_docs.py.
+#
+# Layers: L0 = local clones pinned by `ref` (full SHA, honestly pinned —
+# sync FAILS if a clone has tracked modifications). L1 = this file + the
+# script (selection, normalization, overlays, link rewriting, vendoring).
+# L2 = generated corpus under viewer/src/features/docs/content/upstream/
+# plus vendored assets and the provenance/sidecar manifests. L2 is
+# read-only for humans: style changes go through `overlays` here; an
+# overlay anchor that no longer matches = sync failure (upstream drift
+# signal, contract §6.3).
+#
+# Selection rule (contract §6.6): ONLY `include` entries are generated.
+# `exclude` entries document why a path stays out; the script refuses a
+# config where an include matches an exclude.
+# ============================================================================
+
+projects:
+  # ---------------------------------------------------------------- mnemos ---
+  mnemos:
+    repo: ../mnemos
+    # Pinned 2026-09-23 (wave W1a). Re-pin deliberately: update the SHA,
+    # re-run `npm run sync-docs`, diff-review the corpus (Docs Writer).
+    ref: 23f0fce42ea87c329d4049397292b3dca948773c
+    # Non-docs links (CONTRIBUTING.md, config.example.yaml, …) are rewritten
+    # to this template at the pinned SHA; {sha} is substituted.
+    web_base: "https://github.com/vesmaro/vesmaro/blob/{sha}"
+    locale_dirs:
+      en: docs/en
+      ru: docs/ru
+    include:
+      # --- user/ — целиком, 10 файлов (контракт §3, строка 1). -------------
+      # note: — кураторское интро W2 (единственное место пересказа; тело
+      # апстрима не редактируется, контракт §2). Фронтенд показывает его
+      # блоккетом под banner'ом GENERATED.
+      - path: user/getting-started.md
+        category: mnemos-user
+        order: 1
+        note:
+          en: >-
+            Curator: the complete first run of Mnemos — one-line install,
+            first memory, first search, connecting an agent harness.
+          ru: >-
+            Куратор: полный первый прогон mnemos — установка одной командой,
+            первая запись, первый поиск, подключение агента-харнеса.
+      - path: user/integration-guide.md
+        category: mnemos-user
+        order: 2
+        note:
+          en: >-
+            Curator: behavioral triggers that make agents actually use the
+            memory — session-start recall, checkpoints, mandatory tags.
+          ru: >-
+            Куратор: поведенческие триггеры, которые заставляют агентов
+            реально пользоваться памятью, — recall в начале сессии,
+            чекпоинты, обязательные теги.
+      - path: user/sync.md
+        category: mnemos-user
+        order: 3
+        note:
+          en: >-
+            Curator: offline batch sync between two Mnemos instances via
+            cron and rsync — Mnemos itself makes no network calls.
+          ru: >-
+            Куратор: офлайн-синхронизация двух инстансов mnemos по cron
+            и rsync — mnemos сам сетевых вызовов не делает.
+      - path: user/context-filter.md
+        category: mnemos-user
+        order: 4
+        note:
+          en: >-
+            Curator: the five-stage pipeline cleaning raw content before a
+            model sees it — what the board shows as «raw → processed».
+          ru: >-
+            Куратор: пятиступенчатый конвейер очистки сырья до подачи в
+            модель — то, что борд показывает как «сырое → обработано».
+      - path: user/tag-contract.md
+        category: mnemos-user
+        order: 5
+        note:
+          en: >-
+            Curator: the mandatory tag schema of Mnemos — prefixes, allowed
+            values, migration; the board's «Mnemos tags» field follows it.
+          ru: >-
+            Куратор: обязательная схема тегов mnemos — префиксы, допустимые
+            значения, миграция; поле «Теги mnemos» у задач борда живёт по
+            этому контракту.
+      - path: user/metrics.md
+        category: mnemos-user
+        order: 6
+        note:
+          en: >-
+            Curator: the three HTTP endpoints behind the board's «Пульс»
+            feed and overview stats, plus a Prometheus exposition.
+          ru: >-
+            Куратор: три HTTP-эндпоинта, на которых держатся «Пульс» и
+            статистика «Обзора» борда, плюс Prometheus-экспозиция.
+      - path: user/export-import.md
+        category: mnemos-user
+        order: 7
+        note:
+          en: >-
+            Curator: backup, move, and restore Mnemos memories via CLI or
+            HTTP API — JSON with metadata or full SQLite snapshots.
+          ru: >-
+            Куратор: резервные копии и перенос записей mnemos через CLI
+            или HTTP API — JSON с метаданными или полные SQLite-снимки.
+      - path: user/cli-reference.md
+        category: mnemos-user
+        order: 8
+        note:
+          en: >-
+            Curator: complete reference for the mnemos CLI — every
+            subcommand with runnable examples.
+          ru: >-
+            Куратор: полный справочник CLI mnemos — все подкоманды
+            с запускабельными примерами.
+      - path: user/http-api.md
+        category: mnemos-user
+        order: 9
+        note:
+          en: >-
+            Curator: the full HTTP surface of Mnemos — memory, search,
+            pipeline, DLQ, traces, A2A sessions; the requests the board
+            makes to stores.
+          ru: >-
+            Куратор: полная HTTP-поверхность mnemos — память, поиск,
+            конвейер, DLQ, трассировки, A2A-сессии; именно этими запросами
+            борд читает хранилища.
+      - path: user/mcp-tools.md
+        category: mnemos-user
+        order: 10
+        note:
+          en: >-
+            Curator: all mnemos_* tools for MCP clients — the same layer
+            agents on the board use to work with memory.
+          ru: >-
+            Куратор: все инструменты mnemos_* для MCP-клиентов — тот же
+            слой, через который агенты работают с памятью на борде.
+      # --- admin/ — ФИНАЛЬНЫЙ список W2 (контракт §3: страницы, на которые
+      # --- смотрят наши runbook-страницы; решение по кандидатам — в exclude).
+      - path: admin/security.md
+        category: mnemos-admin
+        order: 1
+        note:
+          en: >-
+            Curator: the Mnemos security posture — TOTP, non-loopback
+            guard, threat model; background for the board's tokens page.
+          ru: >-
+            Куратор: позиция безопасности mnemos — TOTP, не-loopback guard,
+            модель угроз; фон для страницы борда «Токены и доступ».
+      - path: admin/federation.md
+        category: mnemos-admin
+        order: 2
+        note:
+          en: >-
+            Curator: federation on the Mnemos side — per-peer ACL, trigger
+            codes, access log; the foundation of the observed mesh nodes.
+          ru: >-
+            Куратор: федерация на стороне mnemos — per-peer ACL, коды
+            триггера, журнал доступа; фундамент наблюдаемых «Узлов меша».
+      - path: admin/runbooks/install.md
+        category: mnemos-admin
+        order: 3
+        note:
+          en: >-
+            Curator: installing Mnemos — the board's prerequisite: PyPI
+            install, first run, the mnk_… token for the store hookup.
+          ru: >-
+            Куратор: установка mnemos — предпосылка борда: PyPI-установка,
+            первый запуск, токен mnk_… для подключения хранилища.
+      # W2, решение по кандидату: наша backup-restore.md копирует
+      # mnemos.db/vectors.db — апстрим-ранбук про то же, глубже.
+      - path: admin/runbooks/backup-restore.md
+        category: mnemos-admin
+        order: 4
+        note:
+          en: >-
+            Curator: the upstream runbook for backing up and restoring
+            Mnemos data — goes deeper than the board's own backup page.
+          ru: >-
+            Куратор: апстрим-ранбук бэкапа и восстановления данных mnemos —
+            глубже нашей страницы «Бэкап и восстановление».
+      # --- architecture/ — одна обзорная (контракт §3) ---------------------
+      - path: architecture/overview.md
+        category: mnemos-architecture
+        order: 1
+        note:
+          en: >-
+            Curator: how Mnemos is built — hybrid memory, the CLI/HTTP/MCP
+            surfaces, and where vesmaro-eyes fits.
+          ru: >-
+            Куратор: как устроен mnemos — гибридная память, поверхности
+            CLI/HTTP/MCP и место vesmaro-eyes в картине.
+    exclude:
+      # --- W2-решения по висящим слагам (ссылки из включённых страниц) -----
+      - path: architecture/a2a-sessions.md
+        reason: >-
+          решение W2: спека A2A для агентов/MCP-оркестраторов — поверхность
+          разработчика, не операторская; контракт §3 держит architecture/
+          как одну обзорную. Три ссылки из http-api (en+ru) переписаны
+          overlay'ем на GitHub
+      - path: index.md
+        reason: >-
+          апстрим-индекс дублирует хабы борда; хабы проекта строит волна W1c
+      - path: features.md
+        reason: обзорный маркетинг апстрима, дублирует user/ страницы
+      - path: admin/federation-testing.md
+        reason: >-
+          решение W2: QA-гайд проверки федерации перед релизом апстрима —
+          борд только наблюдает узлы меша и федерацию не эксплуатирует;
+          ссылка из admin/federation (en+ru) переписана overlay'ем на GitHub
+      - path: admin/kubernetes-deployment.md
+        reason: >-
+          решение W2: k8s-деплой самого mnemos — вне админ-списка (наш
+          deploy.md ходит в уже развёрнутый mnemos); упоминается только из
+          исключённого container-deployment
+      - path: admin/ssh-sync-hardening.md
+        reason: >-
+          решение W2: усиление ssh-синка апстрима — наши runbook-страницы
+          на него не смотрят
+      - path: admin/runbooks/migrate.md
+        reason: >-
+          решение W2: разовая миграция с ai-brain (проект-предшественник,
+          которого в экосистеме борда нет); ссылка из cli-reference (en+ru)
+          переписана overlay'ем на GitHub
+      - path: admin/runbooks/container-deployment.md
+        reason: >-
+          решение W2: установочный путь апстрима (готовый образ/compose) —
+          наш deploy.md считает mnemos готовой предпосылкой и не смотрит на
+          этот ранбук; шесть входящих ссылок из getting-started/install
+          (en+ru) переписаны overlay'ем на GitHub
+      - path: admin/runbooks/dependency-updates.md
+        reason: >-
+          решение W2: зависимости mnemos обновляют мейнтейнеры апстрима
+          (наш upgrade.md управляет только тегом образа борда); ссылка из
+          getting-started (en+ru) переписана overlay'ем на GitHub
+      - path: admin/runbooks/ci-cd.md
+        reason: CI-рутина релизов апстрима — не для пользователей борда
+      - path: admin/runbooks/pypi-publish.md
+        reason: релизная рутина мейнтейнеров апстрима
+      - path: admin/runbooks/git-workflow-notes.md
+        reason: внутренний процесс разработки апстрима
+      - path: admin/runbooks/edge-stats-maintenance.md
+        reason: узкая операционная рутина апстрима
+      - path: project/
+        reason: >-
+          внутреннее: ADR, планы, отчёты сессий — не пользовательская
+          документация (контракт §3, строка «project/ … нет»)
+      - path: experiments/
+        reason: внутренние эксперименты апстрима (контракт §3)
+    overlays:
+      # Демо-правила W1a (механика якорных замен; тело апстрима не
+      # редактируется вне этого механизма — контракт §2).
+      - file: en/architecture/overview.md
+        find: "A Web UI is planned as a separate project\n(mnemos-eyes)."
+        replace: >-
+          The Web UI for Mnemos is **vesmaro-eyes** — the board that serves
+          this documentation.
+        reason: >-
+          адаптация контекста: читателю указывают на живой борд вместо
+          «запланирован» (решение АРХКОМ-7 о трёхпроектных доках)
+      - file: ru/architecture/overview.md
+        find: "Web UI запланирован как отдельный\nпроект (mnemos-eyes)."
+        replace: >-
+          Web UI для Mnemos — это **vesmaro-eyes**, борд, на котором вы
+          читаете эту документацию.
+        reason: RU-зеркало правила выше
+
+      # --- W2: ссылки на страницы вне селекции → GitHub @ пина (контракт §6.1:
+      # --- ни одного висящего слага в корпусе). Якоря сняты с апстрима @SHA;
+      # --- несовпадение якоря = fail синка (сигнал дрейфа апстрима).
+      # federation-testing — вне селекции (решение W2):
+      - file: en/admin/federation.md
+        find: "[`federation-testing.md`](federation-testing.md)"
+        replace: "[`federation-testing.md`](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/admin/federation-testing.md)"
+        reason: >-
+          federation-testing остаётся в апстриме — QA-гайд релизной проверки
+          федерации, борд федерацию не эксплуатирует
+      - file: ru/admin/federation.md
+        find: "[`federation-testing.md`](federation-testing.md)"
+        replace: "[`federation-testing.md`](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/admin/federation-testing.md)"
+        reason: RU-зеркало правила выше
+      # dependency-updates — вне селекции (решение W2):
+      - file: en/user/getting-started.md
+        find: "[dependency-updates runbook](../admin/runbooks/dependency-updates.md)"
+        replace: "[dependency-updates runbook](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/admin/runbooks/dependency-updates.md)"
+        reason: >-
+          рутина мейнтейнеров апстрима (пины CVE); наш upgrade.md управляет
+          только тегом образа борда
+      - file: ru/user/getting-started.md
+        find: "[ранбук по обновлению зависимостей](../admin/runbooks/dependency-updates.md)"
+        replace: "[ранбук по обновлению зависимостей](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/admin/runbooks/dependency-updates.md)"
+        reason: RU-зеркало правила выше
+      # migrate (ai-brain) — вне селекции (решение W2):
+      - file: en/user/cli-reference.md
+        find: "[runbooks/migrate.md](../admin/runbooks/migrate.md)"
+        replace: "[runbooks/migrate.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/admin/runbooks/migrate.md)"
+        reason: >-
+          разовая миграция с ai-brain, проекта-предшественника; в
+          экосистеме борда его нет
+      - file: ru/user/cli-reference.md
+        find: "[runbooks/migrate.md](../admin/runbooks/migrate.md)"
+        replace: "[runbooks/migrate.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/admin/runbooks/migrate.md)"
+        reason: RU-зеркало правила выше
+      # a2a-sessions — вне селекции (решение W2), 3 ссылки на локаль:
+      - file: en/user/http-api.md
+        find: "The A2A contract is also documented in [a2a-sessions.md](../architecture/a2a-sessions.md) (link to the design rationale)."
+        replace: "The A2A contract is also documented in [a2a-sessions.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/architecture/a2a-sessions.md) (link to the design rationale)."
+        reason: >-
+          спека A2A — поверхность разработчика (контракт §3: architecture =
+          одна обзорная); ссылка ведёт в апстрим @ пина
+      - file: en/user/http-api.md
+        find: "The contract is described in detail in [a2a-sessions.md](../architecture/a2a-sessions.md); this section is the HTTP surface."
+        replace: "The contract is described in detail in [a2a-sessions.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/architecture/a2a-sessions.md); this section is the HTTP surface."
+        reason: то же решение W2, второй анкер
+      - file: en/user/http-api.md
+        find: "- [a2a-sessions.md](../architecture/a2a-sessions.md) — A2A contract and design rationale"
+        replace: "- [a2a-sessions.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/architecture/a2a-sessions.md) — A2A contract and design rationale"
+        reason: то же решение W2, третий анкер
+      - file: ru/user/http-api.md
+        find: "Контракт A2A также описан в [a2a-sessions.md](../architecture/a2a-sessions.md) (ссылка на обоснование дизайна)."
+        replace: "Контракт A2A также описан в [a2a-sessions.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/architecture/a2a-sessions.md) (ссылка на обоснование дизайна)."
+        reason: RU-зеркало правил A2A выше
+      - file: ru/user/http-api.md
+        find: "Контракт подробно описан в [a2a-sessions.md](../architecture/a2a-sessions.md); этот раздел — HTTP-поверхность."
+        replace: "Контракт подробно описан в [a2a-sessions.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/architecture/a2a-sessions.md); этот раздел — HTTP-поверхность."
+        reason: RU-зеркало, второй анкер
+      - file: ru/user/http-api.md
+        find: "- [a2a-sessions.md](../architecture/a2a-sessions.md) — контракт A2A и обоснование дизайна"
+        replace: "- [a2a-sessions.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/architecture/a2a-sessions.md) — контракт A2A и обоснование дизайна"
+        reason: RU-зеркало, третий анкер
+      # container-deployment — вне селекции (решение W2), 6 входящих ссылок:
+      - file: en/user/getting-started.md
+        find: "see [container-deployment.md](../admin/runbooks/container-deployment.md) |"
+        replace: "see [container-deployment.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/admin/runbooks/container-deployment.md) |"
+        reason: >-
+          установочный путь апстрима; наш deploy.md считает mnemos готовой
+          предпосылкой и на этот ранбук не смотрит
+      - file: en/user/getting-started.md
+        find: "Full guide: [container-deployment.md](../admin/runbooks/container-deployment.md)."
+        replace: "Full guide: [container-deployment.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/admin/runbooks/container-deployment.md)."
+        reason: то же решение W2, второй анкер
+      - file: en/admin/runbooks/install.md
+        find: "[container-deployment.md](container-deployment.md)."
+        replace: "[container-deployment.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/en/admin/runbooks/container-deployment.md)."
+        reason: то же решение W2, ссылка из install
+      - file: ru/user/getting-started.md
+        find: "см. [container-deployment.md](../admin/runbooks/container-deployment.md) |"
+        replace: "см. [container-deployment.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/admin/runbooks/container-deployment.md) |"
+        reason: RU-зеркало правил container-deployment выше
+      - file: ru/user/getting-started.md
+        find: "Полное руководство: [container-deployment.md](../admin/runbooks/container-deployment.md)."
+        replace: "Полное руководство: [container-deployment.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/admin/runbooks/container-deployment.md)."
+        reason: RU-зеркало, второй анкер
+      - file: ru/admin/runbooks/install.md
+        find: "[ранбук container-deployment.md](container-deployment.md)."
+        replace: "[ранбук container-deployment.md](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/ru/admin/runbooks/container-deployment.md)."
+        reason: RU-зеркало, ссылка из install
+      # project/adr — вне селекции (контракт §3). Ссылка на КАТАЛОГ (без .md)
+      # не переписывается механизмом ссылок (цель не файл) и остаётся мёртвой
+      # относительной в корпусе — ревью 1.19.0 (АРХКОМ-7): уводим на GitHub
+      # tree @ пина, как остальные ссылки вне селекции.
+      - file: en/user/getting-started.md
+        find: "[project/adr/](../../project/adr/)"
+        replace: "[project/adr/](https://github.com/vesmaro/vesmaro/tree/23f0fce42ea87c329d4049397292b3dca948773c/docs/project/adr)"
+        reason: >-
+          каталог ADR апстрима — вне селекции; мёртвая относительная ссылка
+          на каталог в первой же странице читателя недопустима
+      - file: ru/user/getting-started.md
+        find: "[project/adr/](../../project/adr/)"
+        replace: "[project/adr/](https://github.com/vesmaro/vesmaro/tree/23f0fce42ea87c329d4049397292b3dca948773c/docs/project/adr)"
+        reason: RU-зеркало правила выше
+
+  # ----------------------------------------------------------- mnemos-mesh ---
+  mnemos-mesh:
+    repo: ../mnemos-mesh
+    # Pinned 2026-09-23 (wave W1a).
+    ref: 331ef3a785c1a74fb9f8972ff93cd6db5a8fc174
+    web_base: "https://github.com/Korrnals/mnemos-mesh/blob/{sha}"
+    locale_dirs:
+      en: docs/en
+      # RU — разовый кураторский перевод 4 страниц, волна W3 (контракт §5);
+      # апстрим-зеркала docs/ru у mesh нет.
+    include:
+      # note для mesh — одна RU-строка: тело страницы остаётся EN (под
+      # бейджем «на языке оригинала», контракт §5), интро — голос куратора
+      # к RU-читателю нашего корпуса.
+      - path: user/getting-started.md
+        category: mesh-user
+        order: 1
+        note: >-
+          Куратор: поднять узел mnemos-mesh с нуля — сборка, конфиг двух
+          узлов, запуск и проверка канала федерации.
+      - path: user/configuration.md
+        category: mesh-user
+        order: 2
+        note: >-
+          Куратор: справочник всех полей mesh.yaml — тип, дефолт и смысл
+          каждой настройки узла.
+      - path: admin/security.md
+        category: mesh-admin
+        order: 1
+        note: >-
+          Куратор: модель доверия меша — «глупый транспорт», mTLS, per-peer
+          ACL и ключи; то, что оператор узла обязан настроить.
+      - path: admin/runbook.md
+        category: mesh-admin
+        order: 2
+        note: >-
+          Куратор: эксплуатация меша день за днём — ротация сертификатов,
+          добавление и удаление пиров, типовые отказы, метрики.
+    exclude:
+      - path: adr/
+        reason: внутренние ADR апстрима (контракт §3, строка «mesh корень/adr/ROADMAP … нет»)
+      - path: architecture.md
+        reason: >-
+          внутренняя архитектура апстрима; вопрос «завозить ли как обзорную»
+          решает Docs Writer W2
+      - path: data-topology-scenarios.md
+        reason: внутренний дизайн-док апстрима
+      - path: w4-assignment-transport.md
+        reason: внутренний дизайн-док апстрима
+      - path: ROADMAP-v2.md
+        reason: роадмап апстрима (контракт §3)
+    overlays:
+      # W2: ссылка на threat-model ADR уходит в соседний клон (mnemos) —
+      # скрипт такие оставляет как есть («escapes»); переписываем на
+      # GitHub mnemos @ пина, чтобы в борде не было битого относительного
+      # href (контракт §6.1).
+      - file: en/admin/security.md
+        find: "- [ADR-0016 — federation threat model](../../../../mnemos/docs/project/adr/0016-federation-threat-model.md) (mnemos repo)"
+        replace: "- [ADR-0016 — federation threat model](https://github.com/vesmaro/vesmaro/blob/23f0fce42ea87c329d4049397292b3dca948773c/docs/project/adr/0016-federation-threat-model.md) (mnemos repo)"
+        reason: >-
+          cross-clone ссылка (mesh → mnemos project/adr): относительный путь
+          в корпусе борда мёртв — только GitHub @ пина mnemos
+    # Кураторские RU-переводы — НАШ слой (контракт §5: «кураторский перевод
+    # 4 страниц»), переживают ре-синк: каждый синк переиздаёт ru-слот из
+    # curated-источника (provenance kind "curated-translation"). Пути `source`
+    # — от корня нашего репо, вне вытираемой зоны content/upstream. Файлы ещё
+    # не написаны (волна W3): sync предупреждает «curated translation file
+    # missing» и публикует только en — это warning, не ошибка.
+    translations:
+      ru:
+        - source_of: user/getting-started.md
+          source: viewer/src/features/docs/curated/mnemos-mesh/ru/user/getting-started.md
+          translator_note: "Кураторский перевод W3; оригинал en@331ef3a785c1"
+        - source_of: user/configuration.md
+          source: viewer/src/features/docs/curated/mnemos-mesh/ru/user/configuration.md
+          translator_note: "Кураторский перевод W3; оригинал en@331ef3a785c1"
+        - source_of: admin/security.md
+          source: viewer/src/features/docs/curated/mnemos-mesh/ru/admin/security.md
+          translator_note: "Кураторский перевод W3; оригинал en@331ef3a785c1"
+        - source_of: admin/runbook.md
+          source: viewer/src/features/docs/curated/mnemos-mesh/ru/admin/runbook.md
+          translator_note: "Кураторский перевод W3; оригинал en@331ef3a785c1"
+
+# ----------------------------------------------------------------------------
+# Нормализация L1 (применяется к каждому файлу до overlay и перезаписи ссылок).
+# ----------------------------------------------------------------------------
+normalize:
+  # Строки, целиком совпадающие с маской (fnmatch), вырезаются:
+  # языковые переключатели апстрима («🌐 Language / Язык: …»).
+  strip_lines_matching:
+    - "*🌐 Language / Язык:*"
+  # Строки-«чистые» html-комментарии (<!-- ... -->) вырезаются; инлайн-текст
+  # не затрагивается.
+  strip_html_comment_lines: true
+  # 3+ пустые строки подряд схлопываются до одной пустой (value = число \n).
+  collapse_blank_lines: 2

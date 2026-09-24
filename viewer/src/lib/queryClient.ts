@@ -41,6 +41,8 @@ export const STALE_TIMES = {
   automationRules: 30_000,
   /** SCHED-1 engine status — the banner truth; cheap, never stale for long */
   automationStatus: 30_000,
+  /** UI-21 kill-switch/cap settings — owner-rare writes */
+  automationSettings: 60_000,
   /** SCHED-1 launch journal — append-only, cursor pages */
   automationLaunches: 30_000,
 } as const;
@@ -63,6 +65,7 @@ export const GC_TIMES = {
   agentsSettings: 10 * 60_000,
   automationRules: 5 * 60_000,
   automationStatus: 5 * 60_000,
+  automationSettings: 10 * 60_000,
   automationLaunches: 5 * 60_000,
 } as const;
 

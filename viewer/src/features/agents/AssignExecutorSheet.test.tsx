@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
@@ -13,6 +13,8 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { AssignmentsPage, BoardTask, ExecutorsPage } from "@/gateway/boardTypes";
+import { actFlush, actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * AssignExecutorSheet live-route preview (spec §2.3): the SAME resolver the
@@ -45,12 +47,17 @@ const TASK: BoardTask = {
 
 interface Mount {
   root: Root;
+  gateway: MockAdapter;
   /** Radix portals the dialog into document.body — queries go to the DOCUMENT. */
   text: () => string;
   query: <T extends Element>(selector: string) => T[];
 }
 
-async function mountSheet(executorsPage: ExecutorsPage, defaultExecutor: string): Promise<Mount> {
+async function mountSheet(
+  executorsPage: ExecutorsPage,
+  defaultExecutor: string,
+  pinnedExecutorId: string | null = null,
+): Promise<Mount> {
   const gateway = new MockAdapter({ latency: false });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await queryClient.prefetchQuery({
@@ -77,7 +84,12 @@ async function mountSheet(executorsPage: ExecutorsPage, defaultExecutor: string)
             <UiTokenProvider>
               <I18nProvider initialLang="en">
                 <MemoryRouter>
-                  <AssignExecutorSheet task={TASK} open onOpenChange={() => undefined} />
+                  <AssignExecutorSheet
+                    task={TASK}
+                    open
+                    onOpenChange={() => undefined}
+                    pinnedExecutorId={pinnedExecutorId}
+                  />
                 </MemoryRouter>
               </I18nProvider>
             </UiTokenProvider>
@@ -88,6 +100,7 @@ async function mountSheet(executorsPage: ExecutorsPage, defaultExecutor: string)
   });
   return {
     root,
+    gateway,
     text: () => document.body.textContent ?? "",
     query: <T extends Element>(selector: string) => [
       ...document.querySelectorAll<T>(selector),
@@ -121,7 +134,7 @@ describe("AssignExecutorSheet — live route preview (§2.3)", () => {
     // The preview is LABELLED a preview (never a promise).
     expect(html).toContain("Route preview");
     expect(html).toContain("who actually claims it is a fact");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("an explicit executor choice flips the preview to the targeted tier", async () => {
@@ -138,7 +151,7 @@ describe("AssignExecutorSheet — live route preview (§2.3)", () => {
       hermesLabel!.querySelector<HTMLInputElement>("input[type=radio]")?.click();
     });
     expect(text()).toContain("hermes@laptop · targeted executor");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("no eligible route → the honest wait copy, submit stays ACTIVE", async () => {
@@ -165,7 +178,7 @@ describe("AssignExecutorSheet — live route preview (§2.3)", () => {
       button.textContent?.includes("Assign"),
     );
     expect(assign?.disabled).toBe(false); // honest wait, the button works
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -181,7 +194,7 @@ describe("AssignExecutorSheet — executor picker honesty (§2.3)", () => {
     expect(offline?.textContent).toContain("offline — last seen"); // REASON
     const offlineRadio = offline?.querySelector<HTMLInputElement>("input[type=radio]");
     expect(offlineRadio?.disabled).toBe(true); // DISABLED
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("pending/revoked rows carry their ladder reasons and stay disabled", async () => {
@@ -194,7 +207,7 @@ describe("AssignExecutorSheet — executor picker honesty (§2.3)", () => {
     expect(html).toContain("access revoked");
     const disabled = query<HTMLInputElement>("input[type=radio]:disabled");
     expect(disabled.length).toBeGreaterThanOrEqual(2);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("tooltips carry capabilities, transport, last seen AND the unverified note", async () => {
@@ -212,6 +225,187 @@ describe("AssignExecutorSheet — executor picker honesty (§2.3)", () => {
     expect(title).toContain("local-poll");
     expect(title).toContain("last seen");
     expect(title).toContain("never verified by the server");
-    root.unmount();
+    await actUnmount(root);
+  });
+});
+
+describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
+  it("a PINNED approved+enabled executor stays selectable while OFFLINE", async () => {
+    // exec-old-poller: approved + enabled + offline — the link-test case.
+    const { root, text, query } = await mountSheet(
+      await registry(["exec-old-poller"]),
+      "",
+      "exec-old-poller",
+    );
+    const label = query("label").find((l) => l.textContent?.includes("zcode@old-laptop"));
+    const radio = label?.querySelector<HTMLInputElement>("input[type=radio]");
+    expect(radio?.checked).toBe(true); // the pin PRE-SELECTS it
+    expect(radio?.disabled).toBe(false); // offline does NOT disable a pin
+    expect(text()).toContain("Executor pinned");
+    await actUnmount(root);
+  });
+
+  it("the pin travels: submit carries executor_id without touching the picker", async () => {
+    const { root, gateway, query } = await mountSheet(
+      await registry(["exec-old-poller"]),
+      "",
+      "exec-old-poller",
+    );
+    const spy = vi.spyOn(gateway, "createAssignment");
+    const input = query<HTMLInputElement>("#assign-specialist")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, "@GCW: Tech Lead");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const assign = query<HTMLButtonElement>("button").find((button) =>
+      button.textContent?.includes("Assign"),
+    )!;
+    await act(async () => {
+      assign.click();
+    });
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][0]).toMatchObject({
+      task_id: "TB-10",
+      executor_id: "exec-old-poller",
+    });
+    await actUnmount(root);
+  });
+
+  it("pinned REVOKED: the radio stays checked-but-dead and submit is BLOCKED (P2)", async () => {
+    const { root, gateway, query, text } = await mountSheet(
+      await registry(["exec-copilot-revoked"]),
+      "",
+      "exec-copilot-revoked",
+    );
+    const spy = vi.spyOn(gateway, "createAssignment");
+    const input = query<HTMLInputElement>("#assign-specialist")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, "@GCW: Tech Lead");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // The pin REMAINS visible (checked) — the owner sees what the link
+    // named — but the radio is dead and the submit is held with the way out.
+    const label = query("label").find((l) => l.textContent?.includes("copilot@old-host"));
+    const radio = label?.querySelector<HTMLInputElement>("input[type=radio]");
+    expect(radio?.checked).toBe(true);
+    expect(radio?.disabled).toBe(true);
+    expect(text()).toContain("The pinned executor cannot take tasks right now");
+    const assign = query<HTMLButtonElement>("button").find((button) =>
+      button.textContent?.includes("Assign"),
+    )!;
+    expect(assign.disabled).toBe(true);
+    await act(async () => {
+      assign.click();
+    });
+    await actFlush(0);
+    expect(spy).not.toHaveBeenCalled(); // the ≤1 slot is never held by a ghost
+    await actUnmount(root);
+  });
+
+  it("pinned PENDING: same treatment — checked, disabled radio, submit blocked (P2)", async () => {
+    const { root, gateway, query, text } = await mountSheet(
+      await registry(["exec-copilot-pending"]),
+      "",
+      "exec-copilot-pending",
+    );
+    const spy = vi.spyOn(gateway, "createAssignment");
+    const input = query<HTMLInputElement>("#assign-specialist")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, "@GCW: Tech Lead");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const label = query("label").find((l) => l.textContent?.includes("copilot@new-host"));
+    const radio = label?.querySelector<HTMLInputElement>("input[type=radio]");
+    expect(radio?.checked).toBe(true);
+    expect(radio?.disabled).toBe(true);
+    expect(text()).toContain("The pinned executor cannot take tasks right now");
+    const assign = query<HTMLButtonElement>("button").find((button) =>
+      button.textContent?.includes("Assign"),
+    )!;
+    expect(assign.disabled).toBe(true);
+    await act(async () => {
+      assign.click();
+    });
+    await actFlush(0);
+    expect(spy).not.toHaveBeenCalled();
+    await actUnmount(root);
+  });
+
+  it("a deep-link pin on a DELETED executor falls back to default and sends NO pin", async () => {
+    const { root, gateway, query } = await mountSheet(
+      await registry(["exec-laptop-zcode"]),
+      "",
+      "exec-vanished",
+    );
+    const spy = vi.spyOn(gateway, "createAssignment");
+    const input = query<HTMLInputElement>("#assign-specialist")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, "@GCW: Tech Lead");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // Nothing to show for the pin — the effective choice silently reads
+    // default (the lit radio), submit stays usable, NO executor_id travels.
+    const defaultRadio = query<HTMLInputElement>("input[type=radio]")[0];
+    expect(defaultRadio?.checked).toBe(true);
+    const assign = query<HTMLButtonElement>("button").find((button) =>
+      button.textContent?.includes("Assign"),
+    )!;
+    expect(assign.disabled).toBe(false);
+    await act(async () => {
+      assign.click();
+    });
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][0]).toMatchObject({ task_id: "TB-10", executor_id: "" });
+    await actUnmount(root);
+  });
+
+  it("picking «Default» releases a blocked pin — the honest way out still works", async () => {
+    const { root, gateway, query } = await mountSheet(
+      await registry(["exec-copilot-revoked"]),
+      "",
+      "exec-copilot-revoked",
+    );
+    const spy = vi.spyOn(gateway, "createAssignment");
+    const input = query<HTMLInputElement>("#assign-specialist")[0];
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      nativeSetter?.call(input, "@GCW: Tech Lead");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const defaultLabel = query("label").find((l) =>
+      l.textContent?.includes("Default"),
+    )!;
+    await act(async () => {
+      defaultLabel.querySelector<HTMLInputElement>("input[type=radio]")?.click();
+    });
+    const assign = query<HTMLButtonElement>("button").find((button) =>
+      button.textContent?.includes("Assign"),
+    )!;
+    expect(assign.disabled).toBe(false); // the owner consciously un-pinned
+    await act(async () => {
+      assign.click();
+    });
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0][0]).toMatchObject({ executor_id: "" });
+    await actUnmount(root);
   });
 });

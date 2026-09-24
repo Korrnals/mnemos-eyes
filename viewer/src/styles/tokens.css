@@ -213,3 +213,14 @@
     --duration-fast: 80ms; /* keep instant micro-feedback */
   }
 }
+
+/* vesmaro.motion="reduced" (UI-23, spec §2.5): the user-level forced reduced
+ * regime from the settings hub — the exact mirror of the OS media query
+ * above (same declarations). When both match, values are identical; the
+ * attribute is applied/removed by lib/motionStore.ts on <html>. */
+[data-motion="reduced"] {
+  --duration-iris: 0ms;
+  --duration-slow: 0ms;
+  --duration-normal: 0ms;
+  --duration-fast: 80ms; /* keep instant micro-feedback */
+}

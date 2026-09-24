@@ -1,5 +1,6 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { useT } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import type { AssignmentLifecycleState } from "@/gateway/boardTypes";
 import { assignmentStateStyle } from "./assignmentStatus";
 import { useActiveAssignment } from "./useAgents";
@@ -32,6 +33,10 @@ const SHAPE_CLASS: Record<string, string> = {
 
 export function ActiveAssignmentBadge({ taskId }: { taskId: string }) {
   const t = useT();
+  // UI-18 pair 6: the badge is source-aware — from /agents/execution the
+  // return leads back into the feed; from the board/list rows it carries
+  // those surfaces' URLs (pair 1 semantics on the ?tab=execution target).
+  const location = useLocation();
   const active = useActiveAssignment(taskId);
   const row = active.data;
   if (!row) return null;
@@ -40,7 +45,11 @@ export function ActiveAssignmentBadge({ taskId }: { taskId: string }) {
   );
   return (
     <Link
-      to={`/tasks/${encodeURIComponent(taskId)}?tab=execution`}
+      to={withReturn(
+        `/tasks/${encodeURIComponent(taskId)}?tab=execution`,
+        location.pathname,
+        location.search,
+      )}
       title={t("agents.badge.title", { state: t(style.labelKey) })}
       className={
         "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium transition-colors duration-instant focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright " +

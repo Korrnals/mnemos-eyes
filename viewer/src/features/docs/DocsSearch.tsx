@@ -11,6 +11,8 @@ import {
   type DocsSearchIndex,
   type SearchHit,
 } from "./docsSearch";
+import { useDocsManifest } from "./manifest";
+import { docUrl } from "./projects";
 import { DOCS_MARK_CLASS } from "./Markdown";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +50,9 @@ export function DocsSearch({ className }: DocsSearchProps) {
   const t = useT();
   const { lang } = useI18n();
   const navigate = useNavigate();
+  // Manifest read for the locale-coverage hint (spec §7.3): the search only
+  // mounts inside /docs, where the manifest builds anyway — no extra fetch.
+  const manifest = useDocsManifest();
   const inputId = useId();
   const listId = `${inputId}-list`;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -100,7 +105,7 @@ export function DocsSearch({ className }: DocsSearchProps) {
   const openHit = (hit: SearchHit) => {
     close();
     setQuery(""); // selection resets the draft (spec §8)
-    navigate(`/docs/${hit.slug}`);
+    navigate(docUrl(hit.slug));
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -241,6 +246,13 @@ export function DocsSearch({ className }: DocsSearchProps) {
           <p className="mt-1 text-sm text-foreground-muted">
             {t("docs.search.noResultsHint")}
           </p>
+          {/* Honest gap naming (spec §7.3): when the corpus holds pages the
+           * active locale does not cover, say so instead of staying silent. */}
+          {manifest?.pages.some((page) => !page.locales.includes(lang)) ? (
+            <p className="mt-1 text-sm text-foreground-secondary">
+              {t("docs.search.localeHint")}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

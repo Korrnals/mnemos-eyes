@@ -21,4 +21,3 @@ one decision. The authoritative summary lives in [`../CHARTER.md`](../CHARTER.md
 | [0011](0011-ui-convergence.md) | Конвергенция фронтендов в единое web-приложение (strangler Ф0–Ф4) | Accepted by committee — pending owner ratification |
 | [0012](0012-qr-pairing-device-tokens.md) | QR-пейринг и device-токены (LAN-direct, `mnd_`) | Accepted by committee — pending owner ratification |
 | [0015](0015-documentation-section.md) | Раздел документации (/docs) — markdown в бандле UI, без бэкенда | Accepted by committee |
-| [0016](0016-cortex-workspace-phase1.md) | Cortex Workspace — фаза 1: read-only агрегация сессий + relay-продолжение (вариант C) | Proposed — awaiting owner ratification |

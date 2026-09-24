@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { Check, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { ConnectGuide } from "./ConnectGuide";
 import { EnrollmentDialog } from "./EnrollmentDialog";
 import { EnrollmentTokensPanel } from "./EnrollmentTokensPanel";
 import { ExecutorMenu } from "./ExecutorMenu";
+import { ExecutorSheet } from "./ExecutorSheet";
 import {
   PRESENCE_DOT,
   PRESENCE_TEXT,
@@ -27,9 +28,23 @@ import {
 } from "./presence";
 import { orderRegistry } from "./registryOrder";
 import type { RegistryBands } from "./registryOrder";
+import { effectiveEnrollmentState } from "./enrollment";
+import { ProvisionCard } from "./ProvisionCard";
 import { useExecutors } from "./useAgents";
 import { useEnrollments } from "./useEnrollment";
 import { useExecutorMutations } from "./useExecutorMutations";
+
+/**
+ * P3: %-garbage in a hash must never take the page down —
+ * decodeURIComponent throws URIError, the caller renders null instead.
+ */
+function safeDecodeHash(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * `/agents/harnesses` — «Подключение агентов» (AGW-4, spec §1 wave 2): the
@@ -63,22 +78,51 @@ export function ExecutorRegistryPage() {
   const uiToken = useUiToken();
   const enrollments = useEnrollments({ tokenPresent: uiToken.tokenPresent });
   const location = useLocation();
+  const navigate = useNavigate();
+  // Registry rows before the early return: the card deep-link below reads
+  // them (plain derived data — no hook ordering hazard).
+  const items = executors.data?.items ?? [];
   // The enrollment flow lands here: a used token's link points at the row
   // its registration minted (#executor-<id>) — scroll it into view.
+  // P3: undecodable hashes are skipped, never thrown.
   useEffect(() => {
-    if (!location.hash.startsWith("#executor-")) return;
-    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
-    target?.scrollIntoView({ block: "center" });
+    if (!location.hash.startsWith("#executor-") || location.hash.startsWith("#executor-sheet-"))
+      return;
+    const decoded = safeDecodeHash(location.hash.slice(1));
+    if (decoded === null) return;
+    document.getElementById(decoded)?.scrollIntoView({ block: "center" });
   }, [location.hash]);
+
+  // AGW-6 B: the settings-card deep-link (#executor-sheet-<id>) — the
+  // enrollment token screen's «Открыть карточку» lands here. DERIVED from
+  // the hash (no effect, no open-state): the card shows as long as the
+  // hash names a row (the drawer itself waits out the registry load);
+  // closing rewrites the URL without the hash.
+  const sheetPrefix = "#executor-sheet-";
+  const sheetRaw = location.hash.startsWith(sheetPrefix)
+    ? safeDecodeHash(location.hash.slice(sheetPrefix.length))
+    : null;
+  const cardId = sheetRaw;
+  const closeCard = (): void => {
+    navigate(
+      { pathname: location.pathname, search: location.search, hash: "" },
+      { replace: true },
+    );
+  };
 
   // Dialog open state (the form is keyed inside — fresh per open).
   const [enrollmentOpen, setEnrollmentOpen] = useState(false);
+  // AGW-11: the ≤3 live-token pre-flight count for the mint dialog — the
+  // expiry-aware view state (a dead-but-unswept token must not eat quota).
+  const now = useValidationNow();
+  const liveTokens = (enrollments.data?.items ?? []).filter(
+    (row) => effectiveEnrollmentState(row, now) === "created",
+  ).length;
 
   if (!capable) {
     return <AgentsUnsupported />;
   }
 
-  const items = executors.data?.items ?? [];
   const meta = executors.data?.meta;
   const bands: RegistryBands =
     executors.isPending || executors.isError
@@ -98,6 +142,12 @@ export function ExecutorRegistryPage() {
           {t("agents.enrollment.title")}
         </Button>
       </header>
+
+      {/* AGW-11 (wave 4): the connect card — the registry's expansion
+       * entry point. The SSH path walks a machine to a pending row by
+       * itself; it sits ABOVE the bands (the owner's primary answer),
+       * the manual mint stays one click away in the header. */}
+      <ProvisionCard />
 
       {executors.isPending ? (
         <div role="status" aria-label={t("agents.registry.loading")}>
@@ -171,7 +221,8 @@ export function ExecutorRegistryPage() {
         error={enrollments.isError}
       />
 
-      {/* The connect path: five poller steps + the honest machine-class note.
+      {/* The connect path: the one-command flow in five steps + the honest
+       * installer note + the manual-path pointer (REMOTE-EXECUTOR.md).
        * Always available — it is the page's second answer. */}
       <ConnectGuide />
 
@@ -179,7 +230,20 @@ export function ExecutorRegistryPage() {
         open={enrollmentOpen}
         onOpenChange={setEnrollmentOpen}
         executors={items}
+        liveCount={liveTokens}
       />
+
+      {/* AGW-6 B: the settings card (deep-link target + menu rows render
+       * their own instances; one shared drawer per page is enough here). */}
+      {cardId !== null ? (
+        <ExecutorSheet
+          executorId={cardId}
+          open
+          onOpenChange={(next) => {
+            if (!next) closeCard();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -7,7 +7,7 @@ import {
   routeTitle,
   routeTitleKey,
 } from "./navItems";
-import { isDocsSectionActive } from "@/features/docs/docsNav";
+import { docsLocationFor } from "@/features/docs/docsNav";
 import { getManifest } from "@/features/docs/manifest";
 
 /**
@@ -172,22 +172,15 @@ describe("routeTitleKey (TopBar label = deepest crumb)", () => {
   });
 });
 
-describe("docs domain (ADR 0015)", () => {
-  it("carries one section per docs category, in category order", () => {
+describe("docs domain (ADR 0015 + ADR 0016)", () => {
+  it("links the domain at the default hub; sections moved to project groups", () => {
     const docs = NAV_DOMAINS.find((d) => d.to === "/docs");
     expect(docs?.soonKey).toBeUndefined();
     expect(docs?.key).toBe("nav.docs");
-    expect(docs?.sections?.map((s) => s.to)).toEqual([
-      "/docs/c/product",
-      "/docs/c/getting-started",
-      "/docs/c/board",
-      "/docs/c/agents",
-      "/docs/c/automation",
-      "/docs/c/devices",
-      "/docs/c/security",
-      "/docs/c/maintenance",
-      "/docs/c/faq",
-    ]);
+    // ADR 0016: the flat section list is replaced by THREE project groups
+    // rendered by DocsSidebarGroups; the domain link enters at the hub.
+    expect(docs?.linkTo).toBe("/docs/vesmaro-eyes");
+    expect(docs?.sections).toBeUndefined();
   });
 
   it("the index has no trail (section root) but keeps its title key", () => {
@@ -195,12 +188,12 @@ describe("docs domain (ADR 0015)", () => {
     expect(routeTitleKey("/docs")).toBe("nav.docs");
   });
 
-  it("article trail: Документация → категория → заголовок из манифеста", async () => {
+  it("article trail: Документация → категория → заголовок (legacy frame)", async () => {
     await getManifest(); // hydrate the lazy docs manifest
     const crumbs = crumbsFor("/docs/upgrade");
-    expect(crumbs[0]).toEqual({ to: "/docs", key: "nav.docs" });
+    expect(crumbs[0]).toEqual({ to: "/docs/vesmaro-eyes", key: "nav.docs" });
     expect(crumbs[1]).toEqual({
-      to: "/docs/c/maintenance",
+      to: "/docs/vesmaro-eyes/c/maintenance",
       key: "docs.cat.maintenance",
     });
     // The page title is CONTENT (frontmatter), not a dictionary key.
@@ -209,9 +202,29 @@ describe("docs domain (ADR 0015)", () => {
     expect(routeTitle("/docs/upgrade", (key) => `t:${key}`)).toBe("Обновление борда");
   });
 
-  it("category trail: Документация → категория", () => {
+  it("imported article trail gains the project level (4 crumbs, ADR 0016)", async () => {
+    await getManifest();
+    const crumbs = crumbsFor("/docs/mnemos/user/getting-started");
+    expect(crumbs).toHaveLength(4);
+    expect(routeTitle("/docs/mnemos/user/getting-started", (key) => `t:${key}`)).toBe(
+      "Начало работы",
+    );
+  });
+
+  it("the default hub has no trail (section root), imported hubs keep one", () => {
+    expect(crumbsFor("/docs/vesmaro-eyes")).toEqual([]);
+    const mnemos = crumbsFor("/docs/mnemos");
+    expect(mnemos[0]).toEqual({ to: "/docs/vesmaro-eyes", key: "nav.docs" });
+    expect(mnemos[1]?.label).toBe("Mnemos");
+  });
+
+  it("category trail: Документация → категория (project-scoped and legacy)", () => {
+    expect(crumbsFor("/docs/vesmaro-eyes/c/maintenance")).toEqual([
+      { to: "/docs/vesmaro-eyes", key: "nav.docs" },
+      { key: "docs.cat.maintenance" },
+    ]);
     expect(crumbsFor("/docs/c/maintenance")).toEqual([
-      { to: "/docs", key: "nav.docs" },
+      { to: "/docs/vesmaro-eyes", key: "nav.docs" },
       { key: "docs.cat.maintenance" },
     ]);
   });
@@ -224,30 +237,22 @@ describe("docs domain (ADR 0015)", () => {
     expect(routeTitle("/docs/ghost", (key) => `t:${key}`)).toBe("ghost");
   });
 
-  it("a docs section highlights on its own articles (slug → category)", async () => {
+  it("a docs group lights on its own hub; the category of the active article is current", async () => {
     await getManifest();
-    expect(isDocsSectionActive("/docs/c/maintenance", "/docs/c/maintenance")).toBe(
-      true,
-    );
-    expect(isDocsSectionActive("/docs/upgrade", "/docs/c/maintenance")).toBe(true);
-    expect(isDocsSectionActive("/docs/upgrade", "/docs/c/security")).toBe(false);
-    expect(isDocsSectionActive("/docs/tokens", "/docs/c/security")).toBe(true);
-    // Unhydrated-adjacent: unknown slugs light nothing.
-    expect(isDocsSectionActive("/docs/ghost", "/docs/c/maintenance")).toBe(false);
-  });
-
-  it("the «О продукте» section lights on the what-is-*/glossary articles (wave 2)", async () => {
-    await getManifest();
-    expect(isDocsSectionActive("/docs/what-is-mnemos", "/docs/c/product")).toBe(
-      true,
-    );
-    expect(isDocsSectionActive("/docs/what-is-vesmaro-eyes", "/docs/c/product")).toBe(
-      true,
-    );
-    expect(isDocsSectionActive("/docs/glossary", "/docs/c/product")).toBe(true);
-    // …and on nothing else: product articles do not light other sections.
-    expect(isDocsSectionActive("/docs/what-is-mnemos", "/docs/c/getting-started")).toBe(
-      false,
-    );
+    expect(docsLocationFor("/docs/vesmaro-eyes")).toEqual({
+      project: "vesmaro-eyes",
+      category: null,
+      slug: null,
+    });
+    expect(docsLocationFor("/docs/upgrade")).toEqual({
+      project: "vesmaro-eyes",
+      category: "maintenance",
+      slug: "upgrade",
+    });
+    expect(docsLocationFor("/docs/mnemos/user/getting-started")).toEqual({
+      project: "mnemos",
+      category: "mnemos-user",
+      slug: "mnemos/user/getting-started",
+    });
   });
 });

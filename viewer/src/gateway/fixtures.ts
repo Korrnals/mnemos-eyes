@@ -12,6 +12,38 @@ import type { Memory } from "./types";
  * Shapes follow the generated `Memory` schema (src/types/openapi.d.ts), so
  * what the UI sees in mock mode matches the live wire format.
  */
+/**
+ * UI-25: full card of ONE inbox task:queue record (id = the first
+ * MOCK_INBOX row) — the expanded inbox card fetches it via
+ * getMemory(memory_id). Deliberately OUTSIDE MOCK_MEMORIES: merging it
+ * there would shift every index/count assertion built on that corpus.
+ */
+export const MOCK_INBOX_MEMORY: Memory = {
+  id: "bd945a48-0888-4b1f-9ebb-841519e5f8b9",
+  content:
+    "Задача: снять recorded corpus с живого борда для Ф2.\n\n" +
+    "Правило QA: recorded corpus вместо выдуманного дубля. Снять полный " +
+    "дамп задач/событий борда, зафиксировать форму ответов и использовать " +
+    "как фикстуры интеграционных тестов. Критерий приёмки: тесты читают " +
+    "корпус, а не ручные моки.",
+  title: "Снять corpus с живого борда для Ф2",
+  tags: ["project:mnemos", "task:queue", "severity:high",
+         "owner:gcw-senior-system-engineer"],
+  source: "mcp",
+  memory_type: "note",
+  project: "mnemos",
+  agent: "zed",
+  status: "raw",
+  quality_score: null,
+  confidence: null,
+  raw_content: null,
+  clean_content: null,
+  created_at: "2026-09-18T07:00:00Z",
+  updated_at: "2026-09-18T07:00:00Z",
+  marker_version: 1,
+  metadata: {},
+};
+
 export const MOCK_MEMORIES: Memory[] = [
   {
     id: "mem-0001",

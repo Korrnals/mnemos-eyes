@@ -73,6 +73,10 @@ VALID_ENVS = frozenset({"cluster", "laptop", "local", "cloud", "unknown"})
 # BE-12: task priority dictionary. `normal` is both the API default and the
 # column DEFAULT, so pre-migration rows read `normal` with no backfill.
 TASK_PRIORITIES = frozenset({"critical", "high", "normal", "low"})
+# UI-25: owner-editable fields of a FUTURE task on an inbox mirror row
+# (pre-adoption corrections). Anything else inside the row's ``edits`` JSON
+# is bookkeeping (e.g. revision sync state) and is never overlaid.
+INBOX_EDITABLE_FIELDS = ("title", "summary", "priority", "project")
 # BE-12: content fields guarded by the 24h edit window. `status` is
 # deliberately NOT here: status changes are workflow transitions (column
 # moves, UI-8 «Вернуть в работу» → PATCH status), free at any task age —
@@ -140,6 +144,13 @@ class TaskNotAssignableError(AssignmentError):
     """Target task is archived or workflow-terminal (HTTP 422 upstream)."""
 
 
+class UnknownHarnessError(AssignmentError):
+    """Nomination references a harness absent from the dictionary (wave 3C;
+    HTTP 422 upstream). Raised from the IN-TRANSACTION assignment core so
+    every minting window is gated — the UI route, the manual run-now and
+    any future S2 engine mint through the same private code path."""
+
+
 # ----------------------------------------------------------- executors
 # ARCH-9 (ADR 0009 Amendment 2 §3-§4): the executor registry — the third
 # entity (specialist ≠ harness ≠ executor). Registry state model is
@@ -189,6 +200,40 @@ class ExecutorQuotaError(ExecutorError):
 EXECUTOR_PENDING_CAP = 20
 
 
+# Harness dictionary (wave 3C): nomination-hygiene constants. The name
+# pattern keeps the value safe everywhere it lands (rules/conditions,
+# audit payloads, URLs, UI) — lowercase [a-z0-9] head, then [a-z0-9._-].
+HARNESS_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,59}$")
+# Dictionary ceiling: a sane select list and a junk-abuse bound. A cap hit
+# is a 422 (entry validation), not a 429 — the dictionary is not a rate
+# resource, it is a form the owner controls.
+HARNESS_MAX_COUNT = 64
+
+
+class HarnessError(Exception):
+    """Base class for harness-dictionary violations (wave 3C)."""
+
+
+class HarnessNotFoundError(HarnessError):
+    """Unknown harness name (HTTP 404 upstream)."""
+
+
+class HarnessConflictError(HarnessError):
+    """Duplicate harness name (HTTP 409 upstream)."""
+
+
+class HarnessInUseError(HarnessError):
+    """Harness still referenced by an executor, an active assignment or an
+    automation rule — deletion refused (HTTP 409 upstream). History
+    (terminal assignments, journal rows) deliberately does NOT block:
+    it is archival and stays verbatim."""
+
+
+class HarnessQuotaError(HarnessError):
+    """Dictionary ceiling reached (HTTP 422 upstream — entry validation,
+    same class as a bad name, not a rate guard)."""
+
+
 def presence_from_last_seen(last_seen: str) -> str:
     """Computed presence (Amd 2 §6): ``online`` when last_seen is younger
     than PRESENCE_ONLINE_S, ``stale`` up to PRESENCE_STALE_S, ``offline``
@@ -213,9 +258,57 @@ def presence_from_last_seen(last_seen: str) -> str:
 PAIRING_TTL_S = 180.0                 # one TTL for code/QR/verify (§6)
 PAIRING_VERIFY_DIGITS = 4             # anti-mistake screen check (§3.5)
 DEVICE_MAX_ACTIVE = 5                 # ≤5 active device sessions (§5)
+# Owner override 2026-09-23 (ADR 0012 Amendment §A.7 — revocation-first):
+# ONE sliding window for every device class. The scope v1 short control
+# window (7 d) is RETIRED — the compromise answer is the instant kill-switch
+# (DELETE /api/devices/{id}) plus per-device granular grants, not an
+# auto-expiry clock that the owner cannot reason about. The hard 90-day cap
+# is unchanged.
 DEVICE_SLIDING_TTL_S = 30 * 86400.0   # sliding expiry while active (§5)
 DEVICE_HARD_TTL_S = 90 * 86400.0      # absolute cap regardless of activity
 DEVICE_TOKEN_PREFIX = "mnd_"
+DEVICE_SCOPES = ("read", "control")   # v0 read; v1 adds control (Amendment)
+# Per-device grants (ADR 0012 Amendment §A.7, owner directive 2026-09-23
+# «пользователь-администратор сам определяет кому сколько и куда»): the
+# MUTATION granules a device may exercise. Reads (the _DEVICE_READ_ROUTES
+# set in app.py) are open to every VALID device — no granule, global read
+# always; the hard-deny families stay closed regardless of grants. The
+# list is EXTENSIBLE by design: append here + add the route rows to
+# _DEVICE_GRANT_ROUTES in app.py; older rows simply never carry the new
+# name until the owner grants it.
+DEVICE_GRANTS = ("tasks", "reports", "inbox", "notifications")
+# Wire/storage forms of the grants set (device_sessions.grants column):
+# ''   — column default, "never provisioned": the boot migration fills
+#        control rows with the full set; anything else stays fail-closed
+#        read-only.
+# '[]' — EXPLICITLY empty: the owner revoked every granule; the boot
+#        migration must never re-grant it (the whole point of revoke-all).
+# Otherwise a JSON array in DEVICE_GRANTS canonical order (deduped).
+DEVICE_GRANTS_UNSET = ""
+DEVICE_GRANTS_EMPTY = "[]"
+
+
+def normalize_device_grants(
+        grants: list[str] | tuple[str, ...] | None) -> str:
+    """Canonical storage form of a grants set: dedupe + DEVICE_GRANTS order,
+    json-encoded. Unknown names are the CALLER's problem (the API validates;
+    the store normalizes whatever survives)."""
+    wanted = set(grants or [])
+    return json.dumps([g for g in DEVICE_GRANTS if g in wanted])
+
+
+def grants_from_stored(raw: str | None) -> list[str]:
+    """Parse the grants column into the public list. ''/'[]'/garbage all
+    answer [] — fail-closed to reads-only, never fail-open."""
+    if not raw or raw == DEVICE_GRANTS_EMPTY:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [g for g in DEVICE_GRANTS if g in parsed]
 PAIRING_STATES = frozenset({
     "created", "scanned", "confirmed", "issued", "expired", "revoked",
 })
@@ -361,18 +454,21 @@ RULE_CONDITION_FIELD_ENUMS: dict[str, tuple[str, ...] | None] = {
     "project": None,
     "specialist": None,
     "executor_id": None,
-    # "harness" joins via _condition_field_enums() — its enum is
-    # Store.KNOWN_HARNESSES (late binding: the class lives below).
+    # "harness" joins via _condition_field_enums() — its enum is the LIVE
+    # harnesses TABLE (wave 3C; callers pass harness_names()).
 }
 
 
-def _condition_field_enums() -> dict[str, tuple[str, ...] | None]:
+def _condition_field_enums(
+        harness_enum: tuple[str, ...] | frozenset[str],
+) -> dict[str, tuple[str, ...] | None]:
     """The FULL condition-field dictionary — the static table plus the
-    harness enum (Store.KNOWN_HARNESSES). Single source for BOTH the CRUD
-    validation and the /status meta-dictionary, so the UI form can never
-    offer a field the validator would reject."""
+    harness enum (the live ``harnesses`` table, passed by the caller).
+    Single source for BOTH the CRUD validation and the /status
+    meta-dictionary, so the UI form can never offer a field the validator
+    would reject."""
     enums = dict(RULE_CONDITION_FIELD_ENUMS)
-    enums["harness"] = tuple(sorted(Store.KNOWN_HARNESSES))
+    enums["harness"] = tuple(sorted(harness_enum))
     return enums
 _RULE_MAX_NAME = 120
 _RULE_MAX_CONDITION_CLAUSES = 8
@@ -446,11 +542,15 @@ def _validate_window(window_from: Any, window_to: Any) -> tuple[str | None, str 
     return wf, wt
 
 
-def validate_condition(raw: Any) -> list[dict[str, Any]]:
+def validate_condition(
+        raw: Any, harness_enum: tuple[str, ...] | frozenset[str],
+) -> list[dict[str, Any]]:
     """Normalize + validate a hook condition [{field, op, value}] against
     the closed allowlist (422 at CRUD time, not at fire time — ADR 0013
     §2). Structured fields only; values checked against the field's enum
-    when one exists (the UI form has no free-text condition input)."""
+    when one exists (the UI form has no free-text condition input).
+    ``harness_enum`` is the LIVE harness-dictionary snapshot from the
+    caller (wave 3C — hooks validate against the table, not the seed)."""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -458,7 +558,7 @@ def validate_condition(raw: Any) -> list[dict[str, Any]]:
     if len(raw) > _RULE_MAX_CONDITION_CLAUSES:
         raise AutomationValidationError(
             f"condition: max {_RULE_MAX_CONDITION_CLAUSES} clauses")
-    enums = _condition_field_enums()
+    enums = _condition_field_enums(harness_enum)
     out: list[dict[str, Any]] = []
     for item in raw:
         if (not isinstance(item, dict)
@@ -670,7 +770,8 @@ CREATE TABLE IF NOT EXISTS task_inbox (
     specialist        TEXT NOT NULL DEFAULT '',
     source_created_at TEXT NOT NULL DEFAULT '',
     last_seen         TEXT NOT NULL,
-    adopted_task_id   TEXT
+    adopted_task_id   TEXT,
+    edits             TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS task_assignments (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -724,6 +825,61 @@ CREATE TABLE IF NOT EXISTS executors (
     registered_via TEXT NOT NULL DEFAULT '',
     registered_at  TEXT NOT NULL,
     updated_at     TEXT NOT NULL
+);
+-- Harness dictionary (wave 3C, design 2026-09-22 §C): the OWNER-MANAGED
+-- registry that replaced the closed KNOWN_HARNESSES nomination gate. The
+-- constant survives as the SEED (inserted once, when the table is empty —
+-- seeding on empty preserves owner deletions across restarts). Additive
+-- IF NOT EXISTS, no SEED_VERSION bump (task_assignments precedent). The
+-- gates (registration, enrollment hint, assignment create, automation
+-- payloads, rule condition enum) all read THIS table; launching is still
+-- gated by the poller's local allowlist (A3) — the dictionary only rules
+-- nomination hygiene on the board.
+CREATE TABLE IF NOT EXISTS harnesses (
+    name      TEXT PRIMARY KEY,
+    added_at  TEXT NOT NULL,
+    added_via TEXT NOT NULL DEFAULT 'seed',
+    note      TEXT NOT NULL DEFAULT ''
+);
+-- Provisioner jobs (wave 4, design blocks A/B/D — variant α): the board
+-- drives an INSTALL-TIME SSH channel to connect a remote machine and run
+-- the frozen bootstrap one-liner there. NO SECRET COLUMNS, EVER: the
+-- enrollment token and the ssh credentials live only in the worker's
+-- task context (transit-only invariant); this table is the job's
+-- progress/verdict record. Steps is a JSON array of human-readable
+-- progress lines. A live job found at board start is failed
+-- (provisioner.restarted) — the in-memory token context died with the
+-- old process.
+CREATE TABLE IF NOT EXISTS provision_jobs (
+    id            TEXT PRIMARY KEY,
+    host          TEXT NOT NULL,
+    port          INTEGER NOT NULL DEFAULT 22,
+    auth_kind     TEXT NOT NULL,
+    key_fingerprint TEXT NOT NULL DEFAULT '',
+    host_key_fingerprint TEXT NOT NULL DEFAULT '',
+    harness_hint  TEXT NOT NULL DEFAULT '',
+    board_url_for_host TEXT NOT NULL DEFAULT '',
+    enrollment_id TEXT NOT NULL DEFAULT '',
+    state         TEXT NOT NULL DEFAULT 'queued'
+                  CHECK (state IN ('queued','connecting','installing',
+                                   'watching','done','failed')),
+    error_code    TEXT NOT NULL DEFAULT '',
+    steps         TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+-- Host-key pins (TOFU + re-pin): one pin per host:port identity (P2-1:
+-- different ports are DIFFERENT endpoints with different keys — the old
+-- host-only PK let port 2222 silently inherit port 22's trust). Written
+-- by the first successful connect (audit provisioning.host_key_pinned)
+-- or by the owner's explicit re-pin (audit provisioning.host_key_repinned,
+-- old→new in the payload). NEVER a secret.
+CREATE TABLE IF NOT EXISTS provision_host_pins (
+    host        TEXT NOT NULL,
+    port        INTEGER NOT NULL DEFAULT 22,
+    fingerprint TEXT NOT NULL,
+    pinned_at   TEXT NOT NULL,
+    PRIMARY KEY (host, port)
 );
 -- SCHED-1 S1 (ADR 0013 §2): automation contracts — additive only, no
 -- SEED_VERSION bump (task_assignments precedent). Three tables:
@@ -854,11 +1010,14 @@ CREATE INDEX IF NOT EXISTS idx_enrollment_token_hash ON enrollment_tokens (token
 -- response. expires_at is the SLIDING 30-day clock (refreshed on every
 -- validated request); hard_expires_at is the absolute 90-day cap that
 -- activity can never push out. last_seen mirrors last_seen_at (the raw
--- request stamp; naming parity with the executors registry).
+-- request stamp; naming parity with the executors registry). grants is the
+-- per-device JSON granule set (Amendment §A.7): '' = never provisioned
+-- (the boot migration fills control rows), '[]' = owner revoked all.
 CREATE TABLE IF NOT EXISTS device_sessions (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     scope           TEXT NOT NULL DEFAULT 'read',
+    grants          TEXT NOT NULL DEFAULT '',
     token_hash      TEXT NOT NULL,
     created_at      TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL DEFAULT '',
@@ -953,8 +1112,72 @@ class Store:
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as db:
             db.executescript(_SCHEMA)
+            self._migrate_device_scope_v1(db)
+            self._migrate_device_grants_v1(db)
             self._migrate(db)
             self._seed_if_empty(db)
+            self._seed_harnesses(db)
+
+    def _migrate_device_scope_v1(self, db: sqlite3.Connection) -> None:
+        """Scope v1 data migration (ADR 0012 Amendment, archcom
+        2026-09-23): every ACTIVE read-scope device session flips to
+        `control` IN PLACE — already-paired devices gain board mutations
+        without re-pairing and without re-issuing tokens (the hash-only
+        rows stay valid; the owner's ruling: «управление — центральная
+        фишка vesmaro-eyes; лишать управления подключённое через QR
+        устройство глупо и бессмысленно»).
+
+        Idempotent: a second boot finds no active `read` rows and writes
+        nothing (the UPDATE is its own completion marker). Revoked and
+        expired sessions keep their historical scope — the audit trail
+        must not be rewritten for sessions that can never act again.
+        Deliberately NO SEED_VERSION bump (additive-evolution rule: the
+        seed check WIPES tasks on a version change). The DB column
+        DEFAULT stays 'read' — fail-safe for any INSERT that bypasses
+        the store; new pairings default to control at the STORE layer
+        (create_pairing_request)."""
+        cur = db.execute(
+            "UPDATE device_sessions SET scope='control' "
+            "WHERE state='active' AND scope='read'")
+        if cur.rowcount:
+            self._log(db, "device.scope-migrated", None,
+                      {"migrated": cur.rowcount, "to": "control"})
+
+    def _migrate_device_grants_v1(self, db: sqlite3.Connection) -> None:
+        """Per-device grants migration (ADR 0012 Amendment §A.7, owner
+        directive 2026-09-23 «давать и забирать доступы к компонентам по
+        подключенным устройствам»): every ACTIVE control-scope row still on
+        the unprovisioned sentinel (grants='') gains the FULL granule set —
+        byte-for-byte the rights control had under the scope table, so the
+        owner-visible behavior of an already-paired phone does not change
+        under its feet. (Boot order: the v1 scope migration has ALREADY
+        flipped active read rows to control by the time this runs, so an
+        active row is control here by construction; revoked/expired rows
+        keep whatever they have — dead sessions are audit history, not
+        callers.)
+
+        '' vs '[]' is the load-bearing distinction: an owner who revoked
+        ALL granules (PUT /grants with []) leaves '[]', which this UPDATE
+        never matches — revoke-all survives every reboot. Idempotent:
+        second boot finds no '' control rows, writes nothing. Deliberately
+        NO SEED_VERSION bump (additive-evolution rule)."""
+        cols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(device_sessions)").fetchall()}
+        if "grants" not in cols:
+            # Additive ALTER for pre-grants databases (same rule as every
+            # _migrate column: DEFAULT '' covers the existing rows, the
+            # data migration below fills the live control ones).
+            db.execute(
+                "ALTER TABLE device_sessions "
+                "ADD COLUMN grants TEXT NOT NULL DEFAULT ''")
+        full = normalize_device_grants(DEVICE_GRANTS)
+        cur = db.execute(
+            "UPDATE device_sessions SET grants=? "
+            "WHERE state='active' AND scope='control' AND grants=?",
+            (full, DEVICE_GRANTS_UNSET))
+        if cur.rowcount:
+            self._log(db, "device.grants-migrated", None,
+                      {"migrated": cur.rowcount, "grants": DEVICE_GRANTS})
 
     def _conn(self) -> sqlite3.Connection:
         db = sqlite3.connect(self._path, timeout=10)
@@ -966,11 +1189,29 @@ class Store:
     # ------------------------------------------------------------------ meta
     # Harnesses are EXECUTION ENVIRONMENTS (zcode, hermes, pi, copilot,
     # claude-code, ...). GCW roles like "gcw-tech-lead" are SPECIALISTS,
-    # never agents. Enforced on every write — cross-stack, config-independent.
+    # never agents. Since wave 3C this set is the SEED of the harnesses
+    # TABLE (owner-managed via /api/harnesses); every nomination gate reads
+    # the table (harness_names / _harness_names_db), never this constant.
     KNOWN_HARNESSES = frozenset({
         "zcode", "hermes", "pi", "copilot", "claude-code", "cursor",
         "aider", "continue", "cline", "windsurf",
     })
+
+    def _seed_harnesses(self, db: sqlite3.Connection) -> None:
+        """Seed the harness dictionary exactly once — when the table is
+        still empty. INSERT OR IGNORE keeps the boot idempotent; seeding
+        ONLY on empty preserves owner deletions across restarts (the
+        dictionary is owner-managed since wave 3C, deleted seeds must not
+        resurrect)."""
+        count = db.execute("SELECT COUNT(*) AS n FROM harnesses").fetchone()["n"]
+        if count:
+            return
+        now = _now()
+        db.executemany(
+            "INSERT OR IGNORE INTO harnesses (name, added_at, added_via, note) "
+            "VALUES (?,?,?,?)",
+            [(name, now, "seed", "") for name in sorted(self.KNOWN_HARNESSES)],
+        )
 
     def _migrate(self, db: sqlite3.Connection) -> None:
         # schema evolution for pre-0.7 databases.
@@ -1037,6 +1278,25 @@ class Store:
             db.execute(
                 "ALTER TABLE executors "
                 "ADD COLUMN registered_via TEXT NOT NULL DEFAULT ''")
+        # P2-1: provision_host_pins was reshaped from host-PK to (host,port)
+        # PK while still WIP (unreleased). A dev DB carrying the old shape
+        # would silently break every pin call — drop it; pins are TOFU
+        # material and re-pin automatically on the next first connect
+        # (fail-safe: a lost pin triggers a fresh TOFU, never a skipped
+        # verification).
+        pcols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(provision_host_pins)").fetchall()}
+        if pcols and "port" not in pcols:
+            db.execute("DROP TABLE provision_host_pins")
+        # UI-25: owner edits of an inbox row BEFORE adoption (title/summary/
+        # priority/project overlay as JSON; '' = unedited). Additive ALTER —
+        # the '' DEFAULT covers pre-UI-25 rows; no SEED_VERSION bump.
+        icols = {r["name"] for r in db.execute(
+            "PRAGMA table_info(task_inbox)").fetchall()}
+        if "edits" not in icols:
+            db.execute(
+                "ALTER TABLE task_inbox "
+                "ADD COLUMN edits TEXT NOT NULL DEFAULT ''")
         row = db.execute(
             "SELECT value FROM board_meta WHERE key='seed_version'"
         ).fetchone()
@@ -1178,7 +1438,12 @@ class Store:
         return t
 
     # ---------------------------------------------------------------- write
-    def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_task(self, payload: dict[str, Any],
+                    actor: str = "") -> dict[str, Any]:
+        """``actor`` (scope v1, ADR 0012 Amendment): optional task-history
+        attribution for the task.created event — `device:<id> <name>` when
+        the mutation rode a paired device's mnd_ token; empty for the
+        ui/machine legs (their history shape is unchanged)."""
         col = payload.get("col", "open")
         if col not in VALID_STATUSES:
             raise ValueError(f"invalid col: {col}")
@@ -1235,10 +1500,14 @@ class Store:
                     now, now,
                 ),
             )
-            self._log(db, "task.created", task_id, {"col": col, "status": status})
+            payload: dict[str, Any] = {"col": col, "status": status}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.created", task_id, payload)
         return self.task(task_id)  # type: ignore[return-value]
 
-    def move_task(self, task_id: str, col: str, position: int | None = None) -> dict[str, Any] | None:
+    def move_task(self, task_id: str, col: str, position: int | None = None,
+                  actor: str = "") -> dict[str, Any] | None:
         """Kanban move (BE-10 semantics + the WF-1 v1 transition mirror).
 
         - ``status`` re-derives from COLUMN_STATUS_MAP: pre-validation
@@ -1289,11 +1558,14 @@ class Store:
                     "UPDATE tasks SET col=?, status=?, position=?, updated_at=? WHERE id=?",
                     (col, status, position, _now(), task_id),
                 )
-            self._log(db, "task.moved", task_id, {"from": src, "to": col})
+            payload: dict[str, Any] = {"from": src, "to": col}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.moved", task_id, payload)
         return self.task(task_id)
 
     def update_task(self, task_id: str, patch: dict[str, Any],
-                    force: bool = False) -> dict[str, Any] | None:
+                    force: bool = False, actor: str = "") -> dict[str, Any] | None:
         """Content/status PATCH (BE-12 semantics).
 
         Allow-listed keys only — anything else (notably ``col``) is silently
@@ -1362,6 +1634,8 @@ class Store:
                 # forced edits must stay auditable: the override lands in
                 # the same task.updated event as the field list
                 payload["forced"] = True
+            if actor:
+                payload["actor"] = actor[:120]
             self._log(db, "task.updated", task_id, payload)
         return self.task(task_id)
 
@@ -1684,9 +1958,10 @@ class Store:
         return True
 
     # ------------------------------------------------------------- archive
-    def archive_task(self, task_id: str) -> bool:
+    def archive_task(self, task_id: str, actor: str = "") -> bool:
         """Archive a task, remembering its current column in ``archived_from``
-        (BE-11b) so unarchive can put it back."""
+        (BE-11b) so unarchive can put it back. ``actor``: optional
+        task-history attribution (scope v1 device leg)."""
         with self._lock, self._conn() as db:
             row = db.execute(
                 "SELECT col FROM tasks WHERE id=? AND archived=0",
@@ -1698,10 +1973,13 @@ class Store:
                 "UPDATE tasks SET archived=1, archived_from=col, updated_at=? WHERE id=?",
                 (_now(), task_id),
             )
-            self._log(db, "task.archived", task_id, {"from": row["col"]})
+            payload: dict[str, Any] = {"from": row["col"]}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.archived", task_id, payload)
         return True
 
-    def unarchive_task(self, task_id: str) -> dict[str, Any] | None:
+    def unarchive_task(self, task_id: str, actor: str = "") -> dict[str, Any] | None:
         """Restore an archived task (BE-11b). It returns to its pre-archive
         column (``archived_from``); rows archived before that column existed
         (``archived_from=''``) — or carrying a value outside the column
@@ -1726,7 +2004,10 @@ class Store:
                 "UPDATE tasks SET archived=0, col=?, status=?, updated_at=? WHERE id=?",
                 (col, COLUMN_STATUS_MAP[col], _now(), task_id),
             )
-            self._log(db, "task.unarchived", task_id, {"to": col})
+            payload: dict[str, Any] = {"to": col}
+            if actor:
+                payload["actor"] = actor[:120]
+            self._log(db, "task.unarchived", task_id, payload)
         return self.task(task_id)
 
     def archived_tasks(self, q: str = "", status: str = "", col: str = "",
@@ -1948,6 +2229,15 @@ class Store:
             raise TaskNotAssignableError(
                 f"task {task_id} is terminal ({task['status']}) — "
                 "assignment refused")
+        # Wave 3C: the nomination gate lives HERE, in-transaction, not on
+        # the UI route alone — the manual run-now (and the future S2
+        # engine) mint through this same private path, and a gate on the
+        # route only would let them nominate a DELETED harness (a zombie
+        # queued row holding the ≤1-active slot, launchable by nobody).
+        known = self._harness_names_db(db)
+        if harness not in known:
+            raise UnknownHarnessError(
+                f"unknown harness: {harness}; known: {sorted(known)}")
         active = db.execute(
             "SELECT COUNT(*) AS n FROM task_assignments "
             "WHERE task_id=? AND state IN ('queued','claimed','running')",
@@ -2007,6 +2297,9 @@ class Store:
         Raises:
             AssignmentNotFoundError — task id unknown (404 upstream);
             TaskNotAssignableError — task archived or workflow-terminal (422);
+            UnknownHarnessError — harness absent from the dictionary (422;
+                          wave 3C — the gate lives in the in-transaction
+                          core, so run-now and the S2 engine are gated too);
             AssignmentConflictError — the task already has an active
                                       assignment: the ≤1 invariant (409).
         """
@@ -2569,9 +2862,6 @@ class Store:
         name = name.strip()[:120]
         if not name:
             raise ValueError("executor name is empty")
-        if harness not in self.KNOWN_HARNESSES:
-            raise ValueError(
-                f"unknown harness: {harness}; known: {sorted(self.KNOWN_HARNESSES)}")
         if transport not in EXECUTOR_TRANSPORTS:
             raise ValueError(f"invalid transport: {transport}")
         secret = secrets.token_hex(24)
@@ -2587,6 +2877,14 @@ class Store:
                     f"open pending executor registrations are capped at "
                     f"{EXECUTOR_PENDING_CAP} — approve, revoke or delete "
                     "existing ones before registering more")
+            # Wave 3C: the harness gate reads the LIVE dictionary inside the
+            # registration transaction (no check-then-act window against a
+            # concurrent harness deletion). A rolled-back registration never
+            # fires.
+            known = self._harness_names_db(db)
+            if harness not in known:
+                raise ValueError(
+                    f"unknown harness: {harness}; known: {sorted(known)}")
             if db.execute("SELECT 1 FROM executors WHERE name=?",
                           (name,)).fetchone():
                 raise ExecutorConflictError(
@@ -2774,6 +3072,292 @@ class Store:
                 "executor_id": executor_id, "name": row["name"]})
         return dict(row)
 
+    # ------------------------------------------- harness dictionary (wave 3C)
+    # The owner-managed nomination dictionary (design 2026-09-22 §C). The
+    # gates (registration, enrollment hint, assignment create, automation
+    # payloads, rule conditions) read it LIVE; launching stays gated by the
+    # poller's local allowlist (A3) — the dictionary never grants execution.
+    # Audits: harness.added / harness.removed.
+
+    @staticmethod
+    def _harness_names_db(db: sqlite3.Connection) -> frozenset[str]:
+        """Live dictionary snapshot on an OPEN connection (transaction-safe:
+        callers inside a write transaction use this; standalone callers use
+        harness_names())."""
+        return frozenset(
+            r["name"] for r in db.execute("SELECT name FROM harnesses"))
+
+    def harness_names(self) -> frozenset[str]:
+        """Live dictionary snapshot — the single lookup every nomination
+        gate uses. A per-call SELECT: the table is tiny (cap 64) and the
+        board sees single-digit rps; caching would only add a staleness
+        window between add/delete and the next nomination."""
+        with self._lock, self._conn() as db:
+            return self._harness_names_db(db)
+
+    def list_harnesses(self) -> list[dict[str, Any]]:
+        """Full dictionary rows, alphabetical (open read — a dictionary,
+        same boundary as GET /api/executors)."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM harnesses ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+
+    def add_harness(self, name: str, note: str = "",
+                    added_via: str = "owner") -> dict[str, Any]:
+        """Add a harness to the dictionary (ui-token route).
+
+        Raises:
+            ValueError — invalid name (HTTP 422 upstream);
+            HarnessQuotaError — dictionary ceiling HARNESS_MAX_COUNT
+                         (HTTP 422 upstream — entry validation);
+            HarnessConflictError — duplicate name (HTTP 409 upstream).
+        """
+        name = (name or "").strip()
+        if not HARNESS_NAME_RE.match(name):
+            raise ValueError(
+                f"invalid harness name: {name!r} (lowercase latin/digits "
+                "first, then [a-z0-9._-], max 60 chars)")
+        note = (note or "").strip()[:200]
+        with self._lock, self._conn() as db:
+            count = db.execute(
+                "SELECT COUNT(*) AS n FROM harnesses").fetchone()["n"]
+            if count >= HARNESS_MAX_COUNT:
+                raise HarnessQuotaError(
+                    f"the harness dictionary is capped at {HARNESS_MAX_COUNT} "
+                    "— remove unused entries before adding more")
+            if db.execute("SELECT 1 FROM harnesses WHERE name=?",
+                          (name,)).fetchone():
+                raise HarnessConflictError(
+                    f"harness '{name}' is already registered")
+            now = _now()
+            db.execute(
+                "INSERT INTO harnesses (name, added_at, added_via, note) "
+                "VALUES (?,?,?,?)", (name, now, added_via, note))
+            self._log(db, "harness.added", None, {
+                "name": name, "added_via": added_via[:60]})
+            row = db.execute(
+                "SELECT * FROM harnesses WHERE name=?", (name,)).fetchone()
+        return dict(row)
+
+    def delete_harness(self, name: str) -> dict[str, Any]:
+        """Remove a harness from the dictionary (ui-token route). Deletion
+        is refused while the name is LIVE anywhere an executor could act on
+        it: a registered executor (its poller.yaml allowlist matches this
+        string), a non-terminal assignment (a queued nomination for it) or
+        an ENABLED automation rule (schedule field / hook condition).
+        Terminal history (done/failed/expired assignments, launch journal)
+        and DISABLED rules do NOT block — a disabled rule cannot fire, and
+        rules are soft-deleted (retention: the row is never destroyed), so
+        counting them would make a harness undeletable forever. Re-enable
+        of a rule whose harness is gone is the S2 engine's fire-time
+        validation concern (422 at fire, decision logged), not a reason to
+        trap the dictionary.
+
+        Raises:
+            HarnessNotFoundError — unknown name (HTTP 404 upstream);
+            HarnessInUseError — live reference exists (HTTP 409 upstream).
+        """
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM harnesses WHERE name=?", (name,)).fetchone()
+            if row is None:
+                raise HarnessNotFoundError(
+                    f"harness {name!r} is not registered")
+            if db.execute(
+                    "SELECT 1 FROM executors WHERE harness=? LIMIT 1",
+                    (name,)).fetchone():
+                raise HarnessInUseError(
+                    f"harness '{name}' is used by a registered executor — "
+                    "delete that executor first (revoked executors keep blocking: the row and the poller.yaml allowlist drift stay)")
+            if db.execute(
+                    "SELECT 1 FROM task_assignments WHERE harness=? AND "
+                    "state IN ('queued','claimed','running') LIMIT 1",
+                    (name,)).fetchone():
+                raise HarnessInUseError(
+                    f"harness '{name}' has active assignments — cancel or "
+                    "finish them first")
+            if db.execute(
+                    "SELECT 1 FROM schedules WHERE harness=? AND enabled=1 "
+                    "LIMIT 1", (name,)).fetchone():
+                raise HarnessInUseError(
+                    f"harness '{name}' is referenced by an automation "
+                    "schedule — delete the schedule first")
+            for hook in db.execute(
+                    "SELECT name, condition FROM hooks "
+                    "WHERE enabled=1").fetchall():
+                try:
+                    clauses = json.loads(hook["condition"] or "[]")
+                except ValueError:
+                    clauses = []
+                if not isinstance(clauses, list):
+                    continue
+                for clause in clauses:
+                    if (isinstance(clause, dict)
+                            and clause.get("field") == "harness"
+                            and str(clause.get("value")) == name):
+                        raise HarnessInUseError(
+                            f"harness '{name}' is referenced by automation "
+                            f"hook '{hook['name']}' — delete the hook first")
+            db.execute("DELETE FROM harnesses WHERE name=?", (name,))
+            self._log(db, "harness.removed", None, {"name": name})
+        return dict(row)
+
+    # ------------------------------------------------ provisioning (wave 4)
+    # Install-time SSH jobs: the job row is the PROGRESS/VERDICT record —
+    # zero secret columns (the enrollment token and ssh credentials live
+    # only in the worker's task context, transit-only invariant). Errors
+    # are stored as (error_code, detail) where the detail is ALREADY
+    # mask→truncate-processed by the caller.
+
+    def create_provision_job(self, *, host: str, port: int, auth_kind: str,
+                             key_fingerprint: str, harness_hint: str,
+                             board_url_for_host: str, enrollment_id: str,
+                             expected_host_key_fingerprint: str = "",
+                             ) -> dict[str, Any]:
+        """Insert one queued job. host_key_fingerprint is seeded from the
+        expected pin (strict mode) or from the existing host pin; TOFU
+        fills it at first connect."""
+        now = _now()
+        job_id = "pj-" + secrets.token_hex(6)
+        with self._lock, self._conn() as db:
+            db.execute(
+                """INSERT INTO provision_jobs
+                       (id, host, port, auth_kind, key_fingerprint,
+                        host_key_fingerprint, harness_hint,
+                        board_url_for_host, enrollment_id, state,
+                        created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?, 'queued', ?, ?)""",
+                (job_id, host.strip()[:200], int(port), auth_kind,
+                 key_fingerprint.strip()[:128],
+                 expected_host_key_fingerprint.strip()[:128],
+                 harness_hint.strip()[:60], board_url_for_host.strip()[:200],
+                 enrollment_id, now, now))
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row)
+
+    def get_provision_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row) if row else None
+
+    def update_provision_job(
+            self, job_id: str, *, state: str | None = None,
+            step: str | None = None, error_code: str = "",
+            host_key_fingerprint: str | None = None,
+            enrollment_id: str | None = None) -> dict[str, Any] | None:
+        """Advance the job: set state, append a step line, set the error
+        code and/or the pinned/expected host-key fingerprint."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                return None
+            updates: dict[str, Any] = {"updated_at": _now()}
+            if state is not None and state != row["state"]:
+                # Terminal is terminal (P2-1): an in-flight worker must not
+                # resurrect a row an owner action already failed (e.g. a
+                # re-pin invalidating jobs mid-flight).
+                if row["state"] in ("done", "failed"):
+                    return dict(row)
+                updates["state"] = state
+            if error_code:
+                updates["error_code"] = error_code[:64]
+            if host_key_fingerprint is not None:
+                updates["host_key_fingerprint"] = host_key_fingerprint[:128]
+            if enrollment_id is not None:
+                updates["enrollment_id"] = enrollment_id
+            if step:
+                steps = _loads(row["steps"])
+                steps.append(f"[{_now()}] {step[:200]}")
+                updates["steps"] = json.dumps(steps[-40:])
+            sets = ", ".join(f"{k}=?" for k in updates)
+            db.execute(
+                f"UPDATE provision_jobs SET {sets} WHERE id=?",  # noqa: S608 — fixed allow-list keys
+                (*updates.values(), job_id))
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row)
+
+    def count_active_provision_jobs(self) -> int:
+        """Jobs still alive (the anti-spray global cap, security P2-5)."""
+        with self._lock, self._conn() as db:
+            return db.execute(
+                "SELECT COUNT(*) AS n FROM provision_jobs "
+                "WHERE state IN ('queued','connecting','installing','watching')"
+            ).fetchone()["n"]
+
+    def active_job_for_host(self, host: str, port: int) -> dict[str, Any] | None:
+        """One active job per host:port (dedup, security P2-5)."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE host=? AND port=? "
+                "AND state IN ('queued','connecting','installing','watching') "
+                "LIMIT 1", (host, int(port))).fetchone()
+        return dict(row) if row else None
+
+    def last_provision_job_for_host(self, host: str, port: int) -> dict[str, Any] | None:
+        """The most recent job for host:port (cooldown check, P2-5)."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_jobs WHERE host=? AND port=? "
+                "ORDER BY created_at DESC LIMIT 1", (host, int(port))).fetchone()
+        return dict(row) if row else None
+
+    def fail_live_provision_jobs(self, error_code: str = "provisioner.restarted",
+                                 ) -> list[dict[str, Any]]:
+        """Board-start housekeeping: any job still alive died with the old
+        process (its in-memory token context is gone) — honest failure."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM provision_jobs "
+                "WHERE state IN ('queued','connecting','installing','watching')"
+            ).fetchall()
+            out = []
+            for row in rows:
+                db.execute(
+                    "UPDATE provision_jobs SET state='failed', "
+                    "error_code=?, updated_at=? WHERE id=?",
+                    (error_code, _now(), row["id"]))
+                out.append(dict(row))
+        return out
+
+    def get_host_pin(self, host: str, port: int) -> dict[str, Any] | None:
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM provision_host_pins WHERE host=? AND port=?",
+                (host, int(port))).fetchone()
+        return dict(row) if row else None
+
+    def set_host_pin(self, host: str, port: int, fingerprint: str) -> None:
+        with self._lock, self._conn() as db:
+            db.execute(
+                "INSERT INTO provision_host_pins (host, port, fingerprint, pinned_at) "
+                "VALUES (?,?,?,?) ON CONFLICT(host, port) DO UPDATE SET "
+                "fingerprint=excluded.fingerprint, pinned_at=excluded.pinned_at",
+                (host, int(port), fingerprint[:128], _now()))
+
+    def fail_live_provision_jobs_for_host(self, host: str, port: int,
+                                          error_code: str) -> list[dict[str, Any]]:
+        """Kill every live job of one host:port (P2-1: a re-pin invalidates
+        the in-flight jobs that were authenticating against the OLD pin —
+        honest terminal state instead of a stale-pin race)."""
+        with self._lock, self._conn() as db:
+            rows = db.execute(
+                "SELECT * FROM provision_jobs WHERE host=? AND port=? "
+                "AND state IN ('queued','connecting','installing','watching')",
+                (host, int(port))).fetchall()
+            out = []
+            for row in rows:
+                db.execute(
+                    "UPDATE provision_jobs SET state='failed', error_code=?, "
+                    "updated_at=? WHERE id=?",
+                    (error_code[:64], _now(), row["id"]))
+                out.append(dict(row))
+        return out
+
     def log_board_event(self, kind: str, payload: dict[str, Any]) -> None:
         """Board-level audit event with no task attached (registry and
         settings lifecycle — executor.*, default.changed)."""
@@ -2802,9 +3386,12 @@ class Store:
     @staticmethod
     def _device_public(row: sqlite3.Row) -> dict[str, Any]:
         """UI shape of a device session: token_hash NEVER leaves the store
-        (ADR §5 — the list must be safe to render on the trusted side)."""
+        (ADR §5 — the list must be safe to render on the trusted side);
+        grants rides as the parsed list (the owner panel's granule
+        toggles bind to it)."""
         return {
             "id": row["id"], "name": row["name"], "scope": row["scope"],
+            "grants": grants_from_stored(row["grants"]),
             "state": row["state"], "created_at": row["created_at"],
             "last_seen_at": row["last_seen_at"],
             "last_seen": row["last_seen"], "expires_at": row["expires_at"],
@@ -2821,7 +3408,7 @@ class Store:
                 and _iso_past(row["expires_at"]))
 
     def create_pairing_request(
-        self, *, created_by: str = "owner", scope: str = "read",
+        self, *, created_by: str = "owner", scope: str = "control",
         ttl_s: float = PAIRING_TTL_S, device_name: str = "",
     ) -> tuple[dict[str, Any], str]:
         """Mint a pairing request (ADR 0012 §2.1). Returns (public row,
@@ -2831,7 +3418,14 @@ class Store:
         ``device_name`` is an optional owner-side label shown on the panel
         BEFORE any scan; the device's first exchange overwrites it with
         its own self-asserted name (§3.6 — that is the string the owner
-        confirms against)."""
+        confirms against).
+
+        Scope v1 (ADR 0012 Amendment, archcom 2026-09-23): new pairings
+        default to `control` — the paired device manages the board. The
+        scope must be decided at the STORE layer, not the schema: the
+        DB column DEFAULT stays 'read' as the fail-safe for INSERTs that
+        bypass this method. `read` stays available explicitly (QA matrix,
+        least-privilege pairings)."""
         code = secrets.token_urlsafe(16)          # 128-bit urlsafe
         verify = f"{secrets.randbelow(10 ** PAIRING_VERIFY_DIGITS):0{PAIRING_VERIFY_DIGITS}d}"
         now = datetime.now(timezone.utc)
@@ -3053,8 +3647,20 @@ class Store:
                     "SELECT 1 FROM device_sessions WHERE id=?",
                     (device_id,)).fetchone():
                 device_id = "dev-" + secrets.token_hex(6)
+            # Owner override 2026-09-23 (Amendment §A.7): ONE sliding window
+            # (30 d) for every device — the 7-day control clock is retired
+            # (revocation-first: the kill-switch + granular grants are the
+            # compromise, not an auto-expiry). The hard 90-day cap is set
+            # below. Grants: control pairings START with the full granule
+            # set (the v1 semantic); read pairings start empty — the owner
+            # can still grant granules to either via PUT /api/devices/{id}/
+            # grants, and the boot migration backfills only the '' sentinel.
+            scope = row["scope"] if row["scope"] == "control" else "read"
+            grants = (normalize_device_grants(DEVICE_GRANTS) if scope == "control"
+                      else DEVICE_GRANTS_EMPTY)
             device = {
                 "id": device_id, "name": name, "scope": row["scope"],
+                "grants": grants,
                 "token_hash": token_hash, "created_at": now_s,
                 "last_seen_at": now_s,
                 "expires_at": _iso_in(DEVICE_SLIDING_TTL_S, now),
@@ -3064,12 +3670,12 @@ class Store:
             }
             db.execute(
                 """INSERT INTO device_sessions
-                       (id, name, scope, token_hash, created_at,
+                       (id, name, scope, grants, token_hash, created_at,
                         last_seen_at, expires_at, hard_expires_at, state,
                         ua, ip, last_seen)
-                       VALUES (:id, :name, :scope, :token_hash, :created_at,
-                        :last_seen_at, :expires_at, :hard_expires_at,
-                        :state, :ua, :ip, :last_seen)""",
+                       VALUES (:id, :name, :scope, :grants, :token_hash,
+                        :created_at, :last_seen_at, :expires_at,
+                        :hard_expires_at, :state, :ua, :ip, :last_seen)""",
                 device)
             self._log(db, "pairing.issued", None, {
                 "pairing_id": pairing_id, "device_id": device_id,
@@ -3081,8 +3687,12 @@ class Store:
 
     @staticmethod
     def _device_public_from(device: dict[str, Any]) -> dict[str, Any]:
-        """_device_public for a just-minted dict (no Row at hand)."""
-        return {k: v for k, v in device.items() if k != "token_hash"}
+        """_device_public for a just-minted dict (no Row at hand); the
+        grants value is still the stored JSON string here — parse it to
+        the public list shape."""
+        public = {k: v for k, v in device.items() if k != "token_hash"}
+        public["grants"] = grants_from_stored(public.get("grants"))
+        return public
 
     def list_devices(self) -> list[dict[str, Any]]:
         """All device sessions, public shape (no token hashes), oldest
@@ -3117,16 +3727,62 @@ class Store:
                     (device_id,)).fetchone()
         return self._device_public(row), transitioned
 
+    def set_device_grants(
+            self, device_id: str, grants: list[str],
+    ) -> tuple[dict[str, Any], bool] | None:
+        """Owner sets the per-device granule set (ADR 0012 Amendment §A.7):
+        FULL-REPLACEMENT semantics (PUT) — the sent list IS the new set,
+        canonicalized (dedupe + DEVICE_GRANTS order). Takes effect on the
+        LIVE session immediately: the very next request the device makes
+        is answered under the new set (the guard reads the row per
+        request); no re-pairing, no token re-issue.
+
+        Returns (public row, changed) with changed=False when the sent set
+        equals the stored one (idempotent repeat, no audit spam); None for
+        an unknown id. Non-active sessions answer (row, False) — the caller
+        turns that into 409 (granting to a dead session is a no-op, the
+        owner revokes or re-pairs instead). The audit event carries both
+        sets (fact only — no token material)."""
+        stored = normalize_device_grants(grants)
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT * FROM device_sessions WHERE id=?",
+                (device_id,)).fetchone()
+            if row is None:
+                return None
+            if row["grants"] == stored:
+                return self._device_public(row), False
+            if row["state"] != "active":
+                return self._device_public(row), False
+            cur = db.execute(
+                "UPDATE device_sessions SET grants=? WHERE id=?",
+                (stored, device_id))
+            if cur.rowcount != 1:  # unreachable under the lock; keep honest
+                return self._device_public(row), False
+            self._log(db, "device.grants", None, {
+                "device_id": device_id,
+                "previous": grants_from_stored(row["grants"]),
+                "grants": grants_from_stored(stored)})
+            row = db.execute(
+                "SELECT * FROM device_sessions WHERE id=?",
+                (device_id,)).fetchone()
+        return self._device_public(row), True
+
     def validate_device_token(
-        self, token: str, *, ua: str = "", ip: str = "",
+            self, token: str, *, ua: str = "", ip: str = "",
     ) -> dict[str, Any] | None:
         """Device-token check (ADR §5): sha256 the presented token, index
         lookup, constant-time compare. Revoked / hard-TTL-passed /
         sliding-TTL-lapsed tokens answer None (401 upstream) and are
         lazily flipped to state='expired' when the clock says so. A valid
-        active token slides expires_at forward (30 d) and ticks
-        last_seen/ua/ip — one write per authenticated request, the
-        executor presence-tick pattern."""
+        active token slides expires_at forward — 30 d for every device
+        (owner override 2026-09-23, Amendment §A.7: the scope-differentiated
+        clock is retired, revocation is the kill-switch) — and ticks
+        last_seen/ua/ip: one write per authenticated request, the
+        executor presence-tick pattern. The sliding UPDATE deliberately
+        never touches the scope or grants columns: scope is set at issue
+        (or by the v1 data migration), grants are the owner's live set via
+        set_device_grants — nothing here may rewrite either."""
         if not token.startswith(DEVICE_TOKEN_PREFIX):
             return None
         digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -3250,10 +3906,15 @@ class Store:
         if name_hint:
             name_hint = name_hint.strip()[:120]
         harness_hint = (harness_hint or "").strip()[:60]
-        if harness_hint and harness_hint not in self.KNOWN_HARNESSES:
-            raise ValueError(
-                f"unknown harness: {harness_hint}; "
-                f"known: {sorted(self.KNOWN_HARNESSES)}")
+        if harness_hint:
+            # Wave 3C: the hint gate reads the LIVE harness dictionary (the
+            # hint feeds the bootstrap command — a bogus hint would mislead
+            # the remote leg).
+            known = self.harness_names()
+            if harness_hint not in known:
+                raise ValueError(
+                    f"unknown harness: {harness_hint}; "
+                    f"known: {sorted(known)}")
         token = ENROLLMENT_TOKEN_PREFIX + secrets.token_urlsafe(24)
         now = datetime.now(timezone.utc)
         enrollment_id = "enr-" + secrets.token_hex(6)
@@ -3457,10 +4118,11 @@ class Store:
                     "specialist must be a non-empty string (<=120 chars)")
             fields["specialist"] = specialist.strip()
         if "harness" in payload:
-            if payload["harness"] not in self.KNOWN_HARNESSES:
+            known = self.harness_names()
+            if payload["harness"] not in known:
                 raise AutomationValidationError(
                     f"unknown harness: {payload['harness']!r}; known: "
-                    f"{sorted(self.KNOWN_HARNESSES)}")
+                    f"{sorted(known)}")
             fields["harness"] = payload["harness"]
         if "executor_id" in payload:
             executor_id = payload["executor_id"]
@@ -3529,11 +4191,15 @@ class Store:
         — never accepted from a client (schedule-clock family is
         server-owned)."""
         name = self._rule_name(payload.get("name"))
-        fields = self._validate_schedule_fields({
-            k: v for k, v in payload.items() if k != "name"})
+        rest = {k: v for k, v in payload.items() if k != "name"}
+        # The harness default applies BEFORE validation: the effective
+        # value must pass the live-dictionary gate like any provided one
+        # (wave 3C review — a defaulted 'zcode' must not bypass the gate;
+        # with the seed deleted the omission is an honest 422).
+        rest.setdefault("harness", "zcode")
+        fields = self._validate_schedule_fields(rest)
         # target_kind was validated against the v1 dictionary ('task' only)
-        # inside _validate_schedule_fields; harness/executor pin defaults:
-        fields.setdefault("harness", "zcode")
+        # inside _validate_schedule_fields; executor pin default:
         fields.setdefault("executor_id", "")
         fields.setdefault("max_runs_per_day", SCHEDULE_DEFAULT_MAX_RUNS_PER_DAY)
         fields.setdefault("cooldown_s", SCHEDULE_DEFAULT_COOLDOWN_S)
@@ -3687,7 +4353,8 @@ class Store:
                     f"{sorted(HOOK_EVENT_WHITELIST)}")
             fields["on"] = payload["on"]
         if "condition" in payload:
-            fields["condition"] = validate_condition(payload["condition"])
+            fields["condition"] = validate_condition(
+                payload["condition"], self.harness_names())
         if "action" in payload:
             if payload["action"] not in HOOK_ACTIONS:
                 raise AutomationValidationError(
@@ -4013,7 +4680,8 @@ class Store:
     # ------------------------------------------- settings + condition meta
     def automation_settings(self) -> dict[str, Any]:
         """Global kill-switch + daily cap (board_meta, ADR 0013 §6).
-        Defaults: enabled=false (disable-by-default, C-1), cap=20/day."""
+        Defaults: enabled=false (disable-by-default, C-1),
+        cap=AUTOMATION_DEFAULT_GLOBAL_CAP (10/day)."""
         raw_enabled = self.get_meta(AUTOMATION_ENABLED_META_KEY)
         raw_cap = self.get_meta(AUTOMATION_CAP_META_KEY)
         try:
@@ -4064,7 +4732,7 @@ class Store:
         АРХКОМ-5): fields/ops/values enums over the closed allowlists — a
         free-text condition control never needs to exist. ``values_hint``
         maps field → enum list, or null where no closed set exists."""
-        enums = _condition_field_enums()
+        enums = _condition_field_enums(self.harness_names())
         return {
             "fields": sorted(enums),
             "ops": sorted(RULE_CONDITION_OPS),
@@ -4204,7 +4872,9 @@ class Store:
     # refreshed ONLY for records their server actually returned, so a record
     # that vanished from mnemos simply ages out into "stale" instead of
     # being deleted — the mirror never destroys data. adopted_task_id is
-    # write-once from the adopt flow and survives re-scans.
+    # write-once from the adopt flow and survives re-scans. The ``edits``
+    # JSON (UI-25, owner corrections before adoption) survives re-scans the
+    # same way — it is an overlay the API merges over the base fields.
     INBOX_STALE_SECONDS = 30 * 60
     INBOX_REFRESHED_AT_KEY = "task_inbox_refreshed_at"
 
@@ -4265,24 +4935,60 @@ class Store:
             )
         return cur.rowcount > 0
 
+    def save_inbox_edits(self, memory_id: str, edits: dict[str, Any]) -> bool:
+        """Merge owner field edits into the row's ``edits`` JSON (UI-25).
+        Provided keys override, omitted keys keep their previous value;
+        bookkeeping keys (revision sync state) are preserved. False when the
+        row is gone."""
+        with self._lock, self._conn() as db:
+            row = db.execute(
+                "SELECT edits FROM task_inbox WHERE memory_id=?", (memory_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            current = _loads(row["edits"]) if row["edits"] else {}
+            merged = {**current, **edits}
+            cur = db.execute(
+                "UPDATE task_inbox SET edits=? WHERE memory_id=?",
+                (json.dumps(merged, ensure_ascii=False), memory_id),
+            )
+        return cur.rowcount > 0
+
+    @staticmethod
+    def _inbox_overlay(edits_raw: str) -> dict[str, str]:
+        """Editable-field overlay of one row's edits JSON. Empty strings are
+        meaningful (an owner CLEARED the field) — only non-str junk drops."""
+        data = _loads(edits_raw) if edits_raw else {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            key: str(data[key]) for key in INBOX_EDITABLE_FIELDS
+            if isinstance(data.get(key), str)
+        }
+
     def inbox_refreshed_at(self) -> str:
         return self.get_meta(self.INBOX_REFRESHED_AT_KEY) or ""
 
     def list_inbox(self, scope: str = "all", project: str = "",
-                   include_adopted: bool = False) -> list[dict[str, Any]]:
+                   include_adopted: bool = False,
+                   memory_id: str | None = None) -> list[dict[str, Any]]:
         """Inbox projection for the API.
 
         Filters: ``scope`` is 'all' or one source server name (mirror rows
         know their server); ``project`` is an exact match; rows already
-        adopted into a native task are hidden unless include_adopted.
-        Dedup (unconditional): rows whose memory_id appears in ANY native
-        task's memory_ids — archived included, the bulk import included —
-        never leak back into the inbox. ``stale`` = last_seen older than
+        adopted into a native task are hidden unless include_adopted;
+        ``memory_id`` pins one row (UI-25 PATCH answer). Dedup
+        (unconditional): rows whose memory_id appears in ANY native task's
+        memory_ids — archived included, the bulk import included — never
+        leak back into the inbox. ``stale`` = last_seen older than
         INBOX_STALE_SECONDS, i.e. the source memory stopped coming back.
         """
         q = "SELECT * FROM task_inbox"
         where: list[str] = []
         params: list[Any] = []
+        if memory_id is not None:
+            where.append("memory_id=?")
+            params.append(memory_id)
         if scope and scope != "all":
             where.append("server=?")
             params.append(scope)
@@ -4303,20 +5009,25 @@ class Store:
         for r in rows:
             if r["memory_id"] in linked:
                 continue
+            # UI-25: the owner's pre-adoption edits are an overlay — the
+            # projection shows the EFFECTIVE fields plus the raw overlay
+            # (None when unedited) so clients can flag/prefill edits.
+            overlay = self._inbox_overlay(r["edits"])
             items.append({
                 "memory_id": r["memory_id"],
                 "server": r["server"],
-                "project": r["project"],
-                "title": r["title"],
-                "excerpt": r["excerpt"],
+                "project": overlay.get("project", r["project"]),
+                "title": overlay.get("title", r["title"]),
+                "excerpt": overlay.get("summary", r["excerpt"]),
                 "tags": _loads(r["tags"]),
-                "priority": r["priority"],
+                "priority": overlay.get("priority", r["priority"]),
                 "specialist": r["specialist"],
                 "created_at": r["source_created_at"],
                 "last_seen": r["last_seen"],
                 "stale": _age_seconds(r["last_seen"]) > self.INBOX_STALE_SECONDS,
                 "adopted": r["adopted_task_id"] is not None,
                 "adopted_task_id": r["adopted_task_id"],
+                "edits": overlay or None,
             })
         return items
 

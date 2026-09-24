@@ -16,10 +16,10 @@
 | --- | --- | --- |
 | Весь list-стейт уже в URL: задачи `?status&priority&project&agent&q` (`taskFilters.ts`), архив `?q&status&col&agent&project&limit&offset`, записи `?status&project&tag&limit&page` (`listParams.ts`), поиск `?q&type`, пульс `?scope`, теги `?tag&family&q&b&f` | `viewer/src/features/**` | **Состояние списка не надо сохранять — его надо лишь вернуться по адресу.** Browser back уже всё восстанавливает (URL + `ScrollRestoration` в `Shell.tsx` на POP) |
 | `/tasks/:id` не имеет ни одной back-ручки в контенте — только крошки | `TaskDetailPage.tsx` | владелец уходит через крошку/сайдбар → корень домена → фильтр потерян |
-| Крошка `/tasks/:id` подписана «Список» (`nav.taskList`), а ведёт на `/tasks` (канбан) | `navItems.ts:230` | подтверждённая ложь trails: и без того единственная «вверх»-ручка ведёт не туда, куда говорит |
-| `BackLink` «← Все записи» / «← Все сессии» захардкожен на корень домена | `MemoryDetailPage.tsx:78`, `SessionDetailPage.tsx:128` | вернулись «в записи», но не в *свой* фильтр/страницу/пульс/дрилл |
-| Архив — единственный список вовсе без ссылки в деталь (строки статичны) | `TaskArchivePage.tsx:224–284` | из архива нельзя посмотреть задачу — пары нет, хотя контент для неё готов |
-| Кросс-доменные входы в `/tasks/:id` (дрилл тегов, агенты, автоматизация) не оставляют следов источника | `TagDrillView.tsx:196`, `ExecutionRow.tsx:181`, `AutomationPage.tsx:322` и др. | «вернуться» для вошедшего из дрилла вообще не имеет валидной цели внутри задач |
+| Крошка `/tasks/:id` подписана «Список» (`nav.taskList`), а ведёт на `/tasks` (канбан) | `navItems.ts:236` | подтверждённая ложь trails: и без того единственная «вверх»-ручка ведёт не туда, куда говорит |
+| `BackLink` «← Все записи» / «← Все сессии» захардкожен на корень домена | `MemoryDetailPage.tsx:16` (BackLink удалён в W1, PR #66), `SessionDetailPage.tsx:16` (удалён в W2, PR #104) | вернулись «в записи», но не в *свой* фильтр/страницу/пульс/дрилл |
+| Архив — единственный список вовсе без ссылки в деталь (строки статичны) | `TaskArchivePage.tsx:298` (устранено в W1, PR #66: строки стали `Link` + `return`) | из архива нельзя посмотреть задачу — пары нет, хотя контент для неё готов |
+| Кросс-доменные входы в `/tasks/:id` (дрилл тегов, агенты, автоматизация) не оставляют следов источника | `TagDrillView.tsx:181`, `ExecutionRow.tsx:184`, `AutomationPage.tsx:335` и др. | «вернуться» для вошедшего из дрилла вообще не имеет валидной цели внутри задач |
 
 Итого: механика хранения контекста не нужна — нужен **носитель адреса
 источника** на детальной странице и честная ручка возврата.
@@ -30,22 +30,27 @@
 Все источники уже держат своё состояние в URL, поэтому «восстановить» везде
 означает одно: попасть на сохранённый URL списка.
 
-| # | Источник (файл) | Цель | Восстановить |
-| --- | --- | --- | --- |
-| 1 | Канбан `/tasks` (`TaskBoardCard.tsx:182`) | `/tasks/:id` | фильтры `?status…q`; стиль доски — сам (localStorage) |
-| 2 | Список `/tasks/list` (`TaskListPage.tsx:472,527`) | `/tasks/:id` | фильтры + группировки (localStorage, сами) |
-| 3 | Входящие `/tasks/inbox` (`TaskInboxPage.tsx:219`) | `/tasks/:id` | фильтры inbox |
-| 4 | Архив `/tasks/archive` | `/tasks/:id` | **ссылки нет вовсе** — строки статичны (`TaskArchivePage.tsx:224–284`, ни одного `Link` к детали): архив единственный список без провала в сущность. W1 добавляет `Link` + `return` парой | `?q&status&col&agent&project&limit&offset` (страницу offset — обязательно) |
-| 5 | Дрилл тега `/memory/tags?tag=X` (`TagDrillView.tsx:196`) | `/tasks/:id` | **кросс-домен**: дрилл целиком (`?tag` + семейство/раскрытия) |
-| 6 | Агенты `/agents/execution` (`ExecutionRow:181`, `ExecutionFeedPanel:159`, `ActiveAssignmentBadge:43`, `AssignmentDrawer:85`) | `/tasks/:id?tab=execution` | лента исполнений как была |
-| 7 | Автоматизация `/system/automation` (`AutomationPage.tsx:322`) | `/tasks/:id?tab=execution` | вкладка правил/журнала |
-| 8 | Записи `/memory` (`MemoryCard.tsx:34`) | `/memory/:id` | `?status&project&tag&limit&page` |
-| 9 | Поиск `/memory/search` (`SearchResultCard.tsx:43`) | `/memory/:id` | `?q&type` — запрос обязателен |
-| 10 | Пульс `/memory/pulse` (`PulseFeed.tsx:63`) | `/memory/:id` | `?scope` |
-| 11 | Дрилл тега `/memory/tags?tag=X` (`TagDrillView` MemoryCard) | `/memory/:id` | дрилл (`?tag…`) — крошка «Записи» тут врёт так же, как «Список» у задач |
-| 12 | Задача `/tasks/:id?tab=memory` (`TaskDetailPage.tsx:479`) | `/memory/:id` | detail→detail: возврат на задачу с её вкладкой |
-| 13 | Сессии `/system/sessions` (`SessionListItem.tsx:22`) | `/system/sessions/:id` | фильтры списка сессий |
-| Б | Будущее: pairing/enrollment исполнителей (спека 2026-09-22-executor-enrollment) | деталь исполнителя | тот же механизм подключением одной строкой — новая пара не проектируется заново |
+**Статус реализации**: все 13 пар landed — пары 1–5, 8, 9, 11 в W1 (PR #66,
+прод 1.18.0, 2026-09-22), пары 6, 7, 10, 12, 13 в W2 (PR #104, 2026-09-24;
+плюс 11 interaction-тестов в `BackNav.interactions.test.tsx`), механизм
+(`?return=` + `BackControl`) заморожен как спроектирован.
+
+| # | Источник (файл) | Цель | Восстановить | Статус |
+| --- | --- | --- | --- | --- |
+| 1 | Канбан `/tasks` (`TaskBoardCard.tsx:191`) | `/tasks/:id` | фильтры `?status…q`; стиль доски — сам (localStorage) | готово: W1, PR #66 |
+| 2 | Список `/tasks/list` (`TaskListPage.tsx:480,537`) | `/tasks/:id` | фильтры + группировки (localStorage, сами) | готово: W1, PR #66 |
+| 3 | Входящие `/tasks/inbox` (`TaskInboxPage.tsx:290`) | `/tasks/:id` | фильтры inbox | готово: W1, PR #66 |
+| 4 | Архив `/tasks/archive` (`TaskArchivePage.tsx:289–298`) | `/tasks/:id` | `?q&status&col&agent&project&limit&offset` (страницу offset — обязательно); на момент диагноза ссылки в деталь не было — строки статичны, архив единственный такой список; W1 добавила `Link` + `return` парой | готово: W1, PR #66 |
+| 5 | Дрилл тега `/memory/tags?tag=X` (`TagDrillView.tsx:181`) | `/tasks/:id` | **кросс-домен**: дрилл целиком (`?tag` + семейство/раскрытия) | готово: W1, PR #66 |
+| 6 | Агенты `/agents/execution` (`ExecutionRow.tsx:184`, `ExecutionFeedPanel.tsx:162`, `ActiveAssignmentBadge.tsx:47`, `AssignmentDrawer.tsx:89`) | `/tasks/:id?tab=execution` | лента исполнений как была | готово: W2, PR #104 |
+| 7 | Автоматизация `/system/automation` (`AutomationPage.tsx:335`) | `/tasks/:id?tab=execution` | вкладка правил/журнала | готово: W2, PR #104 |
+| 8 | Записи `/memory` (`MemoryCard.tsx:45`) | `/memory/:id` | `?status&project&tag&limit&page` | готово: W1, PR #66 |
+| 9 | Поиск `/memory/search` (`SearchResultCard.tsx:53`) | `/memory/:id` | `?q&type` — запрос обязателен | готово: W1, PR #66 |
+| 10 | Пульс `/memory/pulse` (`PulseFeed.tsx:85`) | `/memory/:id` | `?scope` | готово: W2, PR #104 |
+| 11 | Дрилл тега `/memory/tags?tag=X` (`TagDrillView.tsx:238` → `MemoryCard.tsx:45`) | `/memory/:id` | дрилл (`?tag…`) — крошка «Записи» тут врёт так же, как «Список» у задач | готово: W1, PR #66 |
+| 12 | Задача `/tasks/:id?tab=memory` (`TaskDetailPage.tsx:527`) | `/memory/:id` | detail→detail: возврат на задачу с её вкладкой | готово: W2, PR #104 |
+| 13 | Сессии `/system/sessions` (`SessionListItem.tsx:27`) | `/system/sessions/:id` | фильтры списка сессий | готово: W2, PR #104 |
+| Б | Будущее: pairing/enrollment исполнителей (спека 2026-09-22-executor-enrollment) | деталь исполнителя | тот же механизм подключением одной строкой — новая пара не проектируется заново | — |
 
 Отдельно: документация `/docs/:slug` имеет собственные prev/next-стрелки —
 из скоупа (§6).

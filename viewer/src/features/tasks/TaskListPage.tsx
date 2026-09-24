@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { ChevronDown, ChevronRight, MessageSquare, Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { useGateway } from "@/gateway/GatewayContext";
 import type { BoardTask } from "@/gateway/boardTypes";
 import { ActiveAssignmentBadge } from "@/features/agents/ActiveAssignmentBadge";
 import { useI18n, useT } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import {
   TASK_PRIORITIES,
   WORKFLOW_COLUMNS,
@@ -420,6 +421,14 @@ function TaskTableRow({
 }) {
   const t = useT();
   const navigate = useNavigate();
+  // UI-18 pair 2: the list URL (filters + grouping-independent state) rides
+  // as `return=` — row click and title link lead home from the detail page.
+  const location = useLocation();
+  const detailHref = withReturn(
+    `/tasks/${encodeURIComponent(task.id)}`,
+    location.pathname,
+    location.search,
+  );
   // Row-owned context menu (owner feedback 2026-09-22: list rows get the
   // SAME right-click entry the kanban cards have — one menu everywhere).
   // `menuAt` anchors the popup at the cursor; cleared on close so the ⋯
@@ -443,7 +452,7 @@ function TaskTableRow({
       className="h-row cursor-pointer border-b border-border-subtle transition-colors duration-instant hover:bg-elevated focus-within:bg-elevated"
       onClick={() => {
         if (Date.now() - closedAtRef.current < 250) return;
-        navigate(`/tasks/${encodeURIComponent(task.id)}`);
+        navigate(detailHref);
       }}
       onContextMenu={
         showMenu
@@ -469,7 +478,7 @@ function TaskTableRow({
       </td>
       <td className="max-w-[28rem] truncate px-2">
         <Link
-          to={`/tasks/${encodeURIComponent(task.id)}`}
+          to={detailHref}
           className="font-medium text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
         >
           {task.title}
@@ -521,10 +530,16 @@ function TaskCardRow({
   showMenu: boolean;
 }) {
   const t = useT();
+  // UI-18 pair 2: same `return=` contract as the desktop rows.
+  const location = useLocation();
   return (
     <div className="relative flex min-h-row items-start gap-2">
       <Link
-        to={`/tasks/${encodeURIComponent(task.id)}`}
+        to={withReturn(
+          `/tasks/${encodeURIComponent(task.id)}`,
+          location.pathname,
+          location.search,
+        )}
         className="flex min-h-row flex-1 flex-col gap-1 rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well transition-colors duration-instant hover:border-iris-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
       >
         <span className="flex flex-wrap items-center gap-1.5">

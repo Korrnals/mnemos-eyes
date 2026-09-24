@@ -1,4 +1,8 @@
-import type { ArchiveParams, AssignmentListParams, PulseParams } from "@/gateway/boardTypes";
+import type {
+  ArchiveParams,
+  AssignmentListParams,
+  PulseParams,
+} from "@/gateway/boardTypes";
 import type { InboxParams } from "@/gateway/BoardAdapter";
 import type { ListMemoriesParams, SearchParams } from "@/gateway/types";
 
@@ -35,14 +39,16 @@ export const keys = {
   pulse: {
     feed: (params: PulseParams = {}) => ["pulse", "feed", params] as const,
   },
-  // Ф2 task domain. There is NO per-task detail key: the board API has no
-  // single-task GET, so the detail page READS the shared board projection
-  // through a `select` on the same `tasks.board` key — one wire call feeds
-  // the list, the mini-stats and every open detail page, and SSE patches to
-  // `tasks.board` reach both surfaces at once.
+  // Ф2 task domain. The PRIMARY detail source is still the shared board
+  // projection (`tasks.board`): one wire call feeds the list, the mini-stats
+  // and every open detail page, and SSE patches reach them all at once.
+  // `tasks.detail` is the FALLBACK path only — the direct single-task GET
+  // (BE-16, active AND archived in one TaskOut) fired when the projection
+  // misses the id (archived rows; see useTaskDetail in useTasks.ts).
   tasks: {
     all: ["tasks"] as const,
     board: () => ["tasks", "board"] as const,
+    detail: (taskId: string) => ["tasks", "detail", taskId] as const,
     reports: {
       all: ["tasks", "reports"] as const,
       detail: (taskId: string) => ["tasks", "reports", "detail", taskId] as const,
@@ -96,6 +102,20 @@ export const keys = {
       all: ["agents", "enrollment"] as const,
       list: () => ["agents", "enrollment", "list"] as const,
     },
+    // Wave 3C: the harness dictionary (open read) — the select options in
+    // the assign/enrollment/automation forms. SSE harness.added/removed
+    // invalidates this family.
+    harnesses: {
+      all: ["agents", "harnesses"] as const,
+      list: () => ["agents", "harnesses", "list"] as const,
+    },
+    // AGW-11 (wave 4): SSH provision jobs. SSE provisioning.* invalidates
+    // the family; the connect card also polls while a job is live (the
+    // stream is at-most-once — the poll is the belt-and-braces leg).
+    provision: {
+      all: ["agents", "provision"] as const,
+      job: (jobId: string) => ["agents", "provision", "job", jobId] as const,
+    },
     settings: {
       execution: () => ["agents", "settings", "execution"] as const,
     },
@@ -106,10 +126,23 @@ export const keys = {
   automation: {
     all: ["automation"] as const,
     status: () => ["automation", "status"] as const,
+    settings: () => ["automation", "settings"] as const,
     schedules: () => ["automation", "schedules"] as const,
     hooks: () => ["automation", "hooks"] as const,
     launches: (params: { limit?: number; cursor?: string } = {}) =>
       ["automation", "launches", params] as const,
+  },
+  // CV-7 QR pairing (ADR 0012): device sessions (the owner panel list) and
+  // the trusted-side pairing status per id (the dialog's verify/scan view).
+  // pairing.* SSE invalidates both families; there is NO pairing LIST key —
+  // pairings are single-flight, the dialog holds its own id.
+  devices: {
+    all: ["devices"] as const,
+    list: () => ["devices", "list"] as const,
+  },
+  pairing: {
+    all: ["pairing"] as const,
+    status: (pairingId: string) => ["pairing", "status", pairingId] as const,
   },
 } as const;
 
@@ -123,6 +156,7 @@ export type MetricsKey = ReturnType<typeof keys.status.metrics>;
 export type BoardHealthKey = ReturnType<typeof keys.status.boardHealth>;
 export type PulseFeedKey = ReturnType<typeof keys.pulse.feed>;
 export type TaskBoardKey = ReturnType<typeof keys.tasks.board>;
+export type TaskDetailKey = ReturnType<typeof keys.tasks.detail>;
 export type TaskReportsKey = ReturnType<typeof keys.tasks.reports.detail>;
 export type TaskHistoryKey = ReturnType<typeof keys.tasks.history>;
 export type TaskMemoriesKey = ReturnType<typeof keys.tasks.memories>;
@@ -135,6 +169,7 @@ export type AgentsAssignmentsKey = ReturnType<typeof keys.agents.assignments.lis
 export type ExecutorsListKey = ReturnType<typeof keys.agents.executors.list>;
 export type ExecutionSettingsKey = ReturnType<typeof keys.agents.settings.execution>;
 export type AutomationStatusKey = ReturnType<typeof keys.automation.status>;
+export type AutomationSettingsKey = ReturnType<typeof keys.automation.settings>;
 export type AutomationSchedulesKey = ReturnType<typeof keys.automation.schedules>;
 export type AutomationHooksKey = ReturnType<typeof keys.automation.hooks>;
 export type AutomationLaunchesKey = ReturnType<typeof keys.automation.launches>;

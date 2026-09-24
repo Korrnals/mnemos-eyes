@@ -681,14 +681,16 @@ export interface paths {
          *     exhausted. A second kind="final" supersedes previous live finals
          *     (history kept, flagged).
          *
-         *     Auth composition (ADR 0009 A1 + Amd 2 §2): the owner UI writes with
-         *     the ui-class token; the machine loop writes with the board (machine)
-         *     token OR an approved executor token (the mesh leg reports with its
-         *     own credential). When the report is executor-token-backed, a declared
-         *     ``agent`` string that references neither the executor's registered
-         *     name nor its harness lands in the audit trail flagged
-         *     ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not a
-         *     refusal: the report is still accepted).
+         *     Auth composition (ADR 0009 A1 + Amd 2 §2 + scope v1): the owner UI
+         *     writes with the ui-class token; the machine loop writes with the board
+         *     (machine) token OR an approved executor token (the mesh leg reports
+         *     with its own credential); a paired device writes on its mnd_ leg when
+         *     the scope middleware validated it AND matched this route against the
+         *     device scope table (control scope). When the report is executor-
+         *     token-backed, a declared ``agent`` string that references neither the
+         *     executor's registered name nor its harness lands in the audit trail
+         *     flagged ``identity_mismatch`` (Amd 2 §7 spoofing signal — signal, not
+         *     a refusal: the report is still accepted).
          */
         readonly post: operations["create_task_report_api_tasks__task_id__reports_post"];
         readonly delete?: never;
@@ -767,8 +769,11 @@ export interface paths {
          * Create Assignment
          * @description Queue an execution attempt on a task (ADR 0009 §3). UI-token class
          *     (A1) — the owner nominates, the poller decides (A3). 404 unknown task;
-         *     422 archived/terminal task; 409 while another active assignment holds
-         *     the task (≤1 invariant).
+         *     422 archived/terminal task or unknown harness; 409 while another active
+         *     assignment holds the task (≤1 invariant). The harness gate lives IN the
+         *     store's in-transaction assignment core (wave 3C) — the same gate the
+         *     manual run-now goes through, so no window can mint a nomination on a
+         *     DELETED harness (a zombie queued row launchable by nobody).
          */
         readonly post: operations["create_assignment_api_assignments_post"];
         readonly delete?: never;
@@ -1042,6 +1047,49 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/executors/{executor_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Get Executor
+         * @description One registry row — OPEN read, the same boundary as GET /api/executors
+         *     (the cluster ingress is the auth boundary); unknown id → 404. The answer
+         *     is the SAME _executor_public projection as the list — secret_hash never
+         *     leaves the store, presence is computed from last_seen on read.
+         *
+         *     Declared AFTER the literal /api/executors/enrollment routes (FastAPI
+         *     matches in declaration order): "enrollment" must keep resolving to the
+         *     token list, never as an executor id.
+         */
+        readonly get: operations["get_executor_api_executors__executor_id__get"];
+        readonly put?: never;
+        readonly post?: never;
+        /**
+         * Delete Executor
+         * @description Remove a registry record (ui-token). Active assignments are NOT
+         *     touched: executor pins and claimed_by_executor attribution strings
+         *     stay verbatim — the assignment lifecycle is independent of the
+         *     registry (two-clock discipline, Amd 2 §3).
+         */
+        readonly delete: operations["delete_executor_api_executors__executor_id__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        /**
+         * Patch Executor
+         * @description Owner PATCH (ui-token): approve (state=approved), revoke
+         *     (state=revoked — terminal kill-switch; re-register to revive), rename,
+         *     owner-declared capabilities, enabled (routing kill-switch). Audit
+         *     old→new lands in the board events (executor.approved / revoked /
+         *     updated); SSE carries executor.updated with the registry
+         *     prev_state→state. Idempotent: a no-op PATCH emits nothing.
+         */
+        readonly patch: operations["patch_executor_api_executors__executor_id__patch"];
+        readonly trace?: never;
+    };
     readonly "/api/executors/{executor_id}/heartbeat": {
         readonly parameters: {
             readonly query?: never;
@@ -1069,7 +1117,37 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
-    readonly "/api/executors/{executor_id}": {
+    readonly "/api/harnesses": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * List Harnesses
+         * @description The harness dictionary (open read). ``meta.seed_min_count`` is the
+         *     size of the boot seed — clients learn the guaranteed minimum and never
+         *     hardcode the set. Alphabetical; ``added_via`` distinguishes ``seed``
+         *     rows from owner-added ones.
+         */
+        readonly get: operations["list_harnesses_api_harnesses_get"];
+        readonly put?: never;
+        /**
+         * Create Harness
+         * @description Add a harness to the dictionary (ui-token; wave 3C). 201 → row;
+         *     422 invalid name (``^[a-z0-9][a-z0-9._-]{0,59}$``) or dictionary cap
+         *     (≤64 — entry validation, not a rate guard); 409 duplicate. Audit
+         *     ``harness.added`` + SSE — the UI select refreshes from the frame.
+         */
+        readonly post: operations["create_harness_api_harnesses_post"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/harnesses/{name}": {
         readonly parameters: {
             readonly query?: never;
             readonly header?: never;
@@ -1080,25 +1158,106 @@ export interface paths {
         readonly put?: never;
         readonly post?: never;
         /**
-         * Delete Executor
-         * @description Remove a registry record (ui-token). Active assignments are NOT
-         *     touched: executor pins and claimed_by_executor attribution strings
-         *     stay verbatim — the assignment lifecycle is independent of the
-         *     registry (two-clock discipline, Amd 2 §3).
+         * Delete Harness
+         * @description Remove a harness from the dictionary (ui-token; wave 3C). 404
+         *     unknown; 409 while the name is LIVE anywhere an executor could act on
+         *     it — a registered executor, a non-terminal assignment or an automation
+         *     rule (schedule field / hook condition). Terminal history does NOT
+         *     block: it is archival and stays verbatim. Audit ``harness.removed`` +
+         *     SSE. Seed rows are deletable like any other (the seed does not
+         *     resurrect across restarts — it fills an EMPTY table only).
          */
-        readonly delete: operations["delete_executor_api_executors__executor_id__delete"];
+        readonly delete: operations["delete_harness_api_harnesses__name__delete"];
         readonly options?: never;
         readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/poller/bootstrap.sh": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
         /**
-         * Patch Executor
-         * @description Owner PATCH (ui-token): approve (state=approved), revoke
-         *     (state=revoked — terminal kill-switch; re-register to revive), rename,
-         *     owner-declared capabilities, enabled (routing kill-switch). Audit
-         *     old→new lands in the board events (executor.approved / revoked /
-         *     updated); SSE carries executor.updated with the registry
-         *     prev_state→state. Idempotent: a no-op PATCH emits nothing.
+         * Poller Bootstrap Script
+         * @description The one-command installer (open read). Served from the packaged
+         *     file — the script carries NO secrets: the enrollment token arrives as
+         *     a CLI argument on the VPS, everything else rides pinned TLS.
          */
-        readonly patch: operations["patch_executor_api_executors__executor_id__patch"];
+        readonly get: operations["poller_bootstrap_script_api_poller_bootstrap_sh_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/poller/artifacts/poller.py": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Poller Artifact Poller Py
+         * @description The poller itself, always fresh from the RUNNING board — installer
+         *     re-run doubles as upgrade (no version skew between board and poller).
+         */
+        readonly get: operations["poller_artifact_poller_py_api_poller_artifacts_poller_py_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/poller/artifacts/vesmaro-assignment-poller.service": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Poller Artifact Unit
+         * @description The systemd system unit (the bootstrap adapts User/config paths to
+         *     the target machine with sed — the artifact stays verbatim in the repo).
+         */
+        readonly get: operations["poller_artifact_unit_api_poller_artifacts_vesmaro_assignment_poller_service_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/poller/artifacts/ca.crt": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Poller Artifact Ca
+         * @description The lab CA for pinning (open read — a certificate is public
+         *     material). 503 while the CA file is not mounted: the chart ships the
+         *     optional mount (values `pollerBootstrap.caFile`); the honest refusal
+         *     names the fix instead of serving a guess.
+         */
+        readonly get: operations["poller_artifact_ca_api_poller_artifacts_ca_crt_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
         readonly trace?: never;
     };
     readonly "/api/settings/execution": {
@@ -1421,6 +1580,32 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/tasks/inbox/{memory_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        /**
+         * Tasks Inbox Edit
+         * @description Owner corrections to a queue record BEFORE adoption (UI-25).
+         *
+         *     Stores the provided fields (title/summary/priority/project) as an
+         *     overlay on the mirror row (``edits`` JSON) — the mirror's base fields
+         *     stay as the source returned them, and GET /api/tasks/inbox projects the
+         *     EFFECTIVE values plus the overlay. 409 once the row is adopted (the
+         *     task exists; edit that instead); 404 unknown; 422 empty/garbage body.
+         */
+        readonly patch: operations["tasks_inbox_edit_api_tasks_inbox__memory_id__patch"];
+        readonly trace?: never;
+    };
     readonly "/api/tasks/inbox/{memory_id}/adopt": {
         readonly parameters: {
             readonly query?: never;
@@ -1435,8 +1620,11 @@ export interface paths {
          * @description Adopt a mirrored task:queue record as a NATIVE board task.
          *
          *     The memory content is never copied — the task links it via memory_ids
-         *     (SEC-4). 409 with the existing ``task_id`` on double adoption; 404 when
-         *     the mirror row is unknown.
+         *     (SEC-4). Owner edits (UI-25 overlay) win over the mirror fields, and a
+         *     task created from edited fields links an EDITED revision memory written
+         *     back to the source store (best-effort; a failed sync is logged and
+         *     notified, never a failed adopt). 409 with the existing ``task_id`` on
+         *     double adoption; 404 when the mirror row is unknown.
          */
         readonly post: operations["tasks_inbox_adopt_api_tasks_inbox__memory_id__adopt_post"];
         readonly delete?: never;
@@ -1559,6 +1747,51 @@ export interface paths {
         readonly put?: never;
         readonly post?: never;
         readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/auth/ui-token": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Probe Ui Session
+         * @description Boot probe for the viewer's session hydration (ADR 0014 Ф2): 204 =
+         *     a live ``vesmaro_ui`` cookie (hasUiToken() → true, no login window);
+         *     401 = none; 503 = login not configured (fail-closed). The viewer also
+         *     re-probes in its 401 branch BEFORE opening the window — a stale header
+         *     token beside a live cookie must replay, not re-prompt (the incident's
+         *     mid-flight beat). No limiter: it is a constant-time boolean oracle
+         *     with the same profile as the guards themselves; token entropy is the
+         *     defence, as everywhere.
+         */
+        readonly get: operations["probe_ui_session_api_auth_ui_token_get"];
+        readonly put?: never;
+        /**
+         * Verify Ui Token
+         * @description Verify the owner's ui token at the door (ADR 0014 Ф1) and open the
+         *     session (Ф2): on success the ``vesmaro_ui`` cookie is set right here —
+         *     HttpOnly, SameSite=Strict, Secure when the request is https, Max-Age
+         *     21600 (sliding idle TTL; guards reissue on activity). ``token_class``
+         *     is honest about legacy mode: with no dedicated VESMARO_UI_TOKEN the ui
+         *     class is served by the board token and the login says ``legacy``.
+         *     Errors: 401 class-aware (never a generic "not accepted"), 429 on the
+         *     flat limiters, 503 fail-closed while no token class is configured.
+         */
+        readonly post: operations["verify_ui_token_api_auth_ui_token_post"];
+        /**
+         * Logout Ui Token
+         * @description Server-side logout (ADR 0014 Ф2; PA's special opinion). NO guard by
+         *     design: a logout that 401s on an already-expired cookie is a trap —
+         *     the route is how the browser gets RID of the cookie. Max-Age=0 kills
+         *     it; HttpOnly means no JS path could have done this client-side.
+         */
+        readonly delete: operations["logout_ui_token_api_auth_ui_token_delete"];
         readonly options?: never;
         readonly head?: never;
         readonly patch?: never;
@@ -1715,6 +1948,34 @@ export interface paths {
          *     the next request with that token gets 401 (scope middleware).
          */
         readonly delete: operations["revoke_device_api_devices__device_id__delete"];
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/devices/{device_id}/grants": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        /**
+         * Set Device Grants
+         * @description Owner sets the per-device granule set (ui-token; Amendment §A.7,
+         *     owner directive «пользователь-администратор сам определяет кому
+         *     сколько и куда разрешений выдать и забрать»). FULL replacement (PUT):
+         *     the sent list IS the set — [] revokes every granule (reads stay open,
+         *     global-read always). Idempotent 200 on an unchanged set; applies to
+         *     the LIVE session immediately (the guard reads grants per request —
+         *     the device's very next call runs under the new set). 404 unknown
+         *     device; 409 not-active (granting to a dead session is meaningless —
+         *     revoke/re-pair instead); 422 unknown granule names.
+         */
+        readonly put: operations["set_device_grants_api_devices__device_id__grants_put"];
+        readonly post?: never;
+        readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
         readonly patch?: never;
@@ -2038,8 +2299,30 @@ export interface components {
             readonly value: unknown;
         };
         /**
+         * DeviceGrantsBody
+         * @description FULL-REPLACEMENT granule set (PUT semantics). Unknown names → 422
+         *     (the granule dictionary is server-owned — the viewer mirrors it for
+         *     labels, never for validation).
+         */
+        readonly DeviceGrantsBody: {
+            /** Grants */
+            readonly grants?: readonly string[];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** DeviceGrantsOut */
+        readonly DeviceGrantsOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly device: components["schemas"]["DeviceOut"];
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /**
          * DeviceOut
-         * @description Public device session — token_hash never leaves the store.
+         * @description Public device session — token_hash never leaves the store. grants is
+         *     the live per-device granule set (Amendment §A.7) the owner panel's
+         *     toggles bind to.
          */
         readonly DeviceOut: {
             /** Id */
@@ -2048,6 +2331,11 @@ export interface components {
             readonly name: string;
             /** Scope */
             readonly scope: string;
+            /**
+             * Grants
+             * @default []
+             */
+            readonly grants: readonly string[];
             /** State */
             readonly state: string;
             /** Created At */
@@ -2479,6 +2767,61 @@ export interface components {
         readonly HTTPValidationError: {
             /** Detail */
             readonly detail?: readonly components["schemas"]["ValidationError"][];
+        };
+        /** HarnessCreateBody */
+        readonly HarnessCreateBody: {
+            /** Name */
+            readonly name: string;
+            /**
+             * Note
+             * @default
+             */
+            readonly note: string;
+        };
+        /** HarnessListOut */
+        readonly HarnessListOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /** Count */
+            readonly count: number;
+            /** Items */
+            readonly items: readonly components["schemas"]["HarnessOut"][];
+            /** Meta */
+            readonly meta: {
+                readonly [key: string]: unknown;
+            };
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** HarnessOut */
+        readonly HarnessOut: {
+            /** Name */
+            readonly name: string;
+            /**
+             * Added At
+             * @default
+             */
+            readonly added_at: string;
+            /**
+             * Added Via
+             * @default seed
+             */
+            readonly added_via: string;
+            /**
+             * Note
+             * @default
+             */
+            readonly note: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** HarnessStateOut */
+        readonly HarnessStateOut: {
+            /** Ok */
+            readonly ok: boolean;
+            readonly harness: components["schemas"]["HarnessOut"];
+        } & {
+            readonly [key: string]: unknown;
         };
         /** HistoryOut */
         readonly HistoryOut: {
@@ -3649,6 +3992,25 @@ export interface components {
         } & {
             readonly [key: string]: unknown;
         };
+        /**
+         * TaskInboxEditSpec
+         * @description Owner corrections to a queue record BEFORE adoption (UI-25). Partial:
+         *     omitted fields stay at their mirror/edited value. ``summary`` becomes
+         *     the native task's summary on adopt (and the revision record's content);
+         *     ``project``/``priority`` ride the task and the revision tags.
+         */
+        readonly TaskInboxEditSpec: {
+            /** Title */
+            readonly title?: string | null;
+            /** Summary */
+            readonly summary?: string | null;
+            /** Priority */
+            readonly priority?: string | null;
+            /** Project */
+            readonly project?: string | null;
+        } & {
+            readonly [key: string]: unknown;
+        };
         /** TaskInboxItem */
         readonly TaskInboxItem: {
             /** Memory Id */
@@ -3677,6 +4039,10 @@ export interface components {
             readonly adopted: boolean;
             /** Adopted Task Id */
             readonly adopted_task_id?: string | null;
+            /** Edits */
+            readonly edits?: {
+                readonly [key: string]: string;
+            } | null;
         } & {
             readonly [key: string]: unknown;
         };
@@ -3804,6 +4170,29 @@ export interface components {
             readonly memory_ids?: readonly string[] | null;
             /** Mnemos Tags */
             readonly mnemos_tags?: readonly string[] | null;
+        };
+        /**
+         * UiTokenVerifyIn
+         * @description Owner login body. 1..512: non-empty and bounded — the verify leg is
+         *     the one unauthenticated surface that handles secret material.
+         */
+        readonly UiTokenVerifyIn: {
+            /** Token */
+            readonly token: string;
+        } & {
+            readonly [key: string]: unknown;
+        };
+        /** UiTokenVerifyOut */
+        readonly UiTokenVerifyOut: {
+            /** Ok */
+            readonly ok: boolean;
+            /**
+             * Token Class
+             * @enum {string}
+             */
+            readonly token_class: "ui" | "legacy";
+        } & {
+            readonly [key: string]: unknown;
         };
         /** UnarchiveOut */
         readonly UnarchiveOut: {
@@ -5555,7 +5944,7 @@ export interface operations {
             };
         };
     };
-    readonly executor_heartbeat_api_executors__executor_id__heartbeat_post: {
+    readonly get_executor_api_executors__executor_id__get: {
         readonly parameters: {
             readonly query?: never;
             readonly header?: never;
@@ -5572,7 +5961,7 @@ export interface operations {
                     readonly [name: string]: unknown;
                 };
                 content: {
-                    readonly "application/json": components["schemas"]["ExecutorStateChangeOut"];
+                    readonly "application/json": components["schemas"]["ExecutorOut"];
                 };
             };
             /** @description Validation Error */
@@ -5648,6 +6037,201 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly executor_heartbeat_api_executors__executor_id__heartbeat_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly executor_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ExecutorStateChangeOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly list_harnesses_api_harnesses_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HarnessListOut"];
+                };
+            };
+        };
+    };
+    readonly create_harness_api_harnesses_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["HarnessCreateBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HarnessStateOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly delete_harness_api_harnesses__name__delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly name: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["OkOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly poller_bootstrap_script_api_poller_bootstrap_sh_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": unknown;
+                };
+            };
+        };
+    };
+    readonly poller_artifact_poller_py_api_poller_artifacts_poller_py_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": unknown;
+                };
+            };
+        };
+    };
+    readonly poller_artifact_unit_api_poller_artifacts_vesmaro_assignment_poller_service_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": unknown;
+                };
+            };
+        };
+    };
+    readonly poller_artifact_ca_api_poller_artifacts_ca_crt_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": unknown;
                 };
             };
         };
@@ -6135,6 +6719,41 @@ export interface operations {
             };
         };
     };
+    readonly tasks_inbox_edit_api_tasks_inbox__memory_id__patch: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly memory_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["TaskInboxEditSpec"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["TaskInboxItem"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     readonly tasks_inbox_adopt_api_tasks_inbox__memory_id__adopt_post: {
         readonly parameters: {
             readonly query?: never;
@@ -6319,6 +6938,75 @@ export interface operations {
                 content: {
                     readonly "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    readonly probe_ui_session_api_auth_ui_token_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 204: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    readonly verify_ui_token_api_auth_ui_token_post: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["UiTokenVerifyIn"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["UiTokenVerifyOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly logout_ui_token_api_auth_ui_token_delete: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 204: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -6532,6 +7220,41 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["DeviceRevokedOut"];
+                };
+            };
+            /** @description Validation Error */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    readonly set_device_grants_api_devices__device_id__grants_put: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly device_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["DeviceGrantsBody"];
+            };
+        };
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["DeviceGrantsOut"];
                 };
             };
             /** @description Validation Error */

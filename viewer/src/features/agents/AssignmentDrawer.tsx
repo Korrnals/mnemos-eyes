@@ -1,13 +1,15 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { TextEngine } from "@/components/TextEngine";
 import {
   Dialog,
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { AssignmentItem } from "@/gateway/boardTypes";
+import { withReturn } from "@/lib/returnParams";
 import { useI18n, useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n";
 import { formatTaskDate } from "@/features/tasks/taskStatus";
@@ -54,6 +56,9 @@ export function AssignmentDrawer({
 }) {
   const t = useT();
   const { lang } = useI18n();
+  // UI-18 pair 6: the execution URL rides as `return=` on the open-task
+  // link so the task's back control leads back into this drawer's page.
+  const location = useLocation();
   // The reports query keys per TASK — the drawer reads the SAME cache the
   // task tab fills (one wire call per task across surfaces).
   const reports = useTaskReports(row?.task_id);
@@ -82,7 +87,11 @@ export function AssignmentDrawer({
           </DialogTitle>
 
           <Link
-            to={`/tasks/${encodeURIComponent(row.task_id)}?tab=execution`}
+            to={withReturn(
+              `/tasks/${encodeURIComponent(row.task_id)}?tab=execution`,
+              location.pathname,
+              location.search,
+            )}
             className="text-sm font-medium text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
           >
             {t("agents.drawer.openTask", { id: row.task_id })}
@@ -168,9 +177,14 @@ export function AssignmentDrawer({
                 {t("agents.drawer.reportLoading")}
               </p>
             ) : lastFinal ? (
-              <p className="mt-1 line-clamp-4 whitespace-pre-wrap rounded-md border border-border-subtle bg-well p-2 text-xs text-foreground-secondary">
-                {lastFinal.body}
-              </p>
+              /* UI-27 + owner clamp directive: the report preview is author
+               * text — through the TextEngine primitive with the measured
+               * clamp. Replaces the hard 4-line CSS cut: long finals get the
+               * inline «показать полностью» expand instead of an unreadable
+               * truncation. */
+              <div className="mt-1 rounded-md border border-border-subtle bg-well p-2 text-xs text-foreground-secondary">
+                <TextEngine text={lastFinal.body} variant="compact" clamp />
+              </div>
             ) : (
               <p className="mt-1 text-xs text-foreground-muted">
                 {t("agents.drawer.reportNone")}

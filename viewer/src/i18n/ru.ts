@@ -45,6 +45,12 @@ export const ru = {
   // that kept lying after login.
   "nav.modeReadOnly": "только чтение",
   "nav.modeActive": "сессия активна",
+  // UI-22: paired device without an owner session — идентификация есть.
+  // Scope v1 (ADR 0012 Amendment): control-устройство управляет бортом
+  // (закрытые семьи — pairing/devices/auth/automation/agent-loop — остаются
+  // спрятаны и серверно закрыты), read-устройство — только чтение.
+  "nav.modeDevice": "устройство подключено",
+  "nav.modeDeviceControl": "устройство подключено · полный доступ",
   // Sidebar version label (owner feedback: «какая версия перед глазами»).
   // {{version}} is the live server version from /api/health.
   "nav.versionAria": "Версия приложения {{version}}",
@@ -58,6 +64,10 @@ export const ru = {
 
   // --- breadcrumbs (concept §2.2) ----------------------------------------------
   "breadcrumbs.label": "Хлебные крошки",
+  // Back control of the sticky crumb row (UI-18 spec §3.4): the visible label
+  // is the bare place name; the accessible name carries the destination.
+  "nav.backTo": "Назад: {{place}}",
+  "nav.backFallback": "Назад",
 
   // --- top bar ----------------------------------------------------------------
   "topbar.themeToLight": "Переключить на светлую тему",
@@ -255,8 +265,6 @@ export const ru = {
   "tags.drill.tasks": "Задачи с этим тегом",
   "tags.drill.tasksEmpty": "Задач с этим тегом нет",
   "tags.drill.memories": "Записи",
-  "tags.drill.subsetNote":
-    "Показано подмножество: дрилл идёт через поисковый ранжир и может быть неполным (BE-13)",
   "tags.drill.storeErrors": "Недоступны хранилища: {{servers}}",
   "tags.drill.openInMemories": "Открыть в Записях",
 
@@ -329,8 +337,7 @@ export const ru = {
   "login.continueQueued":
     "Войдите, чтобы продолжить — действие выполнится автоматически",
   // Отказ «у порога» (ADR 0014 Ф1): verify вернул отказ — ничего не сохранено.
-  "login.rejected":
-    "Сервер не принял токен — проверьте значение и попробуйте ещё раз.",
+  "login.rejected": "Сервер не принял токен — проверьте значение и попробуйте ещё раз.",
   // Отказ «в полёте» (ADR 0014 Ф2): сохранённый токен протух / сессия истекла
   // по idle-таймауту — отдельный текст, чтобы не читалось как «опечатка».
   "login.sessionExpired": "Сессия истекла — войдите ещё раз.",
@@ -353,6 +360,12 @@ export const ru = {
   "login.toastRejected": "Токен отклонён",
   "login.toastRejectedDetail":
     "Сервер вернул 401 — окно входа открыто, вставьте актуальное значение.",
+  // UI-22 device beat, scope v1: fires only for a `read`-scope device —
+  // every mutation is a server 403 verdict there. A control device
+  // mutates; closed routes refuse with the server's own honest detail.
+  "login.deviceForbidden": "Действия с устройства закрыты",
+  "login.deviceForbiddenDetail":
+    "Скоуп этого устройства — только чтение: мутации выполняются в сессии владельца (ADR 0012).",
   "login.logoutFailed":
     "Не удалось завершить сессию на сервере — вы всё ещё вошли. Проверьте связь и повторите.",
 
@@ -469,6 +482,27 @@ export const ru = {
   "tasks.inboxSource": "сервер: {{server}}",
   "tasks.inboxAdoptedLink": "принята → {{id}}",
   "tasks.inboxNoSpecialist": "специалист не указан",
+  // UI-25: key:value chips + expand/edit
+  "tasks.inboxProjectChip": "проект: {{value}}",
+  "tasks.inboxPriorityChip": "приоритет: {{value}}",
+  "tasks.inboxEditedBadge": "изменено",
+  "tasks.inboxExpandLabel": "Подробнее о записи",
+  "tasks.inboxCollapseLabel": "Свернуть",
+  "tasks.inboxDetailsLabel": "Детали записи",
+  "tasks.inboxDetailsSpecialist": "специалист: {{value}}",
+  "tasks.inboxDetailsCreated": "создана в источнике: {{value}}",
+  "tasks.inboxDetailsMemoryId": "память: {{value}}",
+  "tasks.inboxFullTextLabel": "Текст записи из памяти",
+  "tasks.inboxFullTextFailed": "Не удалось загрузить запись из памяти",
+  "tasks.inboxEditLabel": "Править",
+  "tasks.inboxEditTitle": "Правка записи до принятия в борд",
+  "tasks.inboxEditHint": "Правки поедут в задачу и синхронизируются в память при принятии.",
+  "tasks.inboxEdit.titleLabel": "Заголовок",
+  "tasks.inboxEdit.summaryLabel": "Описание (spec)",
+  "tasks.inboxEdit.priorityLabel": "Приоритет",
+  "tasks.inboxEdit.projectLabel": "Проект",
+  "tasks.inboxEdit.save": "Сохранить правку",
+  "tasks.inboxEdit.cancel": "Отмена",
   "tasks.scanLabel": "Сканировать хранилища",
   "tasks.scanBusy": "Сканируем…",
   "tasks.adoptLabel": "Принять в борд",
@@ -598,6 +632,8 @@ export const ru = {
   "tasks.mutation.adoptConflictTitle": "Запись уже принята",
   "tasks.mutation.adoptConflictDetail": "уже существует задача {{id}}",
   "tasks.mutation.adopted": "Принята в борд: {{id}}",
+  "tasks.mutation.inboxEditFailed": "Не удалось сохранить правку записи",
+  "tasks.mutation.inboxEditSaved": "Правка сохранена — примётся в борд в этой версии",
   "tasks.mutation.scanFailed": "Не удалось просканировать хранилища",
   "tasks.mutation.scanDone": "Сканирование завершено",
   "tasks.mutation.scanDetail": "просмотрено записей: {{found}}, новых: {{new}}",
@@ -803,17 +839,19 @@ export const ru = {
     "доверие не восстанавливается — зарегистрируйте исполнителя заново",
   "agents.connect.label": "Как подключить внешнего агента",
   "agents.connect.step1":
-    "На внешней машине установите поллер: зависимости и скрипты — deploy/poller/README.md (python ≥ 3.10, httpx + pyyaml).",
+    "Нажмите «Добавить исполнителя», заполните имя и харнес — свой харнес можно добавить прямо в списке.",
   "agents.connect.step2":
-    "Скопируйте poller.example.yaml в ~/.config/mnemos-eyes/poller.yaml (chmod 0600) и заполните board_url, executor_name и allowlist.",
+    "Создайте токен и скопируйте ОДНУ команду с экрана.",
   "agents.connect.step3":
-    "Машинный токен — только окружение: VESMARO_BOARD_TOKEN в /etc/vesmaro/poller.env (systemd-юнит /opt) или в ~/.config/mnemos-eyes/poller.env (laptop user-unit), права 0600; не в конфиге и не в промптах — см. deploy/poller/README.md.",
+    "Выполните её на внешней машине (VPS) — она сама установит зависимости, агента и службу.",
   "agents.connect.step4":
-    "Запустите поллер службой (systemd unit из README) или разово с --once для dry-run проверки.",
+    "Агент появится здесь в «Ожидают подтверждения» — одобрите и включите.",
   "agents.connect.step5":
-    "Исполнитель появится здесь в «Ожидают подтверждения» — одобрите его, затем включите для маршрутизации.",
+    "Дайте задачу кнопкой на карточке задачи — исполнение будет на внешней машине.",
   "agents.connect.note":
-    "Регистрация исполнителя — machine-класс API (POST /api/executors по board-токену): кнопки регистрации в UI нет, этот экран ведёт очередь и одобрение.",
+    "Команда скачивает установщик с борда (текст установщика публичный), дальнейшее — по защищённому каналу с проверкой сертификата. Токен одноразовый, живёт 15 минут.",
+  "agents.connect.manual":
+    "Ручной путь — deploy/poller/REMOTE-EXECUTOR.md («Путь 2 — руками», для диагностики и изолированных сетей).",
   "agents.executors.actionFailed": "Не удалось изменить исполнителя",
   "agents.executors.approved": "{{name}}: одобрен",
   "agents.executors.approvedDetail":
@@ -841,13 +879,84 @@ export const ru = {
   "agents.menu.label": "Меню исполнителя {{name}}",
   "agents.menu.copyId": "Копировать id ({{id}})",
   "agents.menu.openRegistry": "Открыть реестр",
+  // AGW-6 A: проверка связи (outbound-only честность)
+  "agents.linkcheck.trigger": "Проверить связь",
+  "agents.linkcheck.checkForReal": "Проверить по-настоящему",
+  "agents.linkcheck.verdict.never": "ещё не отвечал на опрос",
+  "agents.linkcheck.verdict.online": "на связи — ответил на опрос {{age}} назад",
+  "agents.linkcheck.verdict.stale": "отвечал давно — {{age}} назад",
+  "agents.linkcheck.verdict.offline": "не отвечает — последний ответ {{age}} назад",
+  "agents.linkcheck.verdict.revoked": "отозван — присутствие погасло",
+  "agents.linkcheck.verdict.unknown": "пороги присутствия ещё не загружены",
+  "agents.linkcheck.disclaimer":
+    "Борд не пингует агентов (outbound-only): это возраст последнего ответа поллеру, а не доступность машины.",
+  "agents.linkcheck.unitSeconds": "с",
+  "agents.linktest.title": "Проверить по-настоящему — {{name}}",
+  "agents.linktest.subtitle":
+    "Выберите задачу — откроется «Взять в работу» с пином на «{{name}}».",
+  "agents.linktest.allowlistNote":
+    "Промах по allowlist — тоже валидный тест: refusal-report докажет связь не хуже успешного запуска.",
+  "agents.linktest.loading": "Загружаем задачи борда",
+  "agents.linktest.empty":
+    "Нет задач, принимающих поручения. Создайте тестовую задачу на борде и вернитесь.",
+  "agents.linktest.listLabel": "Задачи для тестового поручения",
+  "agents.linktest.rowAria": "Открыть «Взять в работу» с пином на {{name}}",
+  "agents.sheet.pinnedHint":
+    "Пин на исполнителя: поручение дождётся его выхода на связь — отправка активна.",
+  "agents.sheet.pinnedInvalidHint":
+    "Запиненный исполнитель сейчас не может взять задачу — выберите «По умолчанию» или другого исполнителя.",
+  // AGW-6 B: карточка настроек исполнителя (drawer)
+  "agents.card.title": "Карточка исполнителя",
+  "agents.card.description":
+    "Настройки исполнителя: идентичность, связь, доступ, заявленные возможности",
+  "agents.card.menuOpen": "Карточка настроек",
+  "agents.card.sectionIdentity": "Идентичность",
+  "agents.card.sectionLink": "Связь",
+  "agents.card.sectionAccess": "Доступ",
+  "agents.card.sectionCaps": "Возможности (заявленные)",
+  "agents.card.sectionDanger": "Опасная зона",
+  "agents.card.nameLabel": "Имя",
+  "agents.card.copyId": "Скопировать id ({{id}})",
+  "agents.card.harnessLabel": "харнес",
+  "agents.card.transportLabel": "транспорт",
+  "agents.card.versionLabel": "версия",
+  "agents.card.registeredVia": "источник",
+  "agents.card.registeredAt": "регистрация",
+  "agents.card.updatedAt": "обновлено",
+  "agents.card.harnessNote":
+    "Харнес не редактируется: это ось матча локального allowlist на машине — смена рассинхронила бы борд и poller.yaml молча. Смена харнеса = «Отозвать» + повторная регистрация.",
+  "agents.card.stateApproved": "одобрен",
+  "agents.card.enabledLabel": "Включён для диспетчеризации",
+  "agents.card.enabledNote": "диспетчеризация = одобрен И включён",
+  "agents.card.enabledPendingHint":
+    "Сначала одобрите — переключатель диспетчеризации появится после одобрения.",
+  "agents.card.capsPlaceholder": "роль специалиста, например researcher",
+  "agents.card.capsInputAria": "Новая возможность",
+  "agents.card.capsAdd": "Добавить",
+  "agents.card.capsClear": "Очистить",
+  "agents.card.capsClearConfirm":
+    "Отправить пустой список возможностей? Сервер сотрёт все заявленные значения ([] — валидная операция).",
+  "agents.card.capsDup": "Такая возможность уже заявлена.",
+  "agents.card.capsMax": "Максимум 64 — больше сервер не примет.",
+  "agents.card.capsRemoveAria": "Убрать возможность {{capability}}",
+  "agents.card.capsNote":
+    "Декларации для маршрутизации (owner-declared); на запуск не влияют — реальный гейт = локальный allowlist поллера.",
+  "agents.card.save": "Сохранить",
+  "agents.card.saved": "{{name}}: карточка сохранена",
+  "agents.card.noChanges": "изменений нет",
+  "agents.card.dangerNote":
+    "«Отозвать» — терминально, доверие не восстанавливается; «Удалить» убирает запись — активные назначения и пины остаются.",
+  "agents.card.revokedReadOnly":
+    "Исполнитель отозван — карточка только для чтения, кроме удаления.",
+  "agents.card.secretHint":
+    "Секрет не показывается никогда: он виден один раз при регистрации. Потеряли — отзовите исполнителя и зарегистрируйте заново.",
   "agents.registry.viaEnrollment": "происхождение: enrollment-токен",
   "agents.registry.viaMachine": "происхождение: машина-токен",
   "agents.enrollment.title": "Добавить исполнителя",
   "agents.enrollment.description":
     "Создание одноразового токена подключения для удалённого исполнителя",
   "agents.enrollment.formHint":
-    "Одноразовый токен (TTL 15 минут) для регистрации удалённой машины; зарегистрировавшийся исполнитель появится здесь в ожидании одобрения.",
+    "Заполните карточку — получите одну команду для внешней машины. Агент установится сам и появится здесь на одобрение.",
   "agents.enrollment.label": "Название (для себя)",
   "agents.enrollment.labelPlaceholder": "например, vps-1",
   "agents.enrollment.harness": "Харнес (подсказка для команд)",
@@ -858,8 +967,6 @@ export const ru = {
   "agents.enrollment.created": "Токен подключения создан",
   "agents.enrollment.tokenLabel": "Токен подключения",
   "agents.enrollment.tokenOnce": "Токен показывается один раз — скопируйте сейчас.",
-  "agents.enrollment.show": "Показать",
-  "agents.enrollment.hide": "Скрыть",
   "agents.enrollment.copy": "Копировать",
   "agents.enrollment.copied": "Скопировано",
   "agents.enrollment.copyFailedToken":
@@ -879,6 +986,128 @@ export const ru = {
   "agents.enrollment.usedBy": "использован: {{name}}",
   "agents.enrollment.usedIp": "IP подключения: {{ip}}",
   "agents.enrollment.done": "Готово",
+  "agents.harness.addOption": "Добавить харнес…",
+  "agents.harness.add": "Добавить",
+  "agents.harness.adding": "Добавляем…",
+  "agents.harness.addFailed": "Не удалось добавить харнес",
+  "agents.harness.invalid":
+    "Строчные латиница/цифры, затем точки, дефисы, подчёркивания (до 60 знаков).",
+
+  "agents.enrollment.oneLinerHint": "Внешний -k безопасен: текст установщика публичен и без секретов — всё внутри ездит на запинненном CA. --url должен быть адресом, который резолвится С ЭТОЙ машины (адрес VPN-оверлея может отличаться от LAN).",
+  "agents.enrollment.tokenInCopyNote": "При копировании полный токен попадает в буфер обмена.",
+  "agents.enrollment.quotaCount": "Живых токенов: {{count}} из 3",
+  "agents.enrollment.quotaFull":
+    "Достигнут лимит живых токенов (3) — отзовите лишний или дождитесь TTL.",
+  "agents.enrollment.manualToggle": "Ручной путь — диагностика / изолированные (air-gapped) установки",
+
+  // --- AGW-11: the connect card (SSH provisioner, wave 4) -------------------
+
+  "agents.provision.title": "Подключение по SSH",
+  "agents.provision.subtitle":
+    "борд сам зайдёт на машину, поставит агента и доведёт его до одобрения",
+  "agents.provision.host": "Адрес машины (IP или домен)",
+  "agents.provision.hostError":
+    "строчные латиница/цифры/дефисы и точки — IP или FQDN без слэшей",
+  "agents.provision.port": "SSH-порт",
+  "agents.provision.portError": "порт — число от 1 до 65535",
+  "agents.provision.name": "Имя исполнителя (необязательно)",
+  "agents.provision.nameError":
+    "начинается с буквы/цифры; буквы, цифры, точка, «_», «-» до 120 знаков",
+  "agents.provision.authLegend": "Способ входа",
+  "agents.provision.authKey": "SSH-ключ",
+  "agents.provision.authAlias": "Алиас из ssh-config борда",
+  "agents.provision.authPassword": "Пароль",
+  "agents.provision.authPasswordNote":
+    "Вход по паролю по умолчанию ВЫКЛЮЧЕН на борде: включается флагом развёртывания provisioner.passwordAuth. Пока он не включён, сервер честно откажет (422).",
+  "agents.provision.authAliasNote":
+    "Борд войдёт по алиасу из своего ssh-config: пользователь, ключ и порт определяет конфиг. Имя пользователя отдельным полем сервер пока не принимает — используйте алиас.",
+  "agents.provision.keySecret": "Приватный ключ (вставьте целиком)",
+  "agents.provision.passwordSecret": "Пароль",
+  "agents.provision.secretShow": "Показать ключ",
+  "agents.provision.secretHide": "Скрыть ключ",
+  "agents.provision.secretNote":
+    "Секрет живёт только в памяти страницы до отправки: не пишется в базу, логи и события. Маскируется от посторонних глаз.",
+  "agents.provision.secretError": "Для этого способа входа нужен секрет.",
+  "agents.provision.passphrase": "Кодовая фраза ключа (если есть)",
+  "agents.provision.harness": "Харнес (подсказка для команд)",
+  "agents.provision.boardUrl": "Адрес борда для машины",
+  "agents.provision.boardUrlNote":
+    "https://хост[:порт], который резолвится С подключаемой машины (адрес оверлея может отличаться от браузерного).",
+  "agents.provision.boardUrlError":
+    "нужен строгий https://хост[:порт] без пути и параметров",
+  "agents.provision.submit": "Подключить",
+  "agents.provision.submitting": "Запускаем…",
+  "agents.provision.submitFailed": "Не удалось запустить подключение",
+  "agents.provision.queued": "Подключение {{host}} запущено",
+  "agents.provision.reuseNote":
+    "Повтор использует живой токен подключения из прошлой попытки",
+  "agents.provision.feedTitle": "Подключение {{host}}",
+  "agents.provision.close": "Скрыть",
+  "agents.provision.closeAria": "Скрыть карточку подключения",
+  "agents.provision.feedLoading": "Читаем состояние задания…",
+  "agents.provision.feedError": "Задание недоступно: {{message}}",
+  "agents.provision.feedLive": "Задание выполняется — лента обновляется сама",
+  "agents.provision.funnelAria": "Шаги установки",
+  "agents.provision.state.live": "выполняется",
+  "agents.provision.state.done": "агент зарегистрирован",
+  "agents.provision.state.failed": "ошибка",
+  "agents.provision.stage.bootstrapStarted": "SSH-подключение к машине",
+  "agents.provision.stage.caPinned": "Ключ доверия машины закреплён",
+  "agents.provision.stage.pollerInstalled": "Агент установлен",
+  "agents.provision.stage.firstHeartbeat": "Первый отклик агента",
+  "agents.provision.stage.wgHandshake": "Mesh-туннель",
+  "agents.provision.stage.reserved": "позже",
+  "agents.provision.connectivityTitle": "Транспорт связи",
+  "agents.provision.connectivityManual": "временно: ручной туннель",
+  "agents.provision.connectivityMesh": "mesh",
+  "agents.provision.connectivityProfile": "Профиль связности:",
+  "agents.provision.connectivityLater": "позже",
+  "agents.provision.logTitle": "Лента шагов",
+  "agents.provision.updatedAt": "обновлено {{time}}",
+  "agents.provision.errorCode": "Код: {{code}}",
+  "agents.provision.expectedFingerprint": "Ожидаемый отпечаток ключа машины:",
+  "agents.provision.knownHostsHint":
+    "Ключ машины не совпал с закреплённым. Если машину ПЕРЕУСТАНАВЛИВАЛИ намеренно — на борде выполняется отдельная процедура re-pin (POST /api/executors/provision/host/{host}/repin). Вслепую повторять не надо: несовпадение может означать подмену (MITM).",
+  "agents.provision.retry": "Повторить",
+  "agents.provision.doneTitle":
+    "Исполнитель «{{name}}» ждёт вашего одобрения",
+  "agents.provision.doneLoadingRow": "Ждём появления строки в реестре…",
+  "agents.provision.approvedAlready":
+    "«{{name}}» уже одобрен — включите маршрутизацию в реестре",
+  "agents.provision.approveIntro":
+    "Проверьте ключ машины и подтвердите подключение.",
+  "agents.provision.pasteBackLabel":
+    "Последние 8 hex-символов отпечатка С САМОЙ машины",
+  "agents.provision.pasteBackHint":
+    "Выполните на машине: awk '{print $2}' /etc/ssh/ssh_host_ed25519_key.pub | base64 -d | sha256sum — введите последние 8 символов вывода. Кнопка разблокируется только при совпадении.",
+  "agents.provision.pasteBackSkipped":
+    "Ключ этой машины уже был закреплён и проверен ранее — сверка не нужна.",
+  "agents.provision.hint.sshUnreachable":
+    "Машина недоступна: проверьте адрес, порт и файрвол.",
+  "agents.provision.hint.sshAuthFailed": "Не подошёл ключ или пароль.",
+  "agents.provision.hint.sshSudoRequired":
+    "Дайте пользователю passwordless sudo (NOPASSWD) или запускайте установку от root.",
+  "agents.provision.hint.caUnavailable":
+    "Борд не отдал свой CA — проблема на сервере борда, посмотрите его журналы.",
+  "agents.provision.hint.hostKeyMismatch":
+    "Ключ машины не совпал с ожидаемым — установка остановлена из соображений безопасности.",
+  "agents.provision.hint.wgKeyDelivery":
+    "Не удалось доставить ключи туннеля (транспорт будущего mesh-слоя — заглушка).",
+  "agents.provision.hint.wgHandshake":
+    "Туннель не поднялся вовремя (транспорт будущего mesh-слоя — заглушка).",
+  "agents.provision.hint.bootstrapTimeout":
+    "Установка затянулась и была остановлена по таймауту.",
+  "agents.provision.hint.bootstrapExit":
+    "Установщик завершился с ошибкой — техническая деталь ниже.",
+  "agents.provision.hint.registerTimeout":
+    "Агент поставился, но не зарегистрировался вовремя — проверьте его журнал на машине.",
+  "agents.provision.hint.restarted":
+    "Борд перезапустился во время установки — секреты живут только в памяти задания. Запустите подключение заново.",
+  "agents.provision.hint.pinInvalidated":
+    "Закреплённый ключ машины изменили (re-pin) — задание остановлено.",
+  "agents.provision.hint.generic":
+    "Установка не удалась — техническая деталь ниже.",
+
   "agents.enrollment.listTitle": "Токены подключения",
   "agents.enrollment.listHint": "живые + история",
   "agents.enrollment.listLoading": "Загружаем токены",
@@ -891,7 +1120,6 @@ export const ru = {
     "Отозвать токен {{label}}? Подключение по нему станет невозможно.",
   "agents.enrollment.revoked": "Токен отозван",
   "agents.enrollment.revokeFailed": "Не удалось отозвать токен",
-
 
   // --- automation section (SCHED-1-UI, ADR 0013 §8) ------------------------------
   "nav.systemAutomation": "Автоматизация",
@@ -913,6 +1141,87 @@ export const ru = {
   "automation.banner.usedToday": "авто-запусков сегодня",
   "automation.banner.rules": "правил",
   "automation.banner.rulesCount": "расписаний {{schedules}}, правил-хуков {{hooks}}",
+  "automation.banner.settingsLink": "изменить в настройках",
+  // UI-21 settings hub: the kill-switch/cap form (server contract §2).
+  "automation.settings.title": "Автоматизация",
+  "automation.settings.enabledLabel": "Автоматизация включена",
+  "automation.settings.engineOffNote":
+    "Движок пока не работает (S1): настройка сохранит решение и заработает вместе с движком.",
+  "automation.settings.capLabel": "Лимит авто-запусков в день",
+  "automation.settings.capHint": "От 1 до 1000; сегодня использовано {{used}} из {{cap}}.",
+  "automation.settings.capError": "Введите целое число от 1 до 1000.",
+  "automation.settings.save": "Сохранить",
+  "automation.settings.saving": "Сохраняем…",
+  "automation.settings.saved": "Настройки автоматизации сохранены",
+  "automation.settings.savedDetail": "выключатель и дневной лимит обновлены",
+  "automation.settings.saveFailed": "Не удалось сохранить настройки автоматизации",
+  // UI-23 settings hub v2: sections, controls, hints and verdicts (spec §7).
+  "settings.hub.navLabel": "Разделы страницы",
+  "settings.hub.appearanceTitle": "Внешний вид",
+  "settings.hub.behaviorTitle": "Поведение",
+  "settings.hub.boardTitle": "Доска",
+  "settings.hub.navigationTitle": "Навигация",
+  "settings.hub.executionTitle": "Исполнение",
+  "settings.hub.automationTitle": "Автоматизация",
+  "settings.hub.devicesTitle": "Устройства",
+  "settings.hub.devicesHint":
+    "Отзыв скомпрометированного устройства и доступы к компонентам (задачи, отчёты, инбокс, уведомления) — по каждому подключённому устройству.",
+  "settings.hub.devicesCta": "Управлять устройствами",
+  "settings.hub.themeLabel": "Тема",
+  "settings.hub.themeSystem": "Системная",
+  "settings.hub.themeDark": "Тёмная",
+  "settings.hub.themeLight": "Светлая",
+  "settings.hub.themeHint": "«Системная» следует за настройкой вашей ОС.",
+  "settings.hub.langLabel": "Язык интерфейса",
+  "settings.hub.densityLabel": "Плотность строк",
+  "settings.hub.densityComfortable": "Просторная",
+  "settings.hub.densityCompact": "Компактная",
+  "settings.hub.densityHint":
+    "Рабочие списки — задачи, реестры, выдача. Поиск и память остаются просторными.",
+  "settings.hub.appliesEverywhere": "Применяется сразу во всём интерфейсе.",
+  "settings.hub.boardStyleLabel": "Стиль канбан-доски",
+  "settings.hub.boardStyleHint": "Применится на странице Задачи → Канбан.",
+  "settings.hub.motionLabel": "Анимации",
+  "settings.hub.motionSystem": "Системные",
+  "settings.hub.motionReduced": "Минимум",
+  "settings.hub.motionHint":
+    "«Минимум» отключает движение и мерцания независимо от настроек ОС.",
+  "settings.hub.sidebarLabel": "Сайдбар",
+  "settings.hub.sidebarExpanded": "Развёрнут",
+  "settings.hub.sidebarCollapsed": "Свёрнут",
+  "settings.hub.sidebarHint": "Меняется и кнопкой на самом сайдбаре.",
+  "settings.hub.onboardingReplay": "Показать подсказку «Как это работает» снова",
+  "settings.hub.onboardingReplayed":
+    "Подсказка снова развернётся на странице Исполнение.",
+  "settings.hub.notCustomizable": "Что не настраивается",
+  "settings.hub.verdict.fonts":
+    "Типографика — одна пара шрифтов и одна шкала: целостность важнее выбора.",
+  "settings.hub.verdict.contemplative":
+    "Поиск и память остаются просторными независимо от плотности — это дизайн-решение.",
+  "settings.hub.verdict.viewRoute":
+    "«Канбан» и «Список» — маршруты, а не настройка: адрес страницы и есть выбор.",
+  "settings.hub.verdict.domains":
+    "Состав и порядок разделов сайдбара фиксированы — карта продукта видна целиком.",
+  "settings.hub.verdict.groups":
+    "Свёрнутость групп проектов запоминается по каждому проекту — это состояние, не настройка.",
+  "settings.hub.verdict.dnd":
+    "Перетаскивание карточек — основной способ управления доской.",
+  "settings.hub.verdict.filters":
+    "Фильтры и поиск — часть адреса страницы (?project=&q=), их можно сохранить в закладку.",
+  "settings.hub.verdict.panels":
+    "Панели терминала и ленты сворачиваются на месте на странице Исполнение — состояние запоминается.",
+  "settings.hub.verdict.confirms":
+    "Подтверждения опасных действий всегда включены — это защита ваших данных.",
+  "settings.hub.verdict.scrolls":
+    "Прокрутка страниц целиком с возвратом позиции по «Назад» зафиксирована.",
+  "settings.hub.verdict.updateBanner":
+    "Страница никогда не перезагружается сама — о новой версии сообщает спокойный баннер.",
+  "settings.hub.verdict.hotkeys":
+    "Горячие клавиши фиксированы: «/» — поиск, «?» — подсказка.",
+  "settings.hub.verdict.search":
+    "Глобальный поиск — единый вход в память: его поведение — часть структуры, а не настройка.",
+  "settings.hub.verdict.crumbs":
+    "Хлебные крошки — навигационный контекст маршрута; их отключение ломает ориентирование.",
   "automation.listLoading": "Загружаем",
   "automation.listFailed": "Не удалось загрузить список",
   "automation.schedule.create": "Новое расписание",
@@ -998,16 +1307,16 @@ export const ru = {
   "overview.agentsAll": "Исполнение",
   "overview.autoLaunchesToday": "авто-запусков сегодня: {{count}}",
 
-  // --- docs section (ADR 0015, contract 2026-09-22 §§3–8) -------------------------
+  // --- docs section (ADR 0015/0016, contract 2026-09-23 §§4–6) ---------------------
   "nav.docs": "Документация",
-  "docs.index.lede": "Справочник по бору: от первого запуска до обновления.",
   "docs.cat.product": "О продукте",
   "docs.catDesc.product": "Что такое mnemos и vesmaro-eyes: концепции и словарь.",
   "docs.cat.gettingStarted": "Начало работы",
   "docs.catDesc.gettingStarted":
     "Развёртывание борда и первый вход — с нуля до рабочего места.",
-  "docs.cat.board": "Панель и группы",
-  "docs.catDesc.board": "Группы памяти и канбан-доска: структура и работа с записями.",
+  "docs.cat.board": "Доска и группы",
+  "docs.catDesc.board":
+    "Группы проектов и канбан-доска: структура и повседневная работа с задачами.",
   "docs.cat.agents": "Агенты и поручения",
   "docs.catDesc.agents": "Поручения, исполнители и отчёты об исполнении.",
   "docs.cat.automation": "Автоматизация",
@@ -1021,6 +1330,20 @@ export const ru = {
     "Бэкап, обновление и диагностика — что делать, когда что-то пошло не так.",
   "docs.cat.faq": "Частые вопросы",
   "docs.catDesc.faq": "Короткие ответы на частые вопросы.",
+  // Imported hubs (contract §4 — формулировки по спеке хабов §2).
+  "docs.cat.mnemosUser": "Пользователю",
+  "docs.catDesc.mnemosUser":
+    "Установка, первый прогон, синхронизация и справочники — повседневная работа с сервером памяти.",
+  "docs.cat.mnemosAdmin": "Администратору",
+  "docs.catDesc.mnemosAdmin":
+    "Безопасность, федерация и операционные ранбуки для администратора mnemos.",
+  "docs.cat.mnemosArchitecture": "Архитектура",
+  "docs.catDesc.mnemosArchitecture":
+    "Обзор устройства mnemos: гибридная память и поверхности управления.",
+  "docs.cat.meshUser": "Пользователю",
+  "docs.catDesc.meshUser": "Запуск узла mnemos-mesh и настройка федерации.",
+  "docs.cat.meshAdmin": "Администратору",
+  "docs.catDesc.meshAdmin": "Эксплуатация и безопасность узла mnemos-mesh.",
   "docs.search.placeholder": "Поиск по документации",
   "docs.search.ariaLabel": "Поиск по документации",
   "docs.search.resultsLabel": "Результаты поиска",
@@ -1028,17 +1351,38 @@ export const ru = {
   "docs.search.noResults": "По запросу «{{query}}» ничего не найдено",
   "docs.search.noResultsHint":
     "Попробуйте одно слово: «токен» вместо «ротация токенов»",
+  "docs.search.localeHint":
+    "Некоторые страницы доступны только на одном языке — переключите язык интерфейса (RU|EN в шапке).",
   "docs.toc.title": "На этой странице",
   "docs.prev": "Предыдущая",
   "docs.next": "Следующая",
   "docs.prevNextNav": "Навигация по страницам",
   "docs.badge.verified": "актуально для v{{version}}",
-  "docs.localeFallback": "Доступно на русском",
+  "docs.localeOriginal": "На языке оригинала ({{lang}})",
+  "docs.lang.ru": "русский",
+  "docs.lang.en": "английский",
+  "docs.provenance.badge": "из {{repo}}@{{sha}} · синхр. {{date}}",
+  "docs.provenance.full":
+    "Импортировано из репозитория {{repo}}, коммит {{sha}}, синхронизировано {{date}}",
+  "docs.hub.start": "С чего начать",
+  "docs.hub.categories": "Категории",
+  "docs.hub.vesmaroEyes.lede":
+    "Справочник по борду: от первого запуска до обновления — доска, агенты, токены и обслуживание.",
+  "docs.hub.mnemos.lede":
+    "Сервер памяти для ИИ-агентов: колодец записей, поиск по смыслу и хранилище под контрактом тегов. Здесь — руководства пользователя и администратора и обзорная архитектура.",
+  "docs.hub.mnemosMesh.lede":
+    "Федерация хранилищ: поднять узел mnemos-mesh, настроить канал и эксплуатировать связку двух инстансов.",
+  "docs.hub.coverage.both": "Доступно на русском и английском",
+  "docs.hub.coverage.ru": "Доступно на русском",
+  "docs.hub.coverage.en": "Доступно на английском",
+  "docs.hub.coverage.mixed": "Частично переведено (ru+en)",
   "docs.copy.code": "Скопировать код",
   "docs.copy.done": "Код скопирован",
+  "docs.mermaid.renderFailed":
+    "Диаграмму не удалось отрисовать — показан исходный код.",
   "docs.notFound.title": "Такой страницы нет",
   "docs.notFound.message": "Проверьте адрес или вернитесь к списку категорий.",
-  "docs.notFound.cta": "Все категории",
+  "docs.notFound.cta": "Открыть документацию",
   "docs.error.title": "Не удалось показать страницу",
   "docs.loading": "Загрузка…",
   "docs.pages.one": "{{count}} страница",
@@ -1047,10 +1391,140 @@ export const ru = {
 
   // --- shared empty/error ----------------------------------------------------------
   "common.retry": "Повторить",
+
+  // --- UI-27: TextEngine (авторский текст — markdown-движок) ------------------------
+  "text.showFull": "Показать полностью",
   "empty.offlineNote":
     "Если вы работаете с живым mnemos — проверьте, что API поднят и что dev-прокси (/api → mnemos) доступен. В разработке запросы из браузера остаются под CORS.",
   "app.loadingView": "Загружаем раздел",
   "app.notFoundMessage": "Такого пути в колодце нет.",
+
+  // --- CV-7: QR-пейринг и устройства (ADR 0012) ------------------------------------
+  "nav.devices": "Устройства",
+
+  // Диалог «Подключить устройство» (владельческая сторона, §2.1–§2.4).
+  "pairing.title": "Подключить устройство",
+  "pairing.description":
+    "Диалог QR-пейринга: создайте код, отсканируйте его устройством и подтвердите запрос после сверки четырёх цифр.",
+  "pairing.creating": "Создаём пейринг…",
+  "pairing.createFailed": "Не удалось создать пейринг",
+  "pairing.confirmFailed": "Не удалось подтвердить пейринг",
+  "pairing.denyFailed": "Не удалось отклонить пейринг",
+  "pairing.cancelFailed": "Не удалось отменить пейринг",
+  "pairing.qrTitle": "Отсканируйте QR устройством",
+  "pairing.qr.hint": "Нет камеры? Код ниже вводится вручную на устройстве.",
+  "pairing.qr.loading": "Загружаем QR…",
+  "pairing.codeLabel": "Код подключения",
+  "pairing.codeHint":
+    "Ручной ввод: откройте на устройстве страницу /pair и введите этот код.",
+  "pairing.copy": "Копировать",
+  "pairing.copied": "Скопировано",
+  "pairing.copyFailed": "Скопировать не удалось — код в строке, выделите вручную.",
+  "pairing.waitingScan": "Ждём сканирования…",
+  "pairing.ttl": "истечёт через {{time}}",
+  "pairing.expiredShort": "истёк — начните заново",
+  "pairing.cancel": "Отменить",
+  "pairing.requestTitle": "Запрос подключения",
+  "pairing.requestHint":
+    "Устройство отсканировало код. Сверь четыре цифры с его экраном и подтверди.",
+  "pairing.unverified": "не проверено",
+  "pairing.sourceIp": "IP устройства",
+  "pairing.noDeviceName": "без имени",
+  "pairing.verifyLabel": "Код подтверждения",
+  "pairing.verifyHint":
+    "Четыре цифры — сверка экранов, не пароль: они должны совпадать на обоих устройствах.",
+  "pairing.approve": "Подтвердить",
+  "pairing.deny": "Отклонить",
+  "pairing.confirmedTitle": "Устройство подтверждено",
+  "pairing.confirmedMessage":
+    "Токен выдастся при следующем обмене устройства — запись появится в списке устройств.",
+  "pairing.deniedTitle": "Запрос отклонён",
+  "pairing.deniedMessage": "Устройство не получит токен, код погашен.",
+  "pairing.cancelledTitle": "Пейринг отменён",
+  "pairing.expiredTitle": "Пейринг истёк — начните заново",
+  "pairing.expiredMessage": "Код живёт 3 минуты. Создайте новый пейринг.",
+  "pairing.revokedTitle": "Пейринг отозван",
+  "pairing.failedTitle": "Пейринг не создан",
+  "pairing.restart": "Начать заново",
+  "pairing.done": "Готово",
+
+  // Страница «Устройства» (/system/devices, §10.2).
+  "pairing.devices.title": "Устройства",
+  "pairing.devices.listLabel": "Спаренные устройства",
+  "pairing.devices.loading": "Загружаем устройства…",
+  "pairing.devices.failed": "Не удалось загрузить устройства",
+  "pairing.devices.loginHint":
+    "Список устройств требует сессии владельца — войдите, чтобы видеть подключённые устройства.",
+  "pairing.devices.empty": "Пока нет спаренных устройств",
+  "pairing.devices.emptyHint":
+    "Подключите телефон или планшет: «Подключить устройство» → QR → подтверждение.",
+  "pairing.devices.state.active": "активно",
+  "pairing.devices.state.expired": "истекло",
+  "pairing.devices.state.revoked": "отозвано",
+  "pairing.devices.created": "подключено",
+  "pairing.devices.lastIp": "последний IP",
+  "pairing.devices.expires": "скользящий TTL до",
+  "pairing.devices.hardExpires": "жёсткий до",
+  "pairing.devices.revoke": "Отозвать",
+  "pairing.devices.revokeConfirm":
+    "Отозвать «{{name}}»? Отзыв необратим — устройству понадобится новый пейринг.",
+  "pairing.devices.revoked": "Устройство отозвано",
+  "pairing.devices.revokeFailed": "Не удалось отозвать устройство",
+  // Пер-устройственные гранулы (Amendment §A.7 — «давать и забирать
+  // доступы к компонентам»; глобальные read всегда открыты, свитча нет).
+  "pairing.devices.grantsExpand": "Показать доступы к компонентам",
+  "pairing.devices.grantsCollapse": "Скрыть доступы к компонентам",
+  "pairing.devices.grantsTitle": "Доступы к компонентам",
+  "pairing.devices.grantsHint":
+    "Чтение всегда открыто; переключатель выдаёт или забирает мутации компонента — действует сразу, без переподключения.",
+  "pairing.devices.granule.tasks": "Задачи",
+  "pairing.devices.granule.reports": "Отчёты",
+  "pairing.devices.granule.inbox": "Инбокс",
+  "pairing.devices.granule.notifications": "Уведомления",
+  "pairing.devices.grantOn": "выдано",
+  "pairing.devices.grantOff": "закрыто",
+  "pairing.devices.grantsSaved": "Доступы обновлены",
+  "pairing.devices.grantsFailed": "Не удалось обновить доступы",
+  "pairing.unsupportedTitle": "Пейринг недоступен в этом режиме",
+  "pairing.unsupportedMessage":
+    "Домен устройств говорит на merge-API борда (ADR 0012); в режиме прямого mnemos этой страницы нет.",
+
+  // Страница устройства (/pair, §2.3 — без аутентификации).
+  "pair.title": "Подключение устройства",
+  "pair.intro": "Введите код подключения с экрана владельца и имя устройства.",
+  "pair.codeLabel": "Код подключения",
+  "pair.codeInvalid": "Код не может быть пустым",
+  "pair.nameLabel": "Имя устройства",
+  "pair.defaultName": "Браузер {{platform}}",
+  "pair.platformUnknown": "без платформы",
+  "pair.connect": "Подключить",
+  "pair.connecting": "Подключаем…",
+  "pair.verifyingTitle": "Код принят — подтвердите на доверенной стороне",
+  "pair.verifyHint":
+    "Покажите владельцу эти четыре цифры и дождитесь подтверждения на его экране.",
+  "pair.waitHint":
+    "Проверим ещё раз автоматически через минуту; кнопка работает и вручную.",
+  "pair.checkNow": "Проверить",
+  "pair.checking": "Проверяем…",
+  "pair.linkedTitle": "Устройство подключено — привязано к этому браузеру",
+  "pair.boundNote":
+    "Токен сохранён на этом устройстве, копировать его никуда не нужно. Кнопка ниже — только для переноса в другое приложение.",
+  "pair.tokenLabel": "Токен устройства",
+  "pair.copyToken": "Скопировать токен",
+  "pair.copyFallback": "Скопировано резервным способом браузера.",
+  "pair.copyManual":
+    "Скопировать не удалось — токен выделен в строке, скопируйте вручную.",
+  "pair.startWork": "Начать работу",
+  "pair.deviceId": "Идентификатор устройства",
+  "pair.scope": "права",
+  "pair.expires": "истекает",
+  "pair.enterAnother": "Ввести другой код",
+  "pair.err403": "Код привязан к другому адресу",
+  "pair.err404": "Неизвестный код",
+  "pair.err410": "Код истёк или уже использован",
+  "pair.err429": "Слишком много попыток",
+  "pair.err503": "Пейринг отключён на сервере",
+  "pair.errGeneric": "Подключить не удалось",
 } as const;
 
 export type TranslationKey = keyof typeof ru;

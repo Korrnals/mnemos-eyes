@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 import { Archive, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/EmptyState/EmptyState";
 import { TableRowSkeleton } from "@/components/skeletons/Skeletons";
+import { TextEngine } from "@/components/TextEngine";
 import { isTaskMutationSource, isTaskSource } from "@/gateway/capabilities";
 import { useGateway } from "@/gateway/GatewayContext";
 import type { ArchivePage, BoardTask } from "@/gateway/boardTypes";
 import { useI18n, useT } from "@/i18n";
+import { withReturn } from "@/lib/returnParams";
 import {
   TASK_COLUMNS,
   TASK_STATUSES,
@@ -26,10 +28,13 @@ import { useTaskArchive } from "./useTasks";
  * URL state (`?q=&status=&col=&agent=&project=&limit=&offset=` — QA verdict
  * §3), so a filtered page deep-links and survives F5. `q` debounces 300 ms
  * before it lands in the URL (no request per keystroke). Rows expand inline
- * (native details/summary): archived tasks are NOT on the board projection,
- * so /tasks/:id cannot serve them — the expansion IS the detail view. Ф3
- * wires «Вернуть из архива» (POST unarchive → the board row returns via the
- * SSE mapping, the archive list refreshes, toast confirms).
+ * (native details/summary): archived tasks are NOT on the board projection —
+ * the expansion IS the inline preview, and UI-18 pair 4 adds the title link
+ * to `/tasks/:id` (the detail page renders archived rows through the direct
+ * single-task GET, BE-16) carrying `return=` so «‹ Архив» restores the full
+ * filter + offset state. Ф3 wires «Вернуть из архива» (POST unarchive → the
+ * board row returns via the SSE mapping, the archive list refreshes, toast
+ * confirms).
  */
 
 const ARCHIVE_PAGE_SIZES = [25, 50, 100] as const;
@@ -278,11 +283,24 @@ function ArchiveRow({
 }) {
   const t = useT();
   const { unarchiveTask } = useTaskMutations();
+  // UI-18 pair 4: the archive URL (q/status/col/agent/project + OFFSET —
+  // the spec's mandatory restore) rides as `return=` on the detail link.
+  const location = useLocation();
+  const detailHref = withReturn(
+    `/tasks/${encodeURIComponent(task.id)}`,
+    location.pathname,
+    location.search,
+  );
   return (
     <details className="rounded-md border border-border-subtle bg-well px-3 py-2 text-sm shadow-well">
       <summary className="flex cursor-pointer flex-wrap items-center gap-2 rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright">
         <span className="font-mono text-xs text-foreground-muted">{task.id}</span>
-        <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
+        <Link
+          to={detailHref}
+          className="min-w-0 flex-1 truncate font-medium text-foreground underline-offset-2 hover:text-iris-bright hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-iris-bright"
+        >
+          {task.title}
+        </Link>
         <Badge variant={statusBadgeVariant(task.status)}>
           {t(statusLabelKey(task.status))}
         </Badge>
@@ -294,12 +312,36 @@ function ArchiveRow({
         </span>
       </summary>
       <div className="mt-2 space-y-2 border-t border-border-subtle pt-2">
-        <p className="whitespace-pre-wrap text-xs text-foreground-secondary">
-          {task.summary || "—"}
-        </p>
-        <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-elevated p-2 font-mono text-xs text-foreground-secondary">
-          {task.spec || "—"}
-        </pre>
+        {/* UI-27 + owner clamp directive: the expanded archive row is a
+         * disclosure — summary and spec are author text and render through
+         * the TextEngine primitive with the measured clamp (long documents
+         * cut at max-h-48 behind «показать полностью», not an unbounded
+         * wall). Plain text keeps the legacy look; the spec keeps its well
+         * box. */}
+        {task.summary ? (
+          <TextEngine
+            text={task.summary}
+            variant="compact"
+            clamp
+            className="text-xs text-foreground-secondary"
+          />
+        ) : (
+          <p className="text-xs text-foreground-secondary">—</p>
+        )}
+        {task.spec ? (
+          <div className="rounded-md bg-elevated p-2">
+            <TextEngine
+              text={task.spec}
+              variant="full"
+              clamp
+              className="font-mono text-xs text-foreground-secondary"
+            />
+          </div>
+        ) : (
+          <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-elevated p-2 font-mono text-xs text-foreground-secondary">
+            —
+          </pre>
+        )}
         <p className="flex flex-wrap gap-x-4 text-xs text-foreground-muted">
           <span>
             {t("tasks.detailsProject")}: {task.project || "—"}
