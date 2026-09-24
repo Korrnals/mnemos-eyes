@@ -9,6 +9,7 @@ import {
   toggleSidebarCollapsed,
   useSidebarCollapsed,
 } from "./sidebarState";
+import { actUnmount } from "@/test/actTools";
 
 /**
  * UI-23 «one state, two controls» (spec §2.1/§4.3, acceptance §8.6): the
@@ -60,7 +61,7 @@ describe("sidebarState — one state, two controls", () => {
     expect(localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)).toBe("1");
     expect(container.querySelector("#consumer-shell")!.textContent).toBe("collapsed");
     expect(container.querySelector("#consumer-hub")!.textContent).toBe("collapsed");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the hub's explicit set flips the shell consumer and writes «0»/«1»", async () => {
@@ -71,7 +72,7 @@ describe("sidebarState — one state, two controls", () => {
     act(() => setSidebarCollapsed(false));
     expect(container.querySelector("#consumer-shell")!.textContent).toBe("expanded");
     expect(localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)).toBe("0");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the sidebar-side toggle reaches the hub consumer", async () => {
@@ -81,7 +82,7 @@ describe("sidebarState — one state, two controls", () => {
       container.querySelector<HTMLButtonElement>("#consumer-shell")!.click();
     });
     expect(container.querySelector("#consumer-hub")!.textContent).toBe("collapsed");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a stored «1» applies on a fresh module load; corrupt data opens", async () => {

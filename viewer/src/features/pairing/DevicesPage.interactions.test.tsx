@@ -15,6 +15,7 @@ import { crumbsFor, NAV_DOMAINS } from "@/layout/navItems";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenContext } from "@/features/ui-token/UiTokenContext";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
 
 /**
  * The devices-page interaction gate (CV-7, ADR 0012 §10.2): the list
@@ -26,6 +27,10 @@ import { UiTokenContext } from "@/features/ui-token/UiTokenContext";
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** ME-006: roots kept alive across tests let toast timers and query
+ * settlements update React OUTSIDE any act scope — unmount in afterEach. */
+const mountedRoots: Root[] = [];
 
 function mount(
   script: PairingGatewayScript = {},
@@ -42,6 +47,7 @@ function mount(
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRoot(document.body);
+  mountedRoots.push(root);
   const tokenPresent = options.tokenPresent ?? true;
   act(() => {
     root.render(
@@ -97,7 +103,10 @@ beforeEach(() => {
   vi.stubGlobal("confirm", vi.fn(() => true));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const root of mountedRoots.splice(0)) {
+    await actUnmount(root);
+  }
   document.body.innerHTML = "";
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -106,7 +115,7 @@ afterEach(() => {
 describe("DevicesPage — list", () => {
   it("renders device rows: name, state badge, IP, sliding+hard expiry", async () => {
     mount(devicesScript());
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("Телефон");
     });
     const body = document.body.textContent ?? "";
@@ -126,7 +135,7 @@ describe("DevicesPage — list", () => {
 
   it("shows the login hint and never calls the wire without a session", async () => {
     const { calls } = mount(devicesScript(), { tokenPresent: false });
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("owner session");
     });
     expect(calls.listDevices).toBe(0);
@@ -134,7 +143,7 @@ describe("DevicesPage — list", () => {
 
   it("shows the honest empty state for a deviceless board", async () => {
     mount({});
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("No paired devices yet");
     });
   });
@@ -157,7 +166,7 @@ describe("DevicesPage — revoke (terminal, behind confirm)", () => {
   it("confirm=false: the confirm dialog fires, the wire does not", async () => {
     const { calls } = mount(devicesScript());
     vi.stubGlobal("confirm", vi.fn(() => false));
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(button("Revoke")).toBeDefined();
     });
     await act(async () => {
@@ -172,7 +181,7 @@ describe("DevicesPage — revoke (terminal, behind confirm)", () => {
 
   it("confirm=true: DELETE fires, the toast lands, the list refetches", async () => {
     const { calls } = mount(devicesScript());
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(button("Revoke")).toBeDefined();
     });
     const listCallsBefore = calls.listDevices;
@@ -203,7 +212,7 @@ describe("DevicesPage — per-device grants (ADR 0012 Amendment §A.7)", () => {
 
   it("active row collapses by default; expanding shows the granule switches", async () => {
     mount(devicesScript());
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(button("Revoke")).toBeDefined();
     });
     // Hidden until expanded; the revoked row never shows an expander.
@@ -232,7 +241,7 @@ describe("DevicesPage — per-device grants (ADR 0012 Amendment §A.7)", () => {
 
   it("flipping a granule PUTs the FULL remaining set (replacement semantics)", async () => {
     const { calls } = mount(devicesScript());
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(button("Revoke")).toBeDefined();
     });
     await expandActiveRow();
@@ -262,7 +271,7 @@ describe("DevicesPage — per-device grants (ADR 0012 Amendment §A.7)", () => {
         grantsError: new Error("unknown device grants: fortran"),
       },
     );
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(button("Revoke")).toBeDefined();
     });
     await expandActiveRow();
@@ -285,7 +294,7 @@ describe("DevicesPage — per-device grants (ADR 0012 Amendment §A.7)", () => {
 
   it("revoked/expired rows have NO grants editor (dead sessions get nothing)", async () => {
     mount(devicesScript());
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("Планшет");
     });
     // Only the ACTIVE row carries an expander; the revoked row is bare.

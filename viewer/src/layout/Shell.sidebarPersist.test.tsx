@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { createMemoryRouter, RouterProvider } from "react-router";
@@ -14,6 +14,7 @@ import { AuthProvider } from "@/features/auth/AuthProvider";
 import { DensityProvider } from "@/components/density-provider";
 import { HotkeysProvider } from "@/layout/Hotkeys";
 import { I18nProvider } from "@/i18n";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
 
 /**
  * Sidebar collapse persistence (UI-19 owner feedback): the collapsed rail
@@ -38,10 +39,15 @@ function stubMatchMedia(matches: boolean): void {
   (window as { matchMedia: unknown }).matchMedia = stub;
 }
 
+/** ME-006: roots kept alive across tests re-render (VersionLabel settles,
+ * toast timers fire) OUTSIDE any act scope — unmount them in afterEach. */
+const mountedRoots: ReturnType<typeof createRoot>[] = [];
+
 async function mountShell(path = "/memory") {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  mountedRoots.push(root);
   await act(async () => {
     root.render(
       <GatewayContext.Provider value={new MockAdapter({ latency: false })}>
@@ -98,14 +104,17 @@ beforeEach(() => {
     true;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const root of mountedRoots.splice(0)) {
+    await actUnmount(root);
+  }
   document.body.innerHTML = "";
 });
 
 describe("Shell sidebar collapse persistence (UI-19)", () => {
   it("defaults to expanded and writes the explicit «0» on first render", async () => {
     const { container } = await mountShell();
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("aside")).not.toBeNull();
     });
     expect(toggleButton(container).getAttribute("aria-expanded")).toBe("true");
@@ -115,7 +124,7 @@ describe("Shell sidebar collapse persistence (UI-19)", () => {
   it("a stored «1» mounts COLLAPSED (the F5 survival the owner asked for)", async () => {
     localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "1");
     const { container } = await mountShell();
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("aside")).not.toBeNull();
     });
     const aside = container.querySelector("aside");
@@ -129,7 +138,7 @@ describe("Shell sidebar collapse persistence (UI-19)", () => {
 
   it("toggling flips the rail AND rewrites the stored flag both ways", async () => {
     const { container } = await mountShell();
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("aside")).not.toBeNull();
     });
     const button = toggleButton(container);
@@ -148,7 +157,7 @@ describe("Shell sidebar collapse persistence (UI-19)", () => {
   it("a corrupt stored value falls back to the open panel (honest default)", async () => {
     localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "junk");
     const { container } = await mountShell();
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("aside")).not.toBeNull();
     });
     expect(toggleButton(container).getAttribute("aria-expanded")).toBe("true");
@@ -161,7 +170,7 @@ describe("Shell sidebar on a phone (UI-22): overlay is session-only", () => {
   it("mounts COLLAPSED regardless of the stored desktop flag; the toggle opens the overlay", async () => {
     localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, "0");
     const { container } = await mountShell();
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("aside")).not.toBeNull();
     });
     // Entry state on <md: the icon rail, NEVER a pre-opened overlay —
@@ -184,18 +193,18 @@ describe("Shell sidebar on a phone (UI-22): overlay is session-only", () => {
 
   it("a remount (F5) starts collapsed again — the mobile overlay is session-only", async () => {
     const first = await mountShell();
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(first.container.querySelector("aside")).not.toBeNull();
     });
     click(toggleButton(first.container)); // open the overlay
     expect(first.container.querySelector("aside")?.className).toContain("fixed");
     await act(async () => {
-      first.root.unmount();
+      await actUnmount(first.root);
     });
     document.body.innerHTML = "";
 
     const second = await mountShell();
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(second.container.querySelector("aside")).not.toBeNull();
     });
     expect(second.container.querySelector("aside")?.className).toContain("w-14");

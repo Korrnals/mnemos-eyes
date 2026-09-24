@@ -11,6 +11,7 @@ import { I18nProvider } from "@/i18n";
 import { MockAdapter } from "@/gateway/MockAdapter";
 import { GatewayContext } from "@/gateway/GatewayContext";
 import type { BoardTask } from "@/gateway/boardTypes";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * WF-1 validation clock (CV-4 §2): the label under a validating card title

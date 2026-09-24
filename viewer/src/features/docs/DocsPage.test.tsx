@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router";
@@ -11,6 +11,7 @@ import { DocsCategoryLegacyRedirect } from "./DocsRedirects";
 import { ZERO_RESULTS_KEY } from "./docsSearch";
 import { loadMarkdown } from "./markdownModules";
 import { I18nProvider } from "@/i18n";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
 
 /**
  * /docs pages under the three-hub IA (ADR 0016, design spec §4–§8, W1c):
@@ -80,7 +81,7 @@ afterEach(() => {
 describe("our article (/docs/vesmaro-eyes/<slug>)", () => {
   it("renders chip, version badge, h1, body — no locale/provenance badges in ru", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes/upgrade");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("Обновление борда");
     });
     const text = container.textContent ?? "";
@@ -88,30 +89,30 @@ describe("our article (/docs/vesmaro-eyes/<slug>)", () => {
     expect(text).toContain("актуально для v1.13.0"); // last_verified badge
     expect(text).not.toContain("На языке оригинала");
     expect(text).not.toContain("из mnemos@"); // our pages carry no provenance
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(
         (container.querySelector("article")?.textContent ?? "").length,
       ).toBeGreaterThan(200);
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("keeps one h1 per page (the body's own h1 is stripped)", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes/tokens");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("article h1")).not.toBeNull();
     });
     expect(container.querySelectorAll("h1")).toHaveLength(1);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("UI=en over a bilingual own page renders the EN mirror — no «оригинал» badge (post-W3)", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes/upgrade", "en");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("Upgrading the board");
     });
     expect(container.textContent).not.toContain("In the original language");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -120,7 +121,7 @@ describe("imported article (/docs/mnemos/**, spec §6)", () => {
     const { root, container } = await mountDocs(
       "/docs/mnemos/user/getting-started",
     );
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("Начало работы");
     });
     const text = container.textContent ?? "";
@@ -134,27 +135,27 @@ describe("imported article (/docs/mnemos/**, spec §6)", () => {
     expect(badge?.getAttribute("title")).toContain("23f0fce42ea87c329d4049397292b3dca948773c");
     expect(badge?.getAttribute("title")).toContain("23.09.2026");
     expect(badge?.getAttribute("aria-label")).toBe(badge?.getAttribute("title"));
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("ru UI over a mesh page: the curated ru translation renders, NOT badged as original (post-W3)", async () => {
     const { root, container } = await mountDocs(
       "/docs/mnemos-mesh/user/getting-started",
     );
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe(
         "Первый запуск mnemos-mesh",
       );
     });
     expect(container.textContent).not.toContain("На языке оригинала");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("prev/next stays inside the project (no cross-project reading, spec §9.7)", async () => {
     const { root, container } = await mountDocs(
       "/docs/mnemos/user/getting-started",
     );
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("Начало работы");
     });
     const nav = container.querySelector("nav[aria-label='Навигация по страницам']");
@@ -165,71 +166,71 @@ describe("imported article (/docs/mnemos/**, spec §6)", () => {
       link.getAttribute("href"),
     );
     expect(links).toEqual(["/docs/mnemos/user/integration-guide"]);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the LAST page of a project draws no next slot", async () => {
     const { root, container } = await mountDocs(
       "/docs/mnemos/architecture/overview",
     );
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toContain("Архитектура");
     });
     const nav = container.querySelector("nav[aria-label='Навигация по страницам']");
     expect(nav?.textContent).toContain("Предыдущая");
     expect(nav?.textContent).not.toContain("Следующая");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
 describe("legacy redirects and misses (spec §8)", () => {
   it("old /docs/<slug> replaces into the default hub and renders the page", async () => {
     const { root, container } = await mountDocs("/docs/upgrade");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("Обновление борда");
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("old /docs/c/<category> replaces into the project-scoped category", async () => {
     const { root, container } = await mountDocs("/docs/c/security");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.textContent).toContain("Токены и доступ");
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("unknown slug → not-found EmptyState with the CTA into the hub", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes/nope");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.textContent).toContain("Такой страницы нет");
     });
     const cta = [...container.querySelectorAll("a")].find((link) =>
       link.textContent?.includes("Открыть документацию"),
     );
     expect(cta?.getAttribute("href")).toBe("/docs/vesmaro-eyes");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("unknown project namespace → the same not-found (redirect-map miss)", async () => {
     const { root, container } = await mountDocs("/docs/ghost-project/page");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.textContent).toContain("Такой страницы нет");
     });
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
 describe("docs search combobox (design spec §8 + §7.3)", () => {
   it("finds pages by a prefix and Enter opens the active hit at its hub URL", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes");
-    const input = await vi.waitFor(() => {
+    const input = await actWaitUntil(() => {
       const found = container.querySelector<HTMLInputElement>("input[role='combobox']");
       expect(found).not.toBeNull();
       return found!;
     });
     setInput(input, "токен");
-    const listbox = await vi.waitFor(() => {
+    const listbox = await actWaitUntil(() => {
       const list = container.querySelector("ul[role='listbox']");
       expect(list).not.toBeNull();
       return list!;
@@ -240,22 +241,22 @@ describe("docs search combobox (design spec §8 + §7.3)", () => {
     const activeOption = listbox.querySelector("[role='option'][aria-selected='true']");
     expect(activeOption).not.toBeNull();
     pressKey(input, "Enter");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       const h1 = container.querySelector("h1")?.textContent ?? "";
       expect(["Токены и доступ", "Ротация токенов"]).toContain(h1);
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("zero results → honest empty text, hints and the localStorage log", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes");
-    const input = await vi.waitFor(() => {
+    const input = await actWaitUntil(() => {
       const found = container.querySelector<HTMLInputElement>("input[role='combobox']");
       expect(found).not.toBeNull();
       return found!;
     });
     setInput(input, "квантомеханика");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.textContent).toContain("ничего не найдено");
     });
     expect(container.textContent).toContain("Попробуйте одно слово");
@@ -264,14 +265,14 @@ describe("docs search combobox (design spec §8 + §7.3)", () => {
     expect(container.textContent).not.toContain("только на одном языке");
     const log = JSON.parse(localStorage.getItem(ZERO_RESULTS_KEY) ?? "[]");
     expect(log).toContain("квантомеханика");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
 describe("hub covers (design spec §4)", () => {
   it("vesmaro-eyes hub: 9 category rows with counts, NO provenance badge", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("vesmaro-eyes");
     });
     const text = container.textContent ?? "";
@@ -283,12 +284,12 @@ describe("hub covers (design spec §4)", () => {
     );
     expect(text).toContain("2 страницы"); // getting-started
     expect(text).not.toContain("из mnemos@"); // our docs carry no provenance
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("mnemos hub: bilingual coverage badge + provenance badge + 3 categories", async () => {
     const { root, container } = await mountDocs("/docs/mnemos");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("Mnemos");
     });
     const text = container.textContent ?? "";
@@ -299,12 +300,12 @@ describe("hub covers (design spec §4)", () => {
     expect(
       container.querySelectorAll("a[href='/docs/mnemos/user/getting-started']").length,
     ).toBeGreaterThan(0);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("mnemos-mesh hub: bilingual coverage after W3 curated translations", async () => {
     const { root, container } = await mountDocs("/docs/mnemos-mesh");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.querySelector("h1")?.textContent).toBe("mnemos-mesh");
     });
     const text = container.textContent ?? "";
@@ -313,14 +314,14 @@ describe("hub covers (design spec §4)", () => {
     expect(container.querySelectorAll("a[href^='/docs/mnemos-mesh/c/']")).toHaveLength(
       2,
     );
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
 describe("category pages (project-scoped)", () => {
   it("lists pages with version stamps and hub-scoped links", async () => {
     const { root, container } = await mountDocs("/docs/vesmaro-eyes/c/security");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.textContent).toContain("Токены и доступ");
     });
     const links = [...container.querySelectorAll("a[href]")].map((link) =>
@@ -331,25 +332,25 @@ describe("category pages (project-scoped)", () => {
     const verified = raw.match(/last_verified:\s*"([^"]+)"/)?.[1];
     expect(verified, "token-rotation declares last_verified").toBeTruthy();
     expect(container.textContent).toContain(`v${verified}`);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a cross-project category URL is a miss → not-found", async () => {
     const { root, container } = await mountDocs("/docs/mnemos/c/security");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.textContent).toContain("Такой страницы нет");
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("an imported category lists its upstream pages", async () => {
     const { root, container } = await mountDocs("/docs/mnemos/c/mnemos-admin");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(container.textContent).toContain("Администратору");
       expect(
         container.querySelectorAll("a[href^='/docs/mnemos/admin/']").length,
       ).toBeGreaterThanOrEqual(3);
     });
-    root.unmount();
+    await actUnmount(root);
   });
 });

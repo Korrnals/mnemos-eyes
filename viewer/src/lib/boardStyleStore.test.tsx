@@ -9,6 +9,7 @@ import {
   useBoardStyle,
 } from "./boardStyleStore";
 import { BOARD_STYLE_STORAGE_KEY } from "@/features/tasks/tasksViewPrefs";
+import { actUnmount } from "@/test/actTools";
 
 /**
  * UI-23 «one state, two controls» (spec §0/§4.3, acceptance §8.5): the hub
@@ -60,7 +61,7 @@ describe("boardStyleStore — one state, two controls", () => {
     expect(localStorage.getItem(BOARD_STYLE_STORAGE_KEY)).toBe("classic");
     expect(container.querySelector("#consumer-hub")!.textContent).toBe("classic");
     expect(container.querySelector("#consumer-board")!.textContent).toBe("classic");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a consumer write is seen by the other consumer (hub ↔ toggle)", async () => {
@@ -71,7 +72,7 @@ describe("boardStyleStore — one state, two controls", () => {
     });
     expect(container.querySelector("#consumer-hub")!.textContent).toBe("classic");
     expect(getBoardStyle()).toBe("classic");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a stored choice applies on a fresh module load (F5 survival)", async () => {

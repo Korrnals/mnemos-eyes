@@ -14,6 +14,8 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { BoardTask } from "@/gateway/boardTypes";
+import { actFlush, actUnmount } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * The link-test pin deep-link (AGW-6 A.3) — portal content, so this lives
@@ -94,14 +96,14 @@ describe("TaskExecutionTab — the link-test pin (AGW-6 A.3)", () => {
     );
     expect(checked).not.toBeNull();
     expect(checked?.disabled).toBe(false); // offline does not disable a pin
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("without the prop no pin hint renders", async () => {
     const task = await taskOf("TB-10");
     const mount = await mountTree(<TaskExecutionTab task={task} />);
     expect(mount.text()).not.toContain("Executor pinned");
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("a terminal task honestly skips the auto-open", async () => {
@@ -110,7 +112,7 @@ describe("TaskExecutionTab — the link-test pin (AGW-6 A.3)", () => {
       <TaskExecutionTab task={done} autoAssignExecutorId="exec-old-poller" />,
     );
     expect(mount.text()).not.toContain("Executor pinned");
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 });
 
@@ -144,8 +146,8 @@ describe("TaskDetailPage — ?assign deep-link through the route", () => {
         </GatewayContext.Provider>,
       );
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await actFlush(0);
     expect(document.body.textContent).toContain("Executor pinned");
-    root.unmount();
+    await actUnmount(root);
   });
 });

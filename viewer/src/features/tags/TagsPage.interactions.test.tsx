@@ -12,6 +12,7 @@ import { keys } from "@/lib/queryKeys";
 import { I18nProvider } from "@/i18n";
 import { TAG_CORPUS } from "@/gateway/tagFixtures";
 import type { TagSummary } from "@/gateway/types";
+import { actFlush, actUnmount } from "@/test/actTools";
 
 /**
  * Interaction gate in a real DOM (UI-17 spec §11.2/§11.5): the 24-chip cap
@@ -57,7 +58,7 @@ async function click(control: Element | null | undefined): Promise<void> {
   expect(control, "interaction target must exist").toBeDefined();
   await act(async () => {
     (control as HTMLButtonElement).click();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await actFlush(0);
   });
 }
 
@@ -134,7 +135,7 @@ describe("caps (§3.3): Ещё 24 / Показать все / Свернуть",
     await act(async () => {
       await queryClient!.invalidateQueries({ queryKey: keys.tags.all });
       await queryClient!.refetchQueries({ queryKey: keys.tags.all });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await actFlush(0);
     });
 
     // Composition still follows the snapshot; the expanded count is intact.
@@ -222,7 +223,7 @@ describe("матрёшка (§2/§5): family → group → tag → sibling", () 
     expect(chipCountIn(withFat, listId)).toBe(30);
     // And the URL carries the colon cap key (the P1 shape).
     expect(withFat.ownerDocument.body).toBeDefined();
-    fatRoot.unmount();
+    await actUnmount(fatRoot);
     fatContainer.remove();
   });
 

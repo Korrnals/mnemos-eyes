@@ -16,6 +16,8 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { ExecutorsPage } from "@/gateway/boardTypes";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * The executor settings card (AGW-6 B): the REAL MockAdapter registry
@@ -131,7 +133,7 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
     expect(html).toContain("silently desync the board from poller.yaml");
     expect(html).toContain("dispatch = approved AND enabled");
     expect(html).toContain("the real gate is the poller's local allowlist");
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("a rename sends ONLY {name} — capabilities stay absent from the body", async () => {
@@ -139,11 +141,11 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
     const spy = vi.spyOn(mount.gateway, "patchExecutor");
     await setName(mount, "zcode@laptop-renamed");
     await clickButton(mount, "Save");
-    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
     expect(spy).toHaveBeenCalledWith("exec-laptop-zcode", {
       name: "zcode@laptop-renamed",
     });
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("an empty diff disables Save — NO request travels", async () => {
@@ -154,7 +156,7 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
       .find((candidate) => candidate.textContent?.includes("Save"));
     expect(save?.disabled).toBe(true);
     expect(spy).not.toHaveBeenCalled();
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("clearing capabilities behind a confirm sends the deliberate [] wipe", async () => {
@@ -164,9 +166,9 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
     await clickButton(mount, "Clear");
     expect(confirm).toHaveBeenCalled();
     await clickButton(mount, "Save");
-    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
     expect(spy).toHaveBeenCalledWith("exec-laptop-zcode", { capabilities: [] });
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("a cancelled wipe changes nothing (no [] without the confirm)", async () => {
@@ -179,7 +181,7 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
       .query<HTMLButtonElement>("button")
       .find((candidate) => candidate.textContent?.includes("Save"));
     expect(save?.disabled).toBe(true);
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("P3: chip-by-chip removal down to [] hits the SAME wipe confirm on Save", async () => {
@@ -204,9 +206,9 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
     // Accepting lets the deliberate wipe travel.
     stubConfirm(true);
     await clickButton(mount, "Save");
-    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
     expect(spy).toHaveBeenCalledWith("exec-laptop-zcode", { capabilities: [] });
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("P3: a foreign row update does NOT clobber an in-progress edit", async () => {
@@ -228,7 +230,7 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
     // The form was NOT remounted: the in-progress name survives the update.
     const input = mount.query<HTMLInputElement>("input[maxlength='120']")[0];
     expect(input?.value).toBe("work-in-progress");
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("the enabled kill-switch is its own single-field PATCH", async () => {
@@ -239,19 +241,19 @@ describe("ExecutorSheet — identity + the diff PATCH discipline", () => {
     await act(async () => {
       toggle!.click();
     });
-    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
     expect(spy).toHaveBeenCalledWith("exec-laptop-zcode", { enabled: false });
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("the SERVER's 409 duplicate-name text lands verbatim in the toast", async () => {
     const mount = await mountCard("exec-laptop-zcode");
     await setName(mount, "hermes@laptop");
     await clickButton(mount, "Save");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(mount.text()).toContain("duplicate executor name: hermes@laptop");
     });
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 });
 
@@ -275,7 +277,7 @@ describe("ExecutorSheet — the revoked tombstone", () => {
     // The secret is NEVER rendered — only the honest hint about it.
     expect(html).toContain("The secret is never shown");
     expect(html).not.toMatch(/mne_[A-Za-z0-9]/);
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 });
 
@@ -298,7 +300,7 @@ describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
       .query<HTMLButtonElement>("button")
       .find((candidate) => candidate.textContent?.includes("Approve"))!;
     expect(approve.disabled).toBe(true);
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("the exact tail unlocks the approve; the click consumes the context", async () => {
@@ -328,12 +330,12 @@ describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await clickButton(mount, "Approve");
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(spy).toHaveBeenCalledWith("exec-copilot-pending", { state: "approved" });
     });
     // The context is one-shot: consumed by the successful verify.
     expect(sessionStorage.getItem("vesmaro.provision-approve.exec-copilot-pending")).toBeNull();
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("a pre-pinned fingerprint (tofu=false) is the plain approve — no re-verify", async () => {
@@ -350,7 +352,7 @@ describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
       .query<HTMLButtonElement>("button")
       .find((candidate) => candidate.textContent?.includes("Approve"))!;
     expect(approve.disabled).toBe(false);
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("WITHOUT context (the manual mint path) the pending row keeps the plain approve", async () => {
@@ -360,7 +362,7 @@ describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
       .query<HTMLButtonElement>("button")
       .find((candidate) => candidate.textContent?.includes("Approve"))!;
     expect(approve.disabled).toBe(false);
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("PR #99 P3-1: a FAILED approve keeps the context — the re-opened sheet still verifies", async () => {
@@ -383,19 +385,19 @@ describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
     });
     await clickButton(mount, "Approve");
     // The server text landed in the toast; the one-shot context SURVIVED.
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(mount.text()).toContain("board unreachable");
     });
     expect(
       sessionStorage.getItem("vesmaro.provision-approve.exec-copilot-pending"),
     ).not.toBeNull();
-    mount.root.unmount();
+    await actUnmount(mount.root);
 
     // The re-opened sheet demands the tail again — no silent downgrade
     // to the plain approve after a network failure.
     const reopened = await mountCard("exec-copilot-pending");
     expect(reopened.text()).toContain("Last 8 hex chars");
-    reopened.root.unmount();
+    await actUnmount(reopened.root);
   });
 
   it("PR #99 P3-1: a verdict published while the sheet is OPEN is picked up live", async () => {
@@ -411,9 +413,9 @@ describe("ExecutorSheet — AGW-11 paste-back approve (TOFU honesty)", () => {
         jobId: "pj-1",
       });
     });
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(mount.text()).toContain("Last 8 hex chars");
     });
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 });

@@ -11,6 +11,8 @@ import { GatewayContext } from "@/gateway/GatewayContext";
 import { keys } from "@/lib/queryKeys";
 import { I18nProvider } from "@/i18n";
 import type { ExecutorItem, ExecutorsPage } from "@/gateway/boardTypes";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * The link-check verdict component (AGW-6 A): the trigger is a CACHE
@@ -98,7 +100,7 @@ describe("ExecutorLinkCheck — the honest check", () => {
     expect(html).toContain("online — answered a poll 5 s ago");
     expect(html).toContain("The board never pings agents (outbound-only)");
     expect(html).toContain("Check for real");
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("menu mode: no verdict before the trigger; the trigger REFETCHES the registry", async () => {
@@ -115,10 +117,10 @@ describe("ExecutorLinkCheck — the honest check", () => {
     });
     expect(mount.text()).toContain("online — answered a poll 5 s ago");
     // The invalidation refetched the registry query — the honest check.
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(spy.mock.calls.length).toBeGreaterThan(callsBefore);
     });
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("a revoked row shows the goned-presence verdict with NO trigger at all", async () => {
@@ -128,7 +130,7 @@ describe("ExecutorLinkCheck — the honest check", () => {
     expect(html).toContain("The board never pings agents (outbound-only)");
     expect(html).not.toContain("Check connection");
     expect(html).not.toContain("Check for real");
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 
   it("P2: a PENDING row offers the check but NOT the second stage (no presence yet)", async () => {
@@ -140,6 +142,6 @@ describe("ExecutorLinkCheck — the honest check", () => {
     expect(html).toContain("Check connection");
     // The real probe needs a routable pin — pending cannot take one.
     expect(html).not.toContain("Check for real");
-    mount.root.unmount();
+    await actUnmount(mount.root);
   });
 });

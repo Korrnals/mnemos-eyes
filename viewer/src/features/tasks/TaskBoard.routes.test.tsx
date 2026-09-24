@@ -83,7 +83,7 @@ async function renderAt(path: string): Promise<void> {
 }
 
 /** Wait for lazy route chunks + suspense to settle (bounded polling). */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("waitFor: condition not met");

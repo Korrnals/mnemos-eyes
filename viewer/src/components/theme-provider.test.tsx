@@ -9,6 +9,7 @@ import {
   ThemeProvider,
   useTheme,
 } from "./theme-provider";
+import { actUnmount } from "@/test/actTools";
 
 /**
  * UI-23 theme contract (spec §2.1/§4.2, acceptance §8.2/8.3): three-state
@@ -109,7 +110,7 @@ describe("theme provider — three-state preference (UI-23)", () => {
     expect(probe(container).dataset.preference).toBe("system");
     expect(probe(container).dataset.theme).toBe("dark");
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("an explicit choice writes ONLY the new registry key", async () => {
@@ -121,7 +122,7 @@ describe("theme provider — three-state preference (UI-23)", () => {
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
     // The legacy record is never written (an old-version tab keeps its pick).
     expect(localStorage.getItem(LEGACY_THEME_STORAGE_KEY)).toBe("light");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("«system» removes BOTH records, then follows the OS live (§8.2)", async () => {
@@ -140,7 +141,7 @@ describe("theme provider — three-state preference (UI-23)", () => {
     expect(probe(container).dataset.theme).toBe("light");
     act(() => emitMediaChange(false));
     expect(probe(container).dataset.theme).toBe("dark");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the two-position toggle writes the explicit opposite of the resolved theme", async () => {
@@ -151,7 +152,7 @@ describe("theme provider — three-state preference (UI-23)", () => {
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
     click(container, "toggle"); // light → dark
     expect(probe(container).dataset.preference).toBe("dark");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -161,7 +162,7 @@ describe("theme migration (spec §4.2 / acceptance §8.3)", () => {
     const { root, container } = await mountTheme();
     expect(probe(container).dataset.preference).toBe("light");
     expect(probe(container).dataset.theme).toBe("light");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the new key wins over the legacy one", async () => {
@@ -170,13 +171,13 @@ describe("theme migration (spec §4.2 / acceptance §8.3)", () => {
     const { root, container } = await mountTheme();
     expect(probe(container).dataset.preference).toBe("dark");
     expect(probe(container).dataset.theme).toBe("dark");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a corrupt legacy value falls back to system (no complaints)", async () => {
     localStorage.setItem(LEGACY_THEME_STORAGE_KEY, "sepia");
     const { root, container } = await mountTheme();
     expect(probe(container).dataset.preference).toBe("system");
-    root.unmount();
+    await actUnmount(root);
   });
 });

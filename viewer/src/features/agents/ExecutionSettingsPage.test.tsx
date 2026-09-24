@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
@@ -14,6 +14,8 @@ import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { ExecutorsPage } from "@/gateway/boardTypes";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * `/system/settings` → «Исполнение» (AGW-3): the pair selects list the full
@@ -89,7 +91,7 @@ describe("ExecutionSettingsPage — «Исполнение» section", () => {
     expect(container.textContent).toContain("Execution");
     expect(container.querySelector("#execution-default")).not.toBeNull();
     expect(container.querySelector("#execution-fallback")).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("offline/revoked rows stay visible but disabled, each with its reason", async () => {
@@ -104,7 +106,7 @@ describe("ExecutionSettingsPage — «Исполнение» section", () => {
     expect(revoked?.disabled).toBe(true);
     expect(revoked?.textContent).toContain("access revoked");
     expect(live?.disabled).toBe(false); // online + local-poll → selectable
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("saving a valid pair goes through the wire and lands the ok toast", async () => {
@@ -124,11 +126,11 @@ describe("ExecutionSettingsPage — «Исполнение» section", () => {
     await act(async () => {
       save.click();
     });
-    await vi.waitFor(() =>
+    await actWaitUntil(() =>
       expect(document.body.textContent).toContain("Execution settings saved"),
     );
     const settings = await gateway.getExecutionSettings();
     expect(settings.default_executor).toBe("exec-laptop-zcode");
-    root.unmount();
+    await actUnmount(root);
   });
 });

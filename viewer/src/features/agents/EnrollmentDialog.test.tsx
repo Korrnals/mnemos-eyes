@@ -1,3 +1,4 @@
+import { resetValidationClock } from "@/features/tasks/useValidationClock";
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -13,6 +14,8 @@ import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { ExecutorItem } from "@/gateway/boardTypes";
+import { actFlush, actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * The enrollment dialog integration (AGW-5 phase 2 + AGW-11 masking):
@@ -105,7 +108,7 @@ describe("EnrollmentDialog — form phase", () => {
     expect(document.body.textContent).toContain("you get ONE command");
     expect(document.body.textContent).toContain("installs itself");
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("shown ONCE");
     });
     // AGW-11: the token is ALWAYS masked on screen — the full plaintext
@@ -117,7 +120,7 @@ describe("EnrollmentDialog — form phase", () => {
     expect(document.body.textContent).toContain("FULL token on the clipboard");
     // The mint went through the real gateway exactly once.
     expect(gatewayListLength(gateway)).toBe(1);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("AGW-11 quota pre-flight: the counter blocks at 3 live tokens", async () => {
@@ -129,7 +132,7 @@ describe("EnrollmentDialog — form phase", () => {
         b.textContent?.includes("Create token"),
       )!.disabled,
     ).toBe(true);
-    root.unmount();
+    await actUnmount(root);
 
     // Below the cap the count is visible and the button armed.
     const second = await mount([], 1);
@@ -139,7 +142,7 @@ describe("EnrollmentDialog — form phase", () => {
         b.textContent?.includes("Create token"),
       )!.disabled,
     ).toBe(false);
-    second.root.unmount();
+    await actUnmount(second.root);
   });
 
   it("the 409 live-quota lands VERBATIM in an error toast; the form stays", async () => {
@@ -152,12 +155,12 @@ describe("EnrollmentDialog — form phase", () => {
       ),
     );
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("at most 3 live tokens");
     });
     // Still on the form — the owner can revoke and retry.
     expect(document.body.textContent).toContain("Create token");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the 503 fail-closed path surfaces the SERVER text too", async () => {
@@ -168,10 +171,10 @@ describe("EnrollmentDialog — form phase", () => {
       }),
     );
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("ui token is not configured");
     });
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -179,7 +182,7 @@ describe("EnrollmentDialog — token screen", () => {
   it("shows the live TTL countdown, the ONE-LINER and the manual steps", async () => {
     const { root, container } = await mount();
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("expires in");
     });
     expect(document.body.textContent ?? "").toMatch(/expires in \d{2}:\d{2}/);
@@ -196,14 +199,14 @@ describe("EnrollmentDialog — token screen", () => {
     expect(manual[0].textContent).toContain("api/executors");
     expect(manual[1].textContent).toContain("0600");
     expect(manual[3].textContent).toContain("--once");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the one-liner masks the token ON SCREEN; copying carries the FULL token", async () => {
     const { root, container, gateway } = await mount();
     const spy = vi.spyOn(gateway, "createEnrollment");
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("expires in");
     });
     const createdToken = (await spy.mock.results[0]!.value).token;
@@ -216,8 +219,17 @@ describe("EnrollmentDialog — token screen", () => {
     const copyButton = [...oneLinerBlock.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Copy"),
     )!;
-    await copyButton.click();
-    await vi.waitFor(() => {
+    // ME-006: the shared 1 Hz validation clock re-renders TokenScreen once
+    // per second — outside act in this longer test. Freeze it (the test
+    // seam); the TTL visuals are not under assertion in the copy steps.
+    resetValidationClock();
+    await act(async () => {
+      copyButton.click();
+    });
+    // ME-006: the «copied» flash lands on a clipboard microtask — flush
+    // it inside act so TokenScreen does not update outside act.
+    await actFlush();
+    await actWaitUntil(() => {
       const last = (
         navigator.clipboard.writeText as ReturnType<typeof vi.fn>
       ).mock.calls.at(-1)?.[0] as string;
@@ -225,7 +237,7 @@ describe("EnrollmentDialog — token screen", () => {
       expect(last).toContain("/api/poller/bootstrap.sh");
       expect(last).toContain("| sudo bash -s --");
     });
-    root.unmount();
+    await actUnmount(root);
   });
   it("AGW-11: the one-command grows --expect-fp when the mint carries the CA fingerprint", async () => {
     const { root, container, gateway } = await mount();
@@ -242,7 +254,7 @@ describe("EnrollmentDialog — token screen", () => {
         return { ...real, ca_fingerprint: validFp };
       });
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("expires in");
     });
     // The masked one-liner carries the flag with the PUBLIC fingerprint.
@@ -253,15 +265,24 @@ describe("EnrollmentDialog — token screen", () => {
     const copyButton = [...oneLinerBlock.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Copy"),
     )!;
-    await copyButton.click();
-    await vi.waitFor(() => {
+    // ME-006: the shared 1 Hz validation clock re-renders TokenScreen once
+    // per second — outside act in this longer test. Freeze it (the test
+    // seam); the TTL visuals are not under assertion in the copy steps.
+    resetValidationClock();
+    await act(async () => {
+      copyButton.click();
+    });
+    // ME-006: the «copied» flash lands on a clipboard microtask — flush
+    // it inside act so TokenScreen does not update outside act.
+    await actFlush();
+    await actWaitUntil(() => {
       const last = (
         navigator.clipboard.writeText as ReturnType<typeof vi.fn>
       ).mock.calls.at(-1)?.[0] as string;
       expect(last).toContain(`--expect-fp ${validFp}`);
     });
     expect(spy).toHaveBeenCalled();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("PR #99 P3-3: a MALFORMED ca_fingerprint never rides the command (no flag)", async () => {
@@ -276,32 +297,32 @@ describe("EnrollmentDialog — token screen", () => {
       return { ...real, ca_fingerprint: 'SHA256:oops; rm -rf / #' };
     });
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("expires in");
     });
     const onScreen = document.querySelectorAll("pre")[0].textContent ?? "";
     expect(onScreen).not.toContain("--expect-fp");
     expect(onScreen).not.toContain("rm -rf");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("AGW-11: without the field (pre-AGW-9 board) the command stays WITHOUT the flag", async () => {
     const { root, container } = await mount();
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("expires in");
     });
     expect(document.querySelectorAll("pre")[0].textContent).not.toContain(
       "--expect-fp",
     );
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("AGW-11: the manual steps mask the token on screen; the copy keeps it full", async () => {
     const { root, container, gateway } = await mount();
     const spy = vi.spyOn(gateway, "createEnrollment");
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("expires in");
     });
     const createdToken = (await spy.mock.results[0]!.value).token;
@@ -318,13 +339,13 @@ describe("EnrollmentDialog — token screen", () => {
       (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mock.lastCall?.[0] ?? "",
     );
     expect(allText).toContain(createdToken);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("copy buttons hand the token and the whole script to the clipboard", async () => {
     const { root, container } = await mount();
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("shown ONCE");
     });
     await act(async () => {
@@ -341,7 +362,7 @@ describe("EnrollmentDialog — token screen", () => {
     expect(allText).toContain("api/executors");
     expect(allText).toContain("0600");
     expect(allText).toContain("--once");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -349,7 +370,7 @@ describe("EnrollmentDialog — honest copy (review P2-2)", () => {
   it("a REJECTED write shows the failure hint, never a fake «Copied» flash", async () => {
     const { root, container } = await mount();
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("shown ONCE");
     });
     Object.defineProperty(navigator, "clipboard", {
@@ -359,7 +380,7 @@ describe("EnrollmentDialog — honest copy (review P2-2)", () => {
     await act(async () => {
       button(container, "Copy").click();
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await actFlush(0);
     expect(document.body.textContent).toContain(
       "Copy failed — the token stays visible",
     );
@@ -369,13 +390,13 @@ describe("EnrollmentDialog — honest copy (review P2-2)", () => {
     // clipboard is worse than the brief shoulder-surfing window.
     expect(document.querySelector("code")!.textContent).toMatch(/^mne_\S+$/);
     expect(document.querySelector("code")!.textContent).not.toContain("•");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("an ABSENT clipboard API shows the hint too (non-secure context)", async () => {
     const { root, container } = await mount();
     await submitForm(container);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("shown ONCE");
     });
     Object.defineProperty(navigator, "clipboard", {
@@ -388,6 +409,6 @@ describe("EnrollmentDialog — honest copy (review P2-2)", () => {
     expect(document.body.textContent).toContain(
       "Copy failed — the token stays visible",
     );
-    root.unmount();
+    await actUnmount(root);
   });
 });

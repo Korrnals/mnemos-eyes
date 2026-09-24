@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { MermaidDiagram } from "./Mermaid";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * MermaidDiagram gates (АРХКОМ-8): the library is initialized EXPLICITLY

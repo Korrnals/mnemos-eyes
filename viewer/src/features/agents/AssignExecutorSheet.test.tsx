@@ -13,6 +13,8 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { AssignmentsPage, BoardTask, ExecutorsPage } from "@/gateway/boardTypes";
+import { actFlush, actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * AssignExecutorSheet live-route preview (spec §2.3): the SAME resolver the
@@ -132,7 +134,7 @@ describe("AssignExecutorSheet — live route preview (§2.3)", () => {
     // The preview is LABELLED a preview (never a promise).
     expect(html).toContain("Route preview");
     expect(html).toContain("who actually claims it is a fact");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("an explicit executor choice flips the preview to the targeted tier", async () => {
@@ -149,7 +151,7 @@ describe("AssignExecutorSheet — live route preview (§2.3)", () => {
       hermesLabel!.querySelector<HTMLInputElement>("input[type=radio]")?.click();
     });
     expect(text()).toContain("hermes@laptop · targeted executor");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("no eligible route → the honest wait copy, submit stays ACTIVE", async () => {
@@ -176,7 +178,7 @@ describe("AssignExecutorSheet — live route preview (§2.3)", () => {
       button.textContent?.includes("Assign"),
     );
     expect(assign?.disabled).toBe(false); // honest wait, the button works
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -192,7 +194,7 @@ describe("AssignExecutorSheet — executor picker honesty (§2.3)", () => {
     expect(offline?.textContent).toContain("offline — last seen"); // REASON
     const offlineRadio = offline?.querySelector<HTMLInputElement>("input[type=radio]");
     expect(offlineRadio?.disabled).toBe(true); // DISABLED
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("pending/revoked rows carry their ladder reasons and stay disabled", async () => {
@@ -205,7 +207,7 @@ describe("AssignExecutorSheet — executor picker honesty (§2.3)", () => {
     expect(html).toContain("access revoked");
     const disabled = query<HTMLInputElement>("input[type=radio]:disabled");
     expect(disabled.length).toBeGreaterThanOrEqual(2);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("tooltips carry capabilities, transport, last seen AND the unverified note", async () => {
@@ -223,7 +225,7 @@ describe("AssignExecutorSheet — executor picker honesty (§2.3)", () => {
     expect(title).toContain("local-poll");
     expect(title).toContain("last seen");
     expect(title).toContain("never verified by the server");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -240,7 +242,7 @@ describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
     expect(radio?.checked).toBe(true); // the pin PRE-SELECTS it
     expect(radio?.disabled).toBe(false); // offline does NOT disable a pin
     expect(text()).toContain("Executor pinned");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the pin travels: submit carries executor_id without touching the picker", async () => {
@@ -265,12 +267,12 @@ describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
     await act(async () => {
       assign.click();
     });
-    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
     expect(spy.mock.calls[0][0]).toMatchObject({
       task_id: "TB-10",
       executor_id: "exec-old-poller",
     });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("pinned REVOKED: the radio stays checked-but-dead and submit is BLOCKED (P2)", async () => {
@@ -303,9 +305,9 @@ describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
     await act(async () => {
       assign.click();
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await actFlush(0);
     expect(spy).not.toHaveBeenCalled(); // the ≤1 slot is never held by a ghost
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("pinned PENDING: same treatment — checked, disabled radio, submit blocked (P2)", async () => {
@@ -336,9 +338,9 @@ describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
     await act(async () => {
       assign.click();
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await actFlush(0);
     expect(spy).not.toHaveBeenCalled();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a deep-link pin on a DELETED executor falls back to default and sends NO pin", async () => {
@@ -368,9 +370,9 @@ describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
     await act(async () => {
       assign.click();
     });
-    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
     expect(spy.mock.calls[0][0]).toMatchObject({ task_id: "TB-10", executor_id: "" });
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("picking «Default» releases a blocked pin — the honest way out still works", async () => {
@@ -402,8 +404,8 @@ describe("AssignExecutorSheet — the link-test pin (AGW-6 A.3)", () => {
     await act(async () => {
       assign.click();
     });
-    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await actWaitUntil(() => expect(spy).toHaveBeenCalled());
     expect(spy.mock.calls[0][0]).toMatchObject({ executor_id: "" });
-    root.unmount();
+    await actUnmount(root);
   });
 });
