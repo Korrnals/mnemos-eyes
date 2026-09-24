@@ -21,3 +21,7 @@ one decision. The authoritative summary lives in [`../CHARTER.md`](../CHARTER.md
 | [0011](0011-ui-convergence.md) | Конвергенция фронтендов в единое web-приложение (strangler Ф0–Ф4) | Accepted by committee — pending owner ratification |
 | [0012](0012-qr-pairing-device-tokens.md) | QR-пейринг и device-токены (LAN-direct, `mnd_`) | Accepted by committee — pending owner ratification |
 | [0015](0015-documentation-section.md) | Раздел документации (/docs) — markdown в бандле UI, без бэкенда | Accepted by committee |
+| [0016](0016-docs-upstream-import.md) | Импорт документации апстрим-проектов в /docs — sync-пайплайн на зафиксированном SHA, хабы проектов, билингво | Accepted by committee — pending owner ratification |
+| [0017](0017-docs-rendering-parity.md) | Паритет рендера документации с GitHub — mermaid, ограниченный raw HTML, баннеры | Accepted by committee — pending owner ratification |
+| [0018](0018-connectivity-installation-release-discipline.md) | External-agent connectivity, installation trust anchor and release discipline | Accepted |
+| [0019](0019-kora-workspace-phase1.md) | Kora (Кора) Workspace — фаза 1: read-only агрегация сессий + relay-продолжение | **Accepted — owner ratification 2026-09-24** |
