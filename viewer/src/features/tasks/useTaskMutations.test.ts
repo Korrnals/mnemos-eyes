@@ -321,6 +321,26 @@ describe("task mutations on the mock adapter", () => {
     expect(boardCounts(queryClient)).toEqual(afterArchive);
   });
 
+  it("ME-005: an edit to a detail-cached task patches keys.tasks.detail too", async () => {
+    const { gateway, mutations, queryClient, toasts } = await makeHarness();
+    // The archived row was opened via the BE-16 single-GET fallback — the
+    // detail cache holds its answer (the board projection never carries it).
+    await queryClient.prefetchQuery({
+      queryKey: keys.tasks.detail("RB-1"),
+      queryFn: () => gateway.taskById("RB-1"),
+    });
+
+    // The mock's PATCH is wire-discretionary on archived rows (findMutableTask);
+    // the synthesized task.updated folds into BOTH caches through one mapping.
+    mutations.patchTask(MOCK_ARCHIVED_TASK, { force: true, title: "Отредактировано" });
+    await vi.waitFor(() =>
+      expect(
+        queryClient.getQueryData<BoardTask>(keys.tasks.detail("RB-1"))?.title,
+      ).toBe("Отредактировано"),
+    );
+    expect(toasts.at(-1)?.kind).toBe("ok");
+  });
+
   // --- full ui-token gate integration (401 → panel → retry → success) -----------
 
   it("401 → panel(rejected) → fresh token → the SAME mutation retries and succeeds", async () => {

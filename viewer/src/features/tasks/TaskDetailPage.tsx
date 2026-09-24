@@ -42,6 +42,11 @@ import {
  * edit, BE-12 force path inside) and UI-8 «Вернуть в работу» on a live
  * final report (PATCH status=in-progress — the column never moves).
  *
+ * ME-005: an archived row is READ-ONLY by contract — no Edit/resume affordances
+ * (the PATCH is wire-discretionary, the UI simply stops offering it); the
+ * archive page's Restore-to-board remains the mutation path. Tab links and
+ * return navigation stay intact.
+ *
  * UI-18: tab links preserve `?return=` and every other param (spec §2.2
  * rule 4): the first tab click must not kill the back context.
  */
@@ -176,6 +181,12 @@ export function TaskDetailPage() {
   const hasLiveFinal = (reports.data?.items ?? []).some(
     (report) => report.kind === "final" && !report.superseded,
   );
+  // ME-005: archived rows are read-only — no Edit/resume affordances (the
+  // wire PATCH stays discretionary; the UI stops offering it). The fallback
+  // GET (BE-16) is the only read that carries `archived`, and it is the
+  // detail header's single source for the gate.
+  const archived = current.archived === 1;
+  const canEdit = canMutate && !archived;
 
   return (
     <TaskDetailShell>
@@ -184,7 +195,7 @@ export function TaskDetailPage() {
       <header className="space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <p className="font-mono text-xs text-foreground-muted">{current.id}</p>
-          {canMutate ? (
+          {canEdit ? (
             <div className="flex flex-wrap gap-2">
               {hasLiveFinal ? (
                 <Button
@@ -236,8 +247,9 @@ export function TaskDetailPage() {
         </p>
       </header>
 
-      {/* Content edit (BE-12 lock + force path lives inside). */}
-      {canMutate ? (
+      {/* Content edit (BE-12 lock + force path lives inside); archived rows
+       * offer no editor at all (ME-005). */}
+      {canEdit ? (
         <EditTaskDialog task={current} open={editOpen} onOpenChange={setEditOpen} />
       ) : null}
 
