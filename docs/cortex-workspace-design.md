@@ -342,9 +342,86 @@ shape only. The following amendments are binding parts of the phase-1 charter:
    p50≤60 s / p95≤120 s LAN, ≤5 min VPN, SSH baseline measured pre-phase;
    boundary checklist — zero fake-input, offline host visible ≤30 s,
    vscode dead-end counter from day one, freshness ≤60 s p95.
+
+   > **Note 2026-09-24 (rev.2):** the sequencing language in this
+   > amendment — «retro window starts after core components 1–5 are
+   > accepted» and the horizontal component phasing it rests on — is
+   > **superseded by ADR 0016 rev.2 vertical slices** (retro window after
+   > slice 3; success measure = North Star). The gate list itself survives
+   > as diagnostics/release-blockers. Same for the amendment-2 relay mode
+   > and amendment-3 chat transport: superseded by the rev.2 sections
+   > (separate `vesmaro-session-relay.service` unit; store-tail GET chat).
+   > Status map for all eight amendments: ADR 0016 rev.2 §7.
+
 8. **Pre-phase checklist:** manual SSH-path baseline; pilot hysteria call
    from the owner's phone; owner decision on the 6-hour cookie lifetime
    (phone re-login cadence); fact-check app-server vs stdin prompt (one
    hour, read-only) before component 4.
 
-Phase 1 starts only after the owner ratifies ADR 0015.
+Phase 1 starts only after the owner ratifies **ADR 0016 rev.2**
+(decisions page at the end of the ADR).
+
+## Appendix A — Онбординг и экран покрытия (rev.2 product additions)
+
+Added by the improvement round of 2026-09-24. Normative text = ADR 0016
+rev.2 («Продуктовые добавки», slice table); this appendix is the design
+elaboration. If the two diverge, ADR 0016 rev.2 wins.
+
+### A.1 Coverage screen — «что я вижу и чего пока нет» (slice 1)
+
+A persistent block of the Workspace first screen (not a separate page):
+one row per source, each row = what you get + why not more.
+
+| Источник | Что видно | Чего нет и почему |
+| --- | --- | --- |
+| zcode (хосты со сканером) | список сессий (срез 1), полный транскрипт (срез 2) | — |
+| vscode | метаданные + превью (срез 2) | полный транскрипт — known-gap (конверт-v3, kind:1-патчи); продолжение невозможно по построению — чтение only |
+| pi | список сессий (срез 2) | — |
+| hermes | ничего | отложено до T004 (pod-exec-ридер = выбрасываемый код) |
+| удалённые хосты | когда появится W4 loopback-ingress | до этого — known-gap, честно показанный |
+
+Rendering rule: a gap is always a visible row with a reason and a
+horizon («закроется в T004»), never a silently empty list. The screen is
+the standing answer to «а где всё остальное?».
+
+### A.2 Onboarding card — 3 кейса (slice 1)
+
+First-open card on the Workspace screen. Each case links to the surface
+that delivers it and renders disabled-with-horizon until its slice
+lands:
+
+1. «Вечером посмотреть, что делалось» → список сессий + дайджест
+   (срез 1–2).
+2. «Досмотреть живую сессию» → read-only транскрипт / live-tail чужой
+   сессии (срез 2 + шаг 1.5), без руления.
+3. «Начать с телефона» → новая сессия через реле (срез 3), затем —
+   продолжение существующей.
+
+### A.3 Digest feed (slice 2)
+
+«Активное за 24ч + открытые todo + ждут владельца» — derived from the
+session listing + assignments (ADR 0009). Почти бесплатно: новые ридеры
+не нужны.
+
+### A.4 Product gate «60 секунд»
+
+Cold-open acceptance for slices 1–2: the owner, within 60 seconds of
+opening, can say what is alive and what was being done. Fixed by
+screenshot + the owner's own words — not a questionnaire.
+
+### A.5 Friction metrics (diagnostics, not North Star)
+
+- Phone re-login share: threshold >30% → cookie-TTL revisit with
+  numbers (owner decision (б) in ADR 0016 rev.2).
+- `mnd_` wall with an explanation: what is forbidden, why, what to do —
+  not a bare 403.
+- «Заблокировать устройство» button (device-loss ritual, one click).
+- vscode dead-end funnel: counted from day one; the «продолжить тему в
+  zcode» button is a post-window step at baseline ≥3–5 dead-ends/week.
+
+### A.6 Live-tail (step 1.5, after slice 2)
+
+Read-only tail of someone else's live session through the same
+authenticated GET transcript path (seq cursor, redaction choke-point,
+`session.transcript_viewed` audit). Provenance gates untouched — read
+path only, never a fake input.
