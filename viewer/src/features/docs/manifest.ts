@@ -109,13 +109,14 @@ export function stripLeadingH1(body: string): string {
   return stripped.trimStart();
 }
 
-/** First non-empty paragraph of a body — the category-row description. */
 /**
  * Leading provenance banners (GENERATED/curated whole-line `<!-- ... -->`
  * comments) are presentation noise — the sidecar badge carries provenance
  * (АРХКОМ-8 verdict 1). Line-based by design: a comment embedded inside a
- * content paragraph is NOT stripped here. Shared by the article pipeline
- * (Markdown.tsx) and every description/snippet consumer.
+ * content paragraph is NOT stripped here. LEADING-ONLY by contract: the
+ * article pipeline (Markdown.tsx) receives stripLeadingH1-trimmed bodies, so
+ * the banner sits at line 0 there; description/snippet consumers use
+ * stripBannerComments (ME-009) instead.
  */
 export function stripLeadingBanners(source: string): string {
   const lines = source.split("\n");
@@ -124,11 +125,45 @@ export function stripLeadingBanners(source: string): string {
   return index === 0 ? source : lines.slice(index).join("\n").replace(/^\s+/, "");
 }
 
+/**
+ * Whole-line `<!-- ... -->` banner comments dropped ANYWHERE in the text
+ * (ME-009): imported bodies place the GENERATED banner after the
+ * frontmatter's blank line or a curator preamble — the line-0 anchor of
+ * stripLeadingBanners misses it and the category-row description surfaced
+ * the banner verbatim. Same line-based rule as stripLeadingBanners (a
+ * comment embedded INSIDE a content paragraph survives), extended to any
+ * position and to multi-line banner blocks. Excerpt path only — per
+ * ADR 0020 the banner strip moves into the manifest/excerpt build layer in
+ * convergence Ф2; this is the verdict-compatible immediate repair.
+ */
+function stripBannerComments(source: string): string {
+  const kept: string[] = [];
+  let inside = false;
+  for (const line of source.split("\n")) {
+    const trimmed = line.trim();
+    if (inside) {
+      // Multi-line banner block: consume up to and including the closer.
+      if (trimmed.includes("-->")) inside = false;
+      continue;
+    }
+    if (trimmed.startsWith("<!--")) {
+      // A whole-line single-line comment, or a block opener awaiting `-->`.
+      if (!trimmed.endsWith("-->")) inside = true;
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+/** First non-empty paragraph of a body — the category-row description. */
 export function firstParagraph(body: string): string {
-  const plain = stripLeadingBanners(body)
-    // Fence contents are code, not prose — drop whole fenced blocks.
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/```[\s\S]*$/g, " ");
+  const plain = stripBannerComments(
+    stripLeadingBanners(body)
+      // Fence contents are code, not prose — drop whole fenced blocks.
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/```[\s\S]*$/g, " "),
+  );
   for (const block of plain.split(/\n\s*\n/)) {
     const text = block
       .split("\n")
