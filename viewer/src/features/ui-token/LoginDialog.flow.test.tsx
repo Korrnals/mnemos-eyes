@@ -519,8 +519,14 @@ describe("login flow regression (owner repro)", () => {
       "Sign in to continue — your action will run automatically",
     );
     expect(document.body.textContent).toContain(
-      "kubectl get secret vesmaro-eyes-ui-token",
+      "kubectl -n kube-agents get secret vesmaro-eyes-ui-token",
     );
+    // Regression (prod hotfix login-hint): the hint must teach the WORKING
+    // value-extraction command (jsonpath + decode), never the `-o yaml`
+    // form that hands the user a base64 blob → "invalid ui token".
+    expect(document.body.textContent).toContain("-o jsonpath='{.data.VESMARO_UI_TOKEN}'");
+    expect(document.body.textContent).toContain("| base64 -d");
+    expect(document.body.textContent).not.toContain("-o yaml");
     expect(document.body.textContent).not.toContain("mnk_"); // no value examples
   });
 });

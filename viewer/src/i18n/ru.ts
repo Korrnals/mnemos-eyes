@@ -345,7 +345,7 @@ export const ru = {
   "login.showValue": "Показать значение токена",
   "login.hideValue": "Скрыть значение токена",
   "login.hint":
-    "Где взять: значение секрета vesmaro-eyes-ui-token (например, kubectl get secret vesmaro-eyes-ui-token -o yaml у администратора кластера).",
+    "Где взять: у администратора кластера — kubectl -n kube-agents get secret vesmaro-eyes-ui-token -o jsonpath='{.data.VESMARO_UI_TOKEN}' | base64 -d",
   "login.continueReadOnly": "Продолжить только чтение",
   "login.submit": "Войти",
   "login.verifying": "Проверка…",
