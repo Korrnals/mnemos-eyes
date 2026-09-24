@@ -13,6 +13,7 @@ import type {
   PairingExchangeAwaiting,
   PairingIssuedResult,
 } from "@/gateway/boardTypes";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * The /pair device-leg flow (CV-7, ADR 0012 §2.3): the deep link

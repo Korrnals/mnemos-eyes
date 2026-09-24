@@ -13,6 +13,7 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import { UI_TOKEN_STORAGE_KEY } from "@/gateway/uiToken";
+import { actFlush } from "@/test/actTools";
 
 /**
  * UI-25 owner feedback on /tasks/inbox: cards EXPAND to the full source
@@ -73,7 +74,7 @@ async function waitFor(what: string, probe: () => boolean): Promise<void> {
       );
     }
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await actFlush(25);
     });
   }
 }
@@ -82,11 +83,13 @@ async function click(target: Element | null | undefined): Promise<void> {
   expect(target, "interaction target must exist").toBeDefined();
   await act(async () => {
     (target as HTMLButtonElement).click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await actFlush(20);
   });
 }
 
-/** Controlled-input seam: React reads values through the prototype setter. */
+/** Controlled-input seam: React reads values through the prototype setter.
+ * ME-006: the dispatches run inside act — the controlled update must not
+ * land outside it (EditInboxForm "not wrapped in act" warnings). */
 function typeInto(
   el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
   value: string,
@@ -96,9 +99,11 @@ function typeInto(
     : el instanceof HTMLSelectElement
       ? HTMLSelectElement.prototype
       : HTMLInputElement.prototype;
-  Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value);
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
+  act(() => {
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 function cardOf(titleFragment: string): HTMLElement {

@@ -21,6 +21,8 @@ import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
  */
 
 import type { EnrollmentItem, ExecutorItem } from "@/gateway/boardTypes";
+import { actUnmount } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const USED: EnrollmentItem = {
   enrollment_id: "enr-used-1",
@@ -105,7 +107,7 @@ describe("EnrollmentTokensPanel — the «Открыть карточку» deep
     expect(
       document.body.querySelector('a[href="/agents/harnesses#executor-exec-minted-1"]'),
     ).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("no minted row in the registry yet → no card link (the id link suffices)", async () => {
@@ -114,7 +116,7 @@ describe("EnrollmentTokensPanel — the «Открыть карточку» deep
       document.body.querySelector('a[href="/agents/harnesses#executor-sheet-exec-minted-1"]'),
     ).toBeNull();
     expect(document.body.textContent).toContain("exec-minted-1");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("live tokens offer nothing (no executor exists to inspect)", async () => {
@@ -128,6 +130,6 @@ describe("EnrollmentTokensPanel — the «Открыть карточку» deep
     };
     const { root } = await mountPanel([live], []);
     expect(document.body.textContent).not.toContain("Settings card");
-    root.unmount();
+    await actUnmount(root);
   });
 });

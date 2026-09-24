@@ -12,6 +12,7 @@ import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import { setUiToken } from "@/gateway/uiToken";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * The harness combobox (wave 3C): options from the LIVE dictionary (GET

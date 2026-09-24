@@ -14,6 +14,8 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * UI-21 «Автоматизация» section (spec 2026-09-23 §2-§3, acceptance §6):
@@ -122,18 +124,18 @@ describe("AutomationSettingsSection — «Автоматизация» (UI-21)",
     expect(capInput(container).value).toBe("10");
     // Criterion 8: the counter rides the status projection (S1: honest 0).
     expect(text).toContain("0 of 10 used today");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the engine-off stanza shows while engine=false and leaves when true", async () => {
     const off = await mountSection(new MockAdapter({ latency: false }));
     expect(off.container.textContent).toContain("Engine not enabled");
     expect(off.container.textContent).toContain("this preference is stored now");
-    off.root.unmount();
+    await actUnmount(off.root);
 
     const on = await mountSection(new EngineOnGateway({ latency: false }));
     expect(on.container.textContent).not.toContain("Engine not enabled");
-    on.root.unmount();
+    await actUnmount(on.root);
   });
 
   it("saving sends BOTH fields through the wire and lands the ok toast", async () => {
@@ -150,14 +152,14 @@ describe("AutomationSettingsSection — «Автоматизация» (UI-21)",
       saveButton(container).click();
     });
 
-    await vi.waitFor(() =>
+    await actWaitUntil(() =>
       expect(document.body.textContent).toContain("Automation settings saved"),
     );
     expect(putSpy).toHaveBeenCalledWith({ enabled: true, cap_global_per_day: 25 });
     const stored = await gateway.getAutomationSettings();
     expect(stored.enabled).toBe(true);
     expect(stored.cap_global_per_day).toBe(25);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("client gate: 0/1001/blank show the inline error, the PUT never fires", async () => {
@@ -175,7 +177,7 @@ describe("AutomationSettingsSection — «Автоматизация» (UI-21)",
       expect(saveButton(container).disabled).toBe(true);
     }
     expect(putSpy).not.toHaveBeenCalled();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a 422 answers with the server text verbatim and reverts to the loaded values", async () => {
@@ -190,16 +192,16 @@ describe("AutomationSettingsSection — «Автоматизация» (UI-21)",
 
     // The verbatim gate text rides the error toast; the form is back on the
     // LOADED pair (P3-6b) — no dangling local edits.
-    await vi.waitFor(() =>
+    await actWaitUntil(() =>
       expect(document.body.textContent).toContain(
         "cap_global_per_day must be an int in 1..1000",
       ),
     );
-    await vi.waitFor(() => expect(capInput(container).value).toBe("10"));
+    await actWaitUntil(() => expect(capInput(container).value).toBe("10"));
     expect(
       container.querySelector<HTMLInputElement>("#automation-enabled")!.checked,
     ).toBe(false);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("no session: the section reads fully, save is disabled, one honest note", async () => {
@@ -217,6 +219,6 @@ describe("AutomationSettingsSection — «Автоматизация» (UI-21)",
       node.textContent?.includes("read-only"),
     );
     expect(notes).toHaveLength(1);
-    root.unmount();
+    await actUnmount(root);
   });
 });

@@ -146,7 +146,11 @@ async function mountApp(initialPath: string): Promise<void> {
 }
 
 /** Wait for lazy route chunks + suspense to settle (bounded polling). */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+// ME-006: 2s per condition left no headroom for a scheduler spike while
+// 16 vitest workers hammer the CPU (the ~1-in-2 full-run flake: one wait
+// over budget aborted the whole cycle). 5s is still far below the test
+// timeout — the budget is wall-clock, every assertion is unchanged.
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("waitFor: condition not met");
@@ -182,7 +186,7 @@ afterEach(async () => {
 describe("freeze gate: /tasks navigation cycle with live SSE", () => {
   it(
     "keeps the app interactive across 6× /tasks ↔ / with SSE report frames",
-    { timeout: 15_000 },
+    { timeout: 30_000 },
     async () => {
       await mountApp("/");
       const baselineListeners = listenersCount();

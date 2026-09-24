@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
 import { act } from "react";
+import { actUnmount } from "@/test/actTools";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -13,6 +14,7 @@ import { I18nProvider } from "@/i18n";
 import { ToastProvider } from "@/components/Toast/ToastProvider";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { AssignmentItem, BoardTask } from "@/gateway/boardTypes";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * AGW-2 review P3-1, browser arm: mounted (ticker LIVE), the wait chip on
@@ -102,6 +104,6 @@ describe("offline wait chip — live ticker", () => {
     });
     expect(document.body.textContent).toContain("route: zcode@old-laptop");
     expect(document.body.textContent).toContain("waiting for an executor (offline");
-    root.unmount();
+    await actUnmount(root);
   });
 });

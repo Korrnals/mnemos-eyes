@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { I18nProvider } from "@/i18n";
 import { ConnectGuide } from "./ConnectGuide";
+import { actUnmount } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * AGW-4 + connect hotfix (owner prod feedback): the connect instruction —
@@ -39,7 +41,7 @@ describe("ConnectGuide (AGW-4 + connect hotfix)", () => {
     const toggle = container.querySelector('button[aria-expanded="false"]');
     expect(toggle?.textContent).toContain("How to connect an external agent");
     expect(container.textContent).not.toContain("ONE command");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("expanded: exactly five steps of the one-command flow + the honest note", async () => {
@@ -71,7 +73,7 @@ describe("ConnectGuide (AGW-4 + connect hotfix)", () => {
       container.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click();
     });
     expect(container.querySelector('button[aria-expanded="false"]')).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("points at the manual runbook path, never the retired manual steps", async () => {
@@ -86,6 +88,6 @@ describe("ConnectGuide (AGW-4 + connect hotfix)", () => {
     expect(container.textContent).not.toContain("poller.example.yaml");
     expect(container.textContent).not.toContain("VESMARO_BOARD_TOKEN");
     expect(container.textContent).not.toContain("chmod 0600");
-    root.unmount();
+    await actUnmount(root);
   });
 });

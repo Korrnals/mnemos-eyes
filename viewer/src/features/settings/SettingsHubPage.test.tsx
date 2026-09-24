@@ -23,6 +23,7 @@ import {
 import { BOARD_STYLE_STORAGE_KEY } from "@/features/tasks/tasksViewPrefs";
 import { setBoardStyle } from "@/lib/boardStyleStore";
 import type { ExecutorsPage } from "@/gateway/boardTypes";
+import { actUnmount } from "@/test/actTools";
 
 /**
  * UI-23 hub v2 (spec §3, acceptance §8): one h1 + six anchored sibling
@@ -171,7 +172,7 @@ describe("SettingsHubPage v2 — structure (spec §3.1, acceptance §8.1)", () =
         "Devices",
       ]),
     );
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("composes «Исполнение» verbatim: both selects live inside #execution", async () => {
@@ -179,7 +180,7 @@ describe("SettingsHubPage v2 — structure (spec §3.1, acceptance §8.1)", () =
     const execution = container.querySelector("#execution")!;
     expect(execution.querySelector("#execution-default")).not.toBeNull();
     expect(execution.querySelector("#execution-fallback")).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -197,7 +198,7 @@ describe("Appearance — theme is three-state and live (§8.2)", () => {
     press(container, "appearance", "Light");
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("«System» removes the new AND the legacy record (fallback must not resurrect)", async () => {
@@ -210,7 +211,7 @@ describe("Appearance — theme is three-state and live (§8.2)", () => {
     expect(
       sectionButton(container, "appearance", "System").getAttribute("aria-pressed"),
     ).toBe("true");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -223,7 +224,7 @@ describe("Appearance — language and density are one state with the top bar", (
     expect(
       sectionButton(container, "appearance", "RU").getAttribute("aria-pressed"),
     ).toBe("true");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("density flips <html data-density> on the same page (§8.4)", async () => {
@@ -234,7 +235,7 @@ describe("Appearance — language and density are one state with the top bar", (
     expect(
       sectionButton(container, "appearance", "Compact").getAttribute("aria-pressed"),
     ).toBe("true");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -252,7 +253,7 @@ describe("Board + Navigation + Behavior — one state, two controls (§4.3)", ()
     expect(
       sectionButton(container, "board", "Groups").getAttribute("aria-pressed"),
     ).toBe("true");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("sidebar: hub control and the sidebar button drive one store (§8.6)", async () => {
@@ -270,7 +271,7 @@ describe("Board + Navigation + Behavior — one state, two controls (§4.3)", ()
     expect(
       sectionButton(container, "navigation", "Expanded").getAttribute("aria-pressed"),
     ).toBe("true");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("motion: «Minimal» persists and forces [data-motion=reduced]; «System» clears", async () => {
@@ -282,7 +283,7 @@ describe("Board + Navigation + Behavior — one state, two controls (§4.3)", ()
     act(() => setMotion("system")); // the store's own write path
     expect(localStorage.getItem(MOTION_STORAGE_KEY)).toBe("system");
     expect(document.documentElement.dataset.motion).toBeUndefined();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("onboarding replay resets the AGW-4 flag and confirms (§8.8)", async () => {
@@ -297,7 +298,7 @@ describe("Board + Navigation + Behavior — one state, two controls (§4.3)", ()
     expect(
       container.querySelector('p[role="status"]')?.textContent,
     ).toContain("expand again on the Execution page");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -322,7 +323,7 @@ describe("Verdict blocks (spec §3.4, acceptance §8.10)", () => {
     expect(verdicts.some((text) => text?.includes("routes, not a preference"))).toBe(
       true,
     );
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a collapsed details still exposes its content to find-in-page/DOM", async () => {
@@ -331,6 +332,6 @@ describe("Verdict blocks (spec §3.4, acceptance §8.10)", () => {
       li.textContent?.includes("Typography"),
     );
     expect(fonts).toBeDefined(); // present in the DOM while collapsed
-    root.unmount();
+    await actUnmount(root);
   });
 });

@@ -13,6 +13,8 @@ import { ToastViewport } from "@/components/Toast/ToastViewport";
 import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import { keys } from "@/lib/queryKeys";
 import { fingerprintHex } from "./provisionTypes";
+import { actUnmount, actWaitUntil } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * The connect card integration (AGW-11): the REAL MockAdapter (its
@@ -130,7 +132,7 @@ describe("ProvisionCard — the form", () => {
     expect(document.body.textContent).toContain("lowercase letters/digits");
     // The POST never fired — no feed, the form is still here.
     expect(document.body.textContent).toContain("How to log in");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("password auth is a choice the OWNER makes explicitly (default is key)", async () => {
@@ -142,7 +144,7 @@ describe("ProvisionCard — the form", () => {
       passwordOption.click();
     });
     expect(document.body.textContent).toContain("provisioner.passwordAuth");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -152,7 +154,7 @@ describe("ProvisionCard — the feed", () => {
     await submitHappyForm();
 
     // The feed replaced the form: funnel + interim honesty slots render.
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("SSH connection to the machine");
     });
     expect(document.body.textContent).toContain("interim: manual tunnel");
@@ -167,7 +169,7 @@ describe("ProvisionCard — the feed", () => {
     // Walk the mock to done (queued→connecting→installing→watching→done).
     await advance(queryClient, 6);
 
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("awaits your approval");
     });
     // The paste-back: the pin is on screen, the approve starts disabled.
@@ -190,7 +192,7 @@ describe("ProvisionCard — the feed", () => {
     await act(async () => {
       button("Approve").click();
     });
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       // The registry row left pending (the mock flipped it via the PATCH).
       expect(document.body.textContent).toContain("already approved");
     });
@@ -199,7 +201,7 @@ describe("ProvisionCard — the feed", () => {
       key.startsWith("vesmaro.provision-approve."),
     );
     expect(leftover).toEqual([]);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("host_key_mismatch: the TABLE hint + the expected fingerprint + retry", async () => {
@@ -208,7 +210,7 @@ describe("ProvisionCard — the feed", () => {
     await submitHappyForm();
     await advance(queryClient, 6);
 
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("did not match the expected one");
     });
     // The one code where the technical detail IS the answer.
@@ -221,7 +223,7 @@ describe("ProvisionCard — the feed", () => {
     expect(body.indexOf("did not match the expected one")).toBeLessThan(
       body.indexOf("Code: host_key_mismatch"),
     );
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("a sudo failure renders ITS hint (the table, not the raw code)", async () => {
@@ -230,11 +232,11 @@ describe("ProvisionCard — the feed", () => {
     await submitHappyForm();
     await advance(queryClient, 6);
 
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("passwordless sudo");
     });
     expect(document.body.textContent).not.toContain("Expected machine key fingerprint:");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("retry returns to the form and KEEPS the executor name (PR #99 P3-2)", async () => {
@@ -250,13 +252,13 @@ describe("ProvisionCard — the feed", () => {
       button("Connect").click();
     });
     await advance(queryClient, 6);
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("key or password did not fit");
     });
     await act(async () => {
       button("Retry").click();
     });
-    await vi.waitFor(() => {
+    await actWaitUntil(() => {
       expect(document.body.textContent).toContain("How to log in");
     });
     // The active job detached — the feed is gone.
@@ -265,6 +267,6 @@ describe("ProvisionCard — the feed", () => {
     expect((inputByLabel("Executor name") as HTMLInputElement).value).toBe(
       "gpu-box",
     );
-    root.unmount();
+    await actUnmount(root);
   });
 });

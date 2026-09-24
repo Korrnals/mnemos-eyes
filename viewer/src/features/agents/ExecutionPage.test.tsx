@@ -16,6 +16,8 @@ import { UiTokenProvider } from "@/features/ui-token/UiTokenProvider";
 import type { AssignmentItem, ExecutorsPage } from "@/gateway/boardTypes";
 import { pushExecutionEvent, resetFeedStore } from "./executionFeedStore";
 import { loadTerminalCollapsed } from "./executionPrefs";
+import { actUnmount } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * `/agents/execution` integration (AGW-3): the presence strip classifies by
@@ -174,7 +176,7 @@ describe("ExecutorStrip (layer 1)", () => {
     expect(container.textContent).toContain("offline");
     // The avatar slot geometry is reserved (empty dashed circle).
     expect(container.querySelectorAll("span.border-dashed").length).toBeGreaterThanOrEqual(3);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("empty registry: honest empty line + the poller instruction", async () => {
@@ -210,7 +212,7 @@ describe("ExecutorStrip (layer 1)", () => {
     });
     expect(container.textContent).toContain("No executors connected");
     expect(container.textContent).toContain("deploy/poller/README.md");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("click filters the list by executor; the second click clears", async () => {
@@ -231,7 +233,7 @@ describe("ExecutorStrip (layer 1)", () => {
       liveChip.click(); // toggle off
     });
     expect(container.textContent).toContain("TB-3");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -258,7 +260,7 @@ describe("Assignment groups (layer 2)", () => {
     // Persistence: the flag landed in localStorage under the vesmaro.* ns.
     expect(localStorage.getItem("vesmaro.agents.terminalCollapsed")).toBe("0");
     expect(loadTerminalCollapsed()).toBe(false);
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("empty groups render nothing (a queued-less world shows no queue header)", async () => {
@@ -267,7 +269,7 @@ describe("Assignment groups (layer 2)", () => {
     ]);
     expect(container.querySelector('section[aria-label="queue"]')).toBeNull();
     expect(container.querySelector('section[aria-label="active"]')).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("amber: a stale running pulse paints warning + the reaper countdown", async () => {
@@ -276,7 +278,7 @@ describe("Assignment groups (layer 2)", () => {
     ]);
     expect(container.textContent).toContain("expires in ~");
     expect(container.querySelector(".text-warning")).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("j/k: NO highlight before the first keypress; j starts at row 0, k at the last", async () => {
@@ -305,7 +307,7 @@ describe("Assignment groups (layer 2)", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
     });
     expect(cursorRow()).toContain("TB-1"); // and j wraps back to the first
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the first k from scratch lands on the LAST row", async () => {
@@ -321,7 +323,7 @@ describe("Assignment groups (layer 2)", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
     });
     expect(cursorRow()).toContain("TB-3"); // first k = the tail row
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("row click opens the drawer (timeline, envelope, hash); Esc closes", async () => {
@@ -345,7 +347,7 @@ describe("Assignment groups (layer 2)", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(document.body.textContent ?? "").not.toContain("Phase timeline");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -377,7 +379,7 @@ describe("UI-10 feed panel (layer 3)", () => {
     expect(list).not.toBeNull();
     expect(list?.textContent).toContain("TB-1");
     expect(list?.textContent).toContain("actor: z:l");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -388,7 +390,7 @@ describe("AGW-4 polish (actionable empties, terminal hint, onboarding)", () => {
     const link = container.querySelector<HTMLAnchorElement>('a[href="/tasks"]');
     expect(link).not.toBeNull();
     expect(link?.textContent).toBe("Open tasks");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("the empty UI-10 feed carries the same link", async () => {
@@ -402,7 +404,7 @@ describe("AGW-4 polish (actionable empties, terminal hint, onboarding)", () => {
     const feed = container.querySelector('section[aria-label="Execution feed"]')!;
     expect(feed.textContent).toContain("No execution events yet");
     expect(feed.querySelector('a[href="/tasks"]')).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("no terminal rows today but recent ones exist → a neutral date hint replaces the group", async () => {
@@ -414,7 +416,7 @@ describe("AGW-4 polish (actionable empties, terminal hint, onboarding)", () => {
     // The «за сегодня» group stays unrendered — the hint points at history.
     expect(container.querySelector('section[aria-label="terminal today"]')).toBeNull();
     expect(container.textContent).toContain("Last completed —");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("terminal rows today → the group renders, the idle hint stays hidden", async () => {
@@ -424,7 +426,7 @@ describe("AGW-4 polish (actionable empties, terminal hint, onboarding)", () => {
     ]);
     expect(container.querySelector('section[aria-label="terminal today"]')).not.toBeNull();
     expect(container.textContent).not.toContain("Last completed —");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("onboarding auto-expands ONCE; the first collapse persists (localStorage)", async () => {
@@ -439,13 +441,13 @@ describe("AGW-4 polish (actionable empties, terminal hint, onboarding)", () => {
     });
     expect(first.container.textContent).not.toContain("poller picks the assignment up");
     expect(localStorage.getItem("vesmaro.agents.onboardingDone")).toBe("1");
-    first.root.unmount();
+    await actUnmount(first.root);
 
     // A fresh mount never auto-expands again (manual re-open stays).
     const second = await mountPage([]);
     expect(second.container.textContent).toContain("How this works");
     expect(second.container.textContent).not.toContain("poller picks the assignment up");
-    second.root.unmount();
+    await actUnmount(second.root);
   });
 });
 
@@ -484,6 +486,6 @@ describe("AGW-5 executor context menus", () => {
         .click();
     });
     expect(writeText).toHaveBeenCalledWith("exec-live");
-    root.unmount();
+    await actUnmount(root);
   });
 });

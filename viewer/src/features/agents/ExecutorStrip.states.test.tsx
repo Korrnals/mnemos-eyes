@@ -7,6 +7,8 @@ import { MemoryRouter } from "react-router";
 import { ExecutorStrip } from "./ExecutorStrip";
 import { I18nProvider } from "@/i18n";
 import type { AssignmentItem, ExecutorItem, ExecutorListMeta } from "@/gateway/boardTypes";
+import { actUnmount } from "@/test/actTools";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * ExecutorStrip review fixes (AGW-3 P3): loading/error show their own
@@ -84,7 +86,7 @@ describe("ExecutorStrip — loading/error are NOT the empty state (P3-4)", () =>
     const root = await mountStrip({ executors: [], loading: true });
     expect(document.body.textContent).not.toContain("No executors connected");
     expect(document.querySelector('[role="status"]')).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("error renders an alert line, no poller hint", async () => {
@@ -92,7 +94,7 @@ describe("ExecutorStrip — loading/error are NOT the empty state (P3-4)", () =>
     expect(document.body.textContent).toContain("Failed to load the executor registry");
     expect(document.body.textContent).not.toContain("No executors connected");
     expect(document.querySelector('[role="alert"]')).not.toBeNull();
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -102,13 +104,13 @@ describe("ExecutorStrip — unknown presence is NOT offline (P3-1)", () => {
     expect(document.body.textContent).toContain("presence unknown");
     // The mono age line stays empty — presence.ts promised null without meta.
     expect(document.body.textContent).not.toContain("offline");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("with meta the same executor classifies online (the contract works)", async () => {
     const root = await mountStrip({ executors: [executor({})], meta: META });
     expect(document.body.textContent).toContain("online");
-    root.unmount();
+    await actUnmount(root);
   });
 });
 
@@ -122,7 +124,7 @@ describe("ExecutorStrip — tooltip carries capabilities (P3-2, §3.2)", () => {
     expect(title).toContain("local"); // the transport marker (localized)
     expect(title).toContain("last seen");
     expect(title).toContain("never verified by the server");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("an executor with no capabilities says so honestly", async () => {
@@ -132,6 +134,6 @@ describe("ExecutorStrip — tooltip carries capabilities (P3-2, §3.2)", () => {
     });
     const chip = document.querySelector<HTMLButtonElement>("button[title]");
     expect(chip?.getAttribute("title")).toContain("no capabilities declared");
-    root.unmount();
+    await actUnmount(root);
   });
 });

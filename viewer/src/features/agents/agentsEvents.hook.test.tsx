@@ -13,6 +13,7 @@ import {
   MOCK_EXECUTORS_PAGE,
 } from "@/gateway/boardFixtures";
 import { useAgentsEvents } from "./agentsEvents";
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * Reconnect anti-spam regression (review P3-3): the HOOK itself — not just

@@ -57,7 +57,10 @@ describe("frontmatter integrity", () => {
     }
   });
 
-  it("gives every file the required fields with slug = file name", async () => {
+  // ME-006: the whole-corpus loops legitimately take seconds of CPU; under
+  // a loaded CI runner the default 5s budget killed them mid-loop. The
+  // budget is wall-clock only — every assertion below is unchanged.
+  it("gives every file the required fields with slug = file name", { timeout: 20_000 }, async () => {
     for (const [path, load] of docModuleEntries()) {
       const raw = await load();
       const parsed = parseFrontmatter(raw);
@@ -188,7 +191,7 @@ describe("sidecar ↔ corpus integrity (W1c gate, contract §6.5)", () => {
 });
 
 describe("corpus render (contract §9.3)", () => {
-  it("renders every page without console errors or warnings", async () => {
+  it("renders every page without console errors or warnings", { timeout: 20_000 }, async () => {
     const { pages } = await getManifest();
     // One manifest page per our file + per upstream SLUG (not per file —
     // the two locales of an upstream page are one page).

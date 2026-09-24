@@ -12,6 +12,7 @@ import {
   useMotion,
 } from "./motionStore";
 import { useReducedMotion } from "./useReducedMotion";
+import { actUnmount } from "@/test/actTools";
 
 /**
  * UI-23 motion regime (spec §2.5): `vesmaro.motion` is system | reduced,
@@ -115,7 +116,7 @@ describe("useReducedMotion — OS ∨ forced regime (acceptance §8.7)", () => {
       for (const listener of [...mediaListeners]) listener({ matches: true });
     });
     expect(probe(container).dataset.reduced).toBe("true");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("reduced: forces the flag even when the OS prefers motion", async () => {
@@ -128,7 +129,7 @@ describe("useReducedMotion — OS ∨ forced regime (acceptance §8.7)", () => {
       for (const listener of [...mediaListeners]) listener({ matches: false });
     });
     expect(probe(container).dataset.reduced).toBe("true");
-    root.unmount();
+    await actUnmount(root);
   });
 
   it("back to system returns the OS behaviour", async () => {
@@ -136,6 +137,6 @@ describe("useReducedMotion — OS ∨ forced regime (acceptance §8.7)", () => {
     act(() => setMotion("reduced"));
     act(() => setMotion("system"));
     expect(probe(container).dataset.reduced).toBe("false");
-    root.unmount();
+    await actUnmount(root);
   });
 });

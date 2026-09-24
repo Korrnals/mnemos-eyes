@@ -41,6 +41,17 @@ function stubMatchMedia(matches: boolean): void {
   (window as { matchMedia: unknown }).matchMedia = stub;
 }
 
+/**
+ * ME-006: the health probe stand-in. The Sidebar mounts `useBoardHealth`
+ * (capability-on with a real BoardAdapter — the hook's own `enabled` beats
+ * the QueryClient's `enabled: false` default), but no test here observes the
+ * health chip. The formerly live fetch flew at the happy-dom origin
+ * (localhost:3000 — no listener) and died with ECONNRESET after the file
+ * finished — 12 "socket hang up" dumps per full run. A never-settling fetch
+ * keeps the query honestly in flight with NO socket and no late rejection.
+ */
+const healthProbeNeverFetch = (): Promise<Response> => new Promise(() => undefined);
+
 const mountedRoots: Root[] = [];
 
 function click(element: HTMLElement) {
@@ -64,7 +75,9 @@ async function mountSidebar(options: {
   mountedRoots.push(root);
   await act(async () => {
     root.render(
-      <GatewayContext.Provider value={new BoardAdapter("/api")}>
+      <GatewayContext.Provider
+        value={new BoardAdapter({ baseUrl: "/api", fetchImpl: healthProbeNeverFetch })}
+      >
         <QueryClientProvider
           client={
             new QueryClient({
