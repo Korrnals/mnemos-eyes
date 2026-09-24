@@ -117,13 +117,13 @@ CCR (Compress-Cache-Retrieve) reduces the token cost of large content (tool outp
 
 ```mermaid
 flowchart LR
-    A[Raw text] --> B[Compress\n5-stage filter]
-    B --> C[Cache original\nSHA-256 keyed]
-    C --> D[Embed marker\nin compressed output]
-    D --> E[Compressed text\n+ marker]
-    F[mnemos_retrieve\nhash] --> G{query?}
+    A[Raw text] --> B[Compress<br/>5-stage filter]
+    B --> C[Cache original<br/>SHA-256 keyed]
+    C --> D[Embed marker<br/>in compressed output]
+    D --> E[Compressed text<br/>+ marker]
+    F[mnemos_retrieve<br/>hash] --> G{query?}
     G -->|no| H[Full original]
-    G -->|yes| I[FTS5 snippets\nranked]
+    G -->|yes| I[FTS5 snippets<br/>ranked]
     C -.-> H
     C -.-> I
 ```
