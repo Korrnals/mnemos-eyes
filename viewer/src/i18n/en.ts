@@ -333,7 +333,7 @@ export const en: Record<TranslationKey, string> = {
   "login.showValue": "Reveal the token value",
   "login.hideValue": "Hide the token value",
   "login.hint":
-    "Where to get one: the value of the vesmaro-eyes-ui-token secret (e.g. kubectl get secret vesmaro-eyes-ui-token -o yaml via your cluster admin).",
+    "Where to get one: from your cluster admin — kubectl -n kube-agents get secret vesmaro-eyes-ui-token -o jsonpath='{.data.VESMARO_UI_TOKEN}' | base64 -d",
   "login.continueReadOnly": "Continue read-only",
   "login.submit": "Sign in",
   "login.verifying": "Verifying…",
