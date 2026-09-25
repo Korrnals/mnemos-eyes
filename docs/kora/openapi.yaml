@@ -680,6 +680,7 @@ components:
           description: >-
             Initial prompt. Transported stdin/JSON or app-server — NEVER
             argv (leaks into /proc/*/cmdline). Logs carry hash + length only.
+          x-kora-redacted: true
 
     KoraSessionCreatedOut:
       type: object
@@ -704,6 +705,7 @@ components:
           minLength: 1
           maxLength: 32000
           description: Prompt text (same transport + logging hygiene as the initial prompt).
+          x-kora-redacted: true
 
     KoraMessageAcceptedOut:
       type: object
