@@ -22,7 +22,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
@@ -37,6 +37,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import mnemos_client
+from .kora import redaction as kora_redaction
 from .memory_registry import ServerRegistry, resolve_token, write_config_template
 from .profiles import build_profile
 from .security import (
@@ -3915,6 +3916,238 @@ async def delete_executor(executor_id: str, request: Request) -> OkOut:
          "prev_state": row["state"], "state": row["state"]},
     )
     return {"ok": True}
+
+
+# ---------------------------------------------------- kora slice 1 (ADR 0019)
+# The «что происходит» surface: the derived session registry listing +
+# coverage. Slice 1 ships GET /api/kora/sessions and the scanner ingest
+# (POST /api/executors/{id}/kora-scan); transcript/steering routes belong
+# to slices 2-3 and are NOT implemented yet (their absence is honest —
+# the UI keeps the week-0 mock screens for those slices).
+#
+# Access classes (frozen contract): the listing is readable by BOTH
+# classes — ui (owner cookie/header) and mnd_ (metadata-only: the LIST is
+# metadata, the mnd_ wall guards TRANSCRIPTS, slice 2). Serving goes
+# through server/kora/redaction.py — the single choke-point.
+
+_KORA_HARNESSES = ("zcode", "vscode", "pi")
+_KORA_STATES = ("live", "idle", "dead")
+_KORA_SCAN_RATE_LIMIT = 12          # scans per window per client
+_KORA_SCAN_RATE_WINDOW = 60.0       # seconds — a full zcode scan is ~1-2s;
+# 12/min covers a 10s scanner tick with retries, blocks a runaway loop.
+_kora_scan_limiter = RateLimiter(
+    limit=_KORA_SCAN_RATE_LIMIT, window=_KORA_SCAN_RATE_WINDOW)
+
+
+def _now_iso() -> str:
+    """ISO UTC seconds — the Kora contract's RFC 3339 timestamps."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class KoraSessionIn(BaseModel):
+    """One scanner row (ingest body item). Validation mirrors the store's
+    kora_sessions CHECK constraints — unknown enum values 422 here."""
+    model_config = ConfigDict(extra="forbid")
+
+    native_id: str = Field(min_length=1, max_length=512)
+    harness: Literal["zcode", "vscode", "pi"]
+    project: str = Field(default="", max_length=300)
+    cwd: str = Field(default="", max_length=1000)
+    state: Literal["live", "idle", "dead"] = "idle"
+    origin: Literal["relay", "local"] = "local"
+    steerable: bool = False
+    started_at: str = Field(default="", max_length=40)
+    last_activity_at: str = Field(default="", max_length=40)
+    preview: str = Field(default="", max_length=2000)
+
+
+class KoraScanIn(BaseModel):
+    """Scanner ingest envelope. ``drop_missing``: a full-listing scan
+    (the zcode store is the authority) removes registry rows the scan no
+    longer sees; a delta push keeps them."""
+    model_config = ConfigDict(extra="forbid")
+
+    sessions: list[KoraSessionIn] = Field(max_length=2000)
+    drop_missing: bool = False
+
+
+class KoraScanOut(_ApiModel):
+    scanned: int
+    upserted: int
+    listed: int
+    dropped: int
+
+
+class KoraCoverageHarnessOut(_ApiModel):
+    harness: str
+    support: str
+    note: str | None = None
+
+
+class KoraCoverageOut(_ApiModel):
+    harnesses: list[KoraCoverageHarnessOut]
+    gaps: list[str]
+
+
+class KoraSessionOut(_ApiModel):
+    """The frozen KoraSessionOut shape (docs/kora/openapi.yaml). The
+    opaque id is '<executor_id>:<native_id>' — derived from the registry
+    PK, stable across listings (slice-2/3 routes parse it back)."""
+    id: str
+    executor_id: str
+    native_id: str
+    harness: str
+    project: str | None = None
+    cwd: str | None = None
+    state: str
+    origin: str
+    steerable: bool
+    started_at: str | None = None
+    last_activity_at: str | None = None
+    age_seconds: int
+    last_line_preview: str | None = None
+
+
+class KoraSessionsOut(_ApiModel):
+    ok: bool
+    count: int
+    items: list[KoraSessionOut]
+    coverage: KoraCoverageOut
+    meta: dict[str, str]
+
+
+def _kora_coverage() -> KoraCoverageOut:
+    """The honest per-harness visibility statement (slice 1 reality):
+    zcode lists land via the scanner; vscode/pi readers are slice 2;
+    hermes is a known gap until T004. Computed per request — no caching,
+    the board sees single-digit rps."""
+    harnesses = [
+        KoraCoverageHarnessOut(
+            harness="zcode", support="full",
+            note="Списки и полные транскрипты (mode=ro + "
+                 "WAL-snapshot-fallback); сканер среза 1 активен"),
+        KoraCoverageHarnessOut(
+            harness="vscode", support="absent",
+            note="Сканер vscode — срез 2 (списки и превью)"),
+        KoraCoverageHarnessOut(
+            harness="pi", support="absent",
+            note="Сканер pi — срез 2 (списки по parentId)"),
+        KoraCoverageHarnessOut(
+            harness="hermes", support="absent",
+            note="Не сканируется до T004 (известный пробел)"),
+    ]
+    gaps = [
+        "Срез 1 видит только zcode-сессии; vscode/pi — срез 2",
+        "Удалённые хосты ждут расписания W4 loopback-ingress",
+        "hermes-сессии не видны до T004",
+        "Полные транскрипты vscode — известный пробел среза 2 (kind:1)",
+    ]
+    return KoraCoverageOut(harnesses=harnesses, gaps=gaps)
+
+
+def _kora_age_seconds(started_at: str) -> int:
+    """Age snapshot at listing time (contract: derived from started_at;
+    0 when the harness lacked the timestamp — an honest floor, not a
+    lie about freshness)."""
+    if not started_at:
+        return 0
+    try:
+        started = datetime.fromisoformat(started_at)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - started)
+                         .total_seconds()))
+    except ValueError:
+        return 0
+
+
+def _kora_session_public(row: dict[str, Any]) -> KoraSessionOut:
+    """Registry row → frozen KoraSessionOut. THE choke-point call: the
+    preview is clamped (≤160) BEFORE redaction — x-kora-redaction; the
+    store column is untrusted input even though the ingest transport is
+    authenticated (defense in depth: the value still passes here on
+    every serve)."""
+    preview, _applied = kora_redaction.redact_preview(row.get("preview"))
+    return KoraSessionOut(
+        id=f"{row['executor_id']}:{row['native_id']}",
+        executor_id=row["executor_id"],
+        native_id=row["native_id"],
+        harness=row["harness"],
+        project=(row.get("project") or None),
+        cwd=(row.get("cwd") or None),
+        state=row["state"],
+        origin=row["origin"],
+        steerable=bool(row["steerable"]),
+        started_at=(row.get("started_at") or None),
+        last_activity_at=(row.get("last_activity_at") or None),
+        age_seconds=_kora_age_seconds(row.get("started_at") or ""),
+        last_line_preview=preview,
+    )
+
+
+@app.get("/api/kora/sessions")
+async def list_kora_sessions(request: Request,
+                             harness: str = "",
+                             state: str = "") -> KoraSessionsOut:
+    """Slice 1 listing (frozen contract GET /kora/sessions). Readable by
+    BOTH access classes: the ui class (owner cookie/header) and mnd_
+    devices — the LIST is metadata; the mnd_ wall guards transcripts
+    (slice 2, 403 metadata_only with an explanation). Filters must be
+    dictionary values (422, same validation grammar as assignments)."""
+    if harness and harness not in _KORA_HARNESSES:
+        raise HTTPException(422, f"invalid harness: {harness}")
+    if state and state not in _KORA_STATES:
+        raise HTTPException(422, f"invalid state: {state}")
+    rows = store.kora_sessions(harness=harness or None, state=state or None)
+    items = [_kora_session_public(r) for r in rows]
+    return KoraSessionsOut(
+        ok=True,
+        count=len(items),
+        items=items,
+        coverage=_kora_coverage(),
+        meta={"generated_at": _now_iso()},
+    )
+
+
+@app.post("/api/executors/{executor_id}/kora-scan")
+async def ingest_kora_scan(executor_id: str, body: KoraScanIn,
+                           request: Request) -> KoraScanOut:
+    """Scanner ingest (machine class, executor-bound). The host-side
+    scanner (scripts/kora/scan_zcode.py — the poller family) pushes its
+    read-only listing here. Auth: the executor's OWN token or the machine
+    token (the poller pattern); a token-backed executor may only push its
+    own id (403 identity mismatch, heartbeat pattern). ``drop_missing``
+    marks a FULL listing — the store is the authority and rows the scan
+    no longer sees are removed. Presence piggyback: the scan tick IS the
+    executor's last_seen (ARCH-9 — the scanner runs on the executor's
+    host, so a scan proves liveness as well as a poll would)."""
+    executor = _authenticate_executor(request)
+    if executor is not None:
+        if executor["id"] != executor_id:
+            raise HTTPException(
+                403, "kora scan executor does not match the token identity")
+        if executor["state"] == "revoked":
+            raise HTTPException(403, "executor is revoked")
+    else:
+        _guard_write(request, classes=("machine",))
+    client_ip = request.client.host if request.client else "unknown"
+    if not _kora_scan_limiter.acquire(client_ip):
+        raise HTTPException(
+            429, "kora scan rate limit exceeded "
+            f"({_KORA_SCAN_RATE_LIMIT} per "
+            f"{_KORA_SCAN_RATE_WINDOW:.0f}s per client)")
+    rows = [s.model_dump() for s in body.sessions]
+    try:
+        result = store.upsert_kora_sessions(
+            executor_id, rows, drop_missing=body.drop_missing)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    store.touch_executor_last_seen(executor_id)
+    if result["listed"]:
+        _broadcast({"kind": "kora.sessions.listed",
+                    "executor_id": executor_id,
+                    "listed": result["listed"]})
+    return KoraScanOut(scanned=len(rows), **result)
 
 
 # ----------------------------------------- harness dictionary (wave 3C)

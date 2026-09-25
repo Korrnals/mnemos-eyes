@@ -15,7 +15,7 @@ import {
   useKoraStepUp,
   useKoraTranscript,
 } from "./useKora";
-import { KoraMockError } from "./KoraMockAdapter";
+import { KoraError, koraErrorCode } from "./koraGateway";
 
 /**
  * `/kora/:sessionId` — slices 2 + 3 (ADR 0019 rev.2).
@@ -100,7 +100,7 @@ function StepUpPanel() {
       </Button>
       {enable.isError ? (
         <p role="alert" className="basis-full text-sm text-error">
-          {enable.error instanceof KoraMockError
+          {enable.error instanceof KoraError
             ? enable.error.message
             : t("kora.chat.stepUp.failed")}
         </p>
@@ -118,7 +118,7 @@ function ChatPanel({ sessionId }: { sessionId: string }) {
   const [text, setText] = useState("");
 
   const blocked =
-    send.error instanceof KoraMockError && send.error.code === "step_up_required";
+    koraErrorCode(send.error) === "step_up_required";
 
   return (
     <Card>
@@ -164,7 +164,7 @@ function ChatPanel({ sessionId }: { sessionId: string }) {
           </p>
         ) : send.isError && !blocked ? (
           <p role="alert" className="text-sm text-error">
-            {send.error instanceof KoraMockError
+            {send.error instanceof KoraError
               ? send.error.message
               : t("kora.chat.delivery.failed")}
           </p>

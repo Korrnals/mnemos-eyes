@@ -5,8 +5,8 @@ import { Shell } from "@/layout/Shell";
 import { SearchPage } from "@/features/search/SearchPage"; // eager — only eagerly loaded chunk (§3)
 import {
   KoraGatewayContext,
-  makeWeek0KoraGateway,
-} from "@/features/kora/koraGatewayContext"; // week-0 mock seam (ADR 0019)
+  makeKoraGateway,
+} from "@/features/kora/koraGatewayContext"; // slice-1 HTTP adapter seam (ADR 0019)
 import { LEGACY_ROUTES } from "./legacyRedirects";
 import { LegacyRedirect, NotFound, Page } from "./routeElements";
 
@@ -256,15 +256,16 @@ export function buildRoutes(): RouteObject[] {
           ],
         },
 
-        // Кора domain (ADR 0019 rev.2 — week 0 CONTRACT-FIRST): the session
-        // list at the domain root, the read-only transcript + chat mock at
-        // /kora/:sessionId. Mock-gateway driven by contract — when slice 1
-        // lands the provider swaps to the HTTP adapter, routes stay put.
+        // Кора domain (ADR 0019 rev.2): the session list at the domain root
+        // (slice 1 — LIVE over GET /api/kora/sessions via the HTTP adapter),
+        // the read-only transcript + chat at /kora/:sessionId (slices 2-3 —
+        // the screen is wired, the board serves those routes when the slices
+        // land; the adapter fails loud meanwhile, never mock-serves them).
         {
           path: "/kora",
           element: (
             <Page>
-              <KoraGatewayContext.Provider value={makeWeek0KoraGateway()}>
+              <KoraGatewayContext.Provider value={makeKoraGateway()}>
                 <KoraPage />
               </KoraGatewayContext.Provider>
             </Page>
@@ -274,7 +275,7 @@ export function buildRoutes(): RouteObject[] {
           path: "/kora/:sessionId",
           element: (
             <Page>
-              <KoraGatewayContext.Provider value={makeWeek0KoraGateway()}>
+              <KoraGatewayContext.Provider value={makeKoraGateway()}>
                 <KoraSessionPage />
               </KoraGatewayContext.Provider>
             </Page>

@@ -12,7 +12,7 @@
  * - STEP-UP PIN (§4 / gate 7): steering calls throw KoraStepUpRequired
  *   while the PIN is inactive; enableStepUp opens a TTL window (~15 min).
  */
-import type { KoraGateway } from "./koraGateway";
+import { KoraError, type KoraGateway } from "./koraGateway";
 import {
   KORA_FIXTURE_SESSIONS,
   KORA_FIXTURE_TRANSCRIPT,
@@ -29,10 +29,15 @@ import type {
   KoraTranscriptItem,
 } from "./koraTypes";
 
-/** Typed error carrying the frozen KoraErrorCode vocabulary (KoraErrorOut). */
-export class KoraMockError extends Error {
+/**
+ * Typed error carrying the frozen KoraErrorCode vocabulary (KoraErrorOut).
+ * P4-4: extends the SEAM's KoraError (koraGateway.ts) so the UI branches
+ * on the contract class, never on the concrete adapter — the HTTP swap
+ * keeps the PIN/step-up screens intact.
+ */
+export class KoraMockError extends KoraError {
   constructor(
-    readonly code:
+    code:
       | "unauthorized"
       | "metadata_only"
       | "step_up_required"
@@ -42,7 +47,7 @@ export class KoraMockError extends Error {
       | "validation",
     message: string,
   ) {
-    super(message);
+    super(code, message);
     this.name = "KoraMockError";
   }
 }

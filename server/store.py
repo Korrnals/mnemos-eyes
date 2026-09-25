@@ -1030,6 +1030,39 @@ CREATE TABLE IF NOT EXISTS device_sessions (
     last_seen       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_device_sessions_token ON device_sessions (token_hash);
+-- KORA slice 1 (ADR 0019 rev.2): the DERIVED session registry. PK
+-- (executor_id, native_id) — the registry is derived from what enrolled
+-- executors already carry, never synced from a registration ceremony;
+-- the pair IS the carrier (x-kora-registry). The host invariant is
+-- executors-side (host is bound by enrollment, never self-asserted) —
+-- this table trusts the executor_id FK shape; loud host-conflict
+-- resolution belongs to the slice-3 send path, not to visibility.
+-- Additive IF NOT EXISTS riding the _SCHEMA executescript — NO
+-- SEED_VERSION bump (task_assignments/device_sessions precedent).
+-- The scanner owns upserts; the board never writes harness stores.
+-- preview_* mirror the scanner's LAST scan; the serving path re-clamps
+-- and re-redacts through server/kora/redaction.py (single choke-point)
+-- regardless of what landed here — the board DB is untrusted input.
+CREATE TABLE IF NOT EXISTS kora_sessions (
+    executor_id       TEXT NOT NULL,
+    native_id         TEXT NOT NULL,
+    harness           TEXT NOT NULL CHECK (harness IN ('zcode','vscode','pi')),
+    project           TEXT NOT NULL DEFAULT '',
+    cwd               TEXT NOT NULL DEFAULT '',
+    state             TEXT NOT NULL DEFAULT 'idle'
+                      CHECK (state IN ('live','idle','dead')),
+    origin            TEXT NOT NULL DEFAULT 'local'
+                      CHECK (origin IN ('relay','local')),
+    steerable         INTEGER NOT NULL DEFAULT 0,
+    started_at        TEXT NOT NULL DEFAULT '',
+    last_activity_at  TEXT NOT NULL DEFAULT '',
+    preview           TEXT NOT NULL DEFAULT '',
+    first_seen_at     TEXT NOT NULL,
+    last_scan_at      TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (executor_id, native_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kora_sessions_scan
+ON kora_sessions (executor_id, last_scan_at);
 """
 
 # WF-1 table-rebuild target (Store._rebuild_tasks_for_wf1): the full
@@ -3071,6 +3104,143 @@ class Store:
             self._log(db, "executor.deleted", None, {
                 "executor_id": executor_id, "name": row["name"]})
         return dict(row)
+
+    # ------------------------------------------------------- kora slice 1
+    # The derived session registry (ADR 0019 rev.2 #5): rows arrive ONLY via
+    # the authenticated scanner ingest (machine class, executor-bound);
+    # visibility reads them through the redaction choke-point. The board
+    # never writes harness stores — NO-DRIFT (view + relay, never a fork).
+    # Audits: kora.sessions.upserted / kora.sessions.purged.
+
+    def upsert_kora_sessions(
+            self, executor_id: str, rows: list[dict[str, Any]],
+            *, drop_missing: bool = False) -> dict[str, int]:
+        """Scanner ingest: upsert one executor's session listing.
+
+        Boundary contract: the route has ALREADY authenticated the caller
+        as ``executor_id`` (its token or the machine token) — this method
+        trusts that binding (host is bound by enrollment, never
+        self-asserted). Rows are validated here anyway: unknown harness /
+        state / origin values raise ValueError → HTTP 422 upstream. The
+        preview text is stored verbatim-but-bounded: the serving path
+        re-clamps and re-redacts through the choke-point regardless.
+
+        ``drop_missing``: when True, registry rows of this executor that
+        the payload did NOT mention are deleted (a full listing — the
+        zcode store is the authority). When False (partial/delta pushes),
+        unmentioned rows keep their last scan state. Returns counts for
+        the honest ingest response ({"upserted": n, "dropped": m}).
+
+        Idempotency: a replayed payload is a no-op write of identical
+        values (last_scan_at moves — an honest freshness tick, not a
+        semantic change); the audit event is emitted only on the first
+        sight of a (executor_id, native_id) pair (session.listed signal).
+        """
+        now = _now()
+        seen: set[tuple[str, str]] = set()
+        upserted = listed = 0
+        with self._lock, self._conn() as db:
+            for row in rows:
+                native_id = str(row.get("native_id") or "").strip()
+                if not native_id or len(native_id) > 512:
+                    raise ValueError(
+                        "kora session native_id must be 1..512 chars")
+                harness = str(row.get("harness") or "").strip()
+                if harness not in ("zcode", "vscode", "pi"):
+                    raise ValueError(f"invalid kora harness: {harness!r}")
+                state = str(row.get("state") or "idle").strip()
+                if state not in ("live", "idle", "dead"):
+                    raise ValueError(f"invalid kora session state: {state!r}")
+                origin = str(row.get("origin") or "local").strip()
+                if origin not in ("relay", "local"):
+                    raise ValueError(f"invalid kora origin: {origin!r}")
+                if (executor_id, native_id) in seen:
+                    continue  # last row wins, no duplicate-pair writes
+                seen.add((executor_id, native_id))
+                existing = db.execute(
+                    "SELECT 1 FROM kora_sessions "
+                    "WHERE executor_id=? AND native_id=?",
+                    (executor_id, native_id)).fetchone()
+                db.execute(
+                    """INSERT INTO kora_sessions
+                       (executor_id, native_id, harness, project, cwd,
+                        state, origin, steerable, started_at,
+                        last_activity_at, preview, first_seen_at,
+                        last_scan_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(executor_id, native_id) DO UPDATE SET
+                         harness=excluded.harness,
+                         project=excluded.project,
+                         cwd=excluded.cwd,
+                         state=excluded.state,
+                         origin=excluded.origin,
+                         steerable=excluded.steerable,
+                         started_at=excluded.started_at,
+                         last_activity_at=excluded.last_activity_at,
+                         preview=excluded.preview,
+                         last_scan_at=excluded.last_scan_at""",
+                    (executor_id, native_id, harness,
+                     str(row.get("project") or "")[:300],
+                     str(row.get("cwd") or "")[:1000],
+                     state, origin,
+                     1 if row.get("steerable") else 0,
+                     str(row.get("started_at") or "")[:40],
+                     str(row.get("last_activity_at") or "")[:40],
+                     str(row.get("preview") or "")[:2000],
+                     now, now))
+                upserted += 1
+                if existing is None:
+                    listed += 1
+            dropped = 0
+            if drop_missing:
+                placeholders = ",".join("?" for _ in seen)
+                keep_ids = [n for _, n in seen] if seen else []
+                params: list[Any] = [executor_id]
+                if seen:
+                    cur = db.execute(
+                        f"DELETE FROM kora_sessions WHERE executor_id=? "
+                        f"AND native_id NOT IN ({placeholders})",
+                        (*params, *keep_ids))
+                else:
+                    cur = db.execute(
+                        "DELETE FROM kora_sessions WHERE executor_id=?",
+                        params)
+                dropped = cur.rowcount
+            if upserted or dropped:
+                self._log(db, "kora.sessions.upserted", None, {
+                    "executor_id": executor_id,
+                    "upserted": upserted, "listed": listed,
+                    "dropped": dropped,
+                })
+        return {"upserted": upserted, "listed": listed, "dropped": dropped}
+
+    def kora_sessions(self, harness: str | None = None,
+                      state: str | None = None) -> list[dict[str, Any]]:
+        """Registry rows for the serving path, newest activity first.
+
+        Filters are validated by the route; this read is dictionary-clean.
+        The executor join is LEFT: a registry row must stay visible even
+        if its executor was revoked mid-scan (the owner sees the session
+        with its executor metadata — visibility never blocks on registry
+        lifecycle). Presence (last_seen) rides along for the UI row
+        context; ``state`` is the SESSION state, not the host's."""
+        sql = ("SELECT k.*, e.name AS executor_name, e.host AS executor_host, "
+               "e.last_seen AS executor_last_seen "
+               "FROM kora_sessions k "
+               "LEFT JOIN executors e ON e.id = k.executor_id")
+        conds, params = [], []
+        if harness:
+            conds.append("k.harness = ?")
+            params.append(harness)
+        if state:
+            conds.append("k.state = ?")
+            params.append(state)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += (" ORDER BY k.last_activity_at DESC, k.native_id ASC "
+                "LIMIT 2000")
+        with self._lock, self._conn() as db:
+            return [dict(r) for r in db.execute(sql, params).fetchall()]
 
     # ------------------------------------------- harness dictionary (wave 3C)
     # The owner-managed nomination dictionary (design 2026-09-22 §C). The
