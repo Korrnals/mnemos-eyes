@@ -3,6 +3,10 @@ import { Navigate } from "react-router";
 import type { RouteObject } from "react-router";
 import { Shell } from "@/layout/Shell";
 import { SearchPage } from "@/features/search/SearchPage"; // eager — only eagerly loaded chunk (§3)
+import {
+  KoraGatewayContext,
+  makeWeek0KoraGateway,
+} from "@/features/kora/koraGatewayContext"; // week-0 mock seam (ADR 0019)
 import { LEGACY_ROUTES } from "./legacyRedirects";
 import { LegacyRedirect, NotFound, Page } from "./routeElements";
 
@@ -75,6 +79,16 @@ const AgentsExecutionPage = lazy(() =>
 const AgentsHarnessesPage = lazy(() =>
   import("@/features/agents/ExecutorRegistryPage").then((m) => ({
     default: m.ExecutorRegistryPage,
+  })),
+);
+// Кора (ADR 0019 rev.2 — week 0 CONTRACT-FIRST UI mocks): slice-1 list +
+// slice-2/3 transcript/chat, mock-gateway driven until the slices land.
+const KoraPage = lazy(() =>
+  import("@/features/kora/KoraPage").then((m) => ({ default: m.KoraPage })),
+);
+const KoraSessionPage = lazy(() =>
+  import("@/features/kora/KoraSessionPage").then((m) => ({
+    default: m.KoraSessionPage,
   })),
 );
 // Settings hub (UI-21): the /system/settings route composes «Исполнение»
@@ -240,6 +254,31 @@ export function buildRoutes(): RouteObject[] {
             // enable / revoke / delete management (spec §1, wave 2).
             { path: "harnesses", element: <AgentsHarnessesPage /> },
           ],
+        },
+
+        // Кора domain (ADR 0019 rev.2 — week 0 CONTRACT-FIRST): the session
+        // list at the domain root, the read-only transcript + chat mock at
+        // /kora/:sessionId. Mock-gateway driven by contract — when slice 1
+        // lands the provider swaps to the HTTP adapter, routes stay put.
+        {
+          path: "/kora",
+          element: (
+            <Page>
+              <KoraGatewayContext.Provider value={makeWeek0KoraGateway()}>
+                <KoraPage />
+              </KoraGatewayContext.Provider>
+            </Page>
+          ),
+        },
+        {
+          path: "/kora/:sessionId",
+          element: (
+            <Page>
+              <KoraGatewayContext.Provider value={makeWeek0KoraGateway()}>
+                <KoraSessionPage />
+              </KoraGatewayContext.Provider>
+            </Page>
+          ),
         },
 
         // Документация domain (ADR 0015 + ADR 0016): three project hubs.

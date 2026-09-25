@@ -1,0 +1,854 @@
+# Kora (Кора) API contract — phase 1, week 0 (CONTRACT-FIRST, no implementation).
+#
+# Canonical source of truth for the slice 1–3 wire shapes, frozen BEFORE any
+# server code exists (ADR 0019 rev.2, Consequences «Неделя 0 — контракт-first»).
+# When the slices land, the FastAPI /openapi.json must match this file; the
+# pytest gate tests/test_kora_contract_spec.py validates this artifact itself.
+#
+# Invariants encoded here (ADR 0019 rev.2):
+#   - NO-DRIFT: Кора = view + relay, never a fork. Transcripts are READ-ONLY
+#     evidence; only the harness writes its own store. Every write-ish Kora
+#     surface is a relay command, never a store write.
+#   - Derived session registry: PK (executor_id, native_id) over the existing
+#     executors table; UNIQUE executors.host; no identity ceremony in phase 1.
+#   - Single redaction choke-point for ALL session content leaving the board.
+#   - mnd_ device tokens are metadata-only; transcripts require the ui class
+#     (owner-session cookie, ADR 0014).
+#   - Chat v1 = store-tail re-read (seq cursor GET); no chat content in SSE,
+#     no second content buffer on the board.
+openapi: 3.1.0
+info:
+  title: Kora (Кора) Workspace API — phase 1 contract
+  version: 0.1.0
+  summary: Read-only session aggregation (B-leg) + relay continuation (A-leg).
+  description: |
+    Week-0 contract for Kora slices 1–3. SHAPES ONLY — no endpoint in this
+    file is implemented yet. Slice mapping:
+
+    - Slice 1 «что происходит» — `GET /api/kora/sessions`.
+    - Slice 2 «что делалось» — `GET /api/kora/sessions/{session_id}/transcript`.
+    - Slice 3 «порулить» — `POST /api/kora/sessions` (new session from the
+      phone), `POST /api/kora/sessions/{session_id}/messages` (prompt) and
+      the step-up PIN endpoints under `/api/kora/steering`.
+
+    Access classes (ADR 0009 / 0012 / 0014):
+
+    - `ui` — owner-session cookie (phone = ordinary browser over VPN).
+      Reads everything; steering additionally requires step-up PIN
+      (TTL ≤ 15 min, off by default).
+    - `mnd_` — device tokens: metadata-only. Transcript reads get a 403
+      KoraErrorOut with an EXPLANATION (the wall explains why and what to
+      do), never a bare 403.
+
+    Continuation provenance: only relay-origin sessions or explicitly
+    adopted (typed-confirm) sessions are steerable. The send path resolves
+    a foreign triple as 404 (`session_not_found`), enforced server-side.
+    A NEW session created from the phone is relay-origin by construction —
+    the first relay scenario, provenance gates do not apply to it.
+
+    Freshness (diagnostic, not a release gate): chat tail freshness ≤ 60s
+    p95 end-to-end.
+  x-kora-status: frozen-week0
+  x-kora-adr: docs/decisions/0019-kora-workspace-phase1.md
+
+# --- Cross-cutting Kora semantics (frozen) ------------------------------------
+x-kora-registry:
+  table: kora_sessions
+  kind: derived
+  pk: [executor_id, native_id]
+  invariant: UNIQUE executors.host
+  notes: >-
+    The registry is derived from what enrolled executors already carry —
+    host is bound by enrollment, never self-asserted (rev.2 #5). Loud
+    host-conflict resolution belongs to the slice-3 send path
+    (409 host_conflict), never blocks visibility. The registry is NOT
+    synced from harness session ids — the (executor_id, native_id) pair is
+    the carrier.
+x-kora-redaction:
+  choke-point: server/kora/redaction.py
+  pattern-pack: >-
+    One masking module (pattern pack), one point on the serving path.
+    Every character of session content leaving the board — list previews
+    AND transcript bodies — passes through this module. No call-site
+    masking anywhere else; a field that cannot go through the choke-point
+    does not ship. Previews are clamped (≤ 160 chars) BEFORE redaction;
+    transcript bodies are redacted in full.
+  audit: session.transcript_viewed
+  audit-payload: [device_class, network_path, session_host]
+  audit-rule: >-
+    Every transcript read (full page or live tail) emits the audit record.
+x-kora-events:
+  bus: GET /api/events (SSE, existing)
+  vocabulary: additive-only
+  events: [session.listed, session.updated, session.closed]
+  rule: >-
+    Metadata only — no transcript content, no preview text rides these
+    events. Payload schemas: KoraSessionListedEvent / KoraSessionUpdatedEvent
+    / KoraSessionClosedEvent. `session.updated` is the chat-v1 signal: the
+    browser then pulls the store tail via the authenticated seq-cursor GET
+    (B-leg), so no second content buffer exists on the board.
+x-kora-no-acp: >-
+  No network ACP in phase 1 by contract; a CI tripwire guards the absence
+  of any ACP SDK in dependencies (ADR 0019 §5).
+
+servers:
+  - url: /api
+    description: Board server (vesmaro-eyes), same origin as the viewer.
+
+tags:
+  - name: kora-slice1
+    description: Slice 1 «что происходит» — the session list + coverage.
+  - name: kora-slice2
+    description: Slice 2 «что делалось» — read-only transcripts (cursor tail).
+  - name: kora-slice3
+    description: Slice 3 «порулить» — relay sessions, prompts, step-up PIN.
+
+security:
+  - ownerCookie: []
+
+paths:
+  /kora/sessions:
+    get:
+      operationId: listKoraSessions
+      tags: [kora-slice1]
+      summary: Session list across all connected hosts (slice 1).
+      description: |
+        Derived-registry listing: every session discovered by host scanners
+        across enrolled executors (zcode/vscode/pi; hermes is a known gap
+        until T004). Presence ≠ liveness: the two-hour presence discipline
+        lives on executors; `state` here reflects the session, not the host.
+
+        `last_line_preview` is clamped to 160 characters and passes the
+        single redaction choke-point (x-kora-redaction) — previews are the
+        same serving path as transcripts, gated from slice 1.
+
+        Response also carries the coverage block powering the «что вижу /
+        чего нет» screen — the honest per-harness visibility statement.
+      parameters:
+        - $ref: "#/components/parameters/KoraHarnessFilter"
+        - $ref: "#/components/parameters/KoraStateFilter"
+      responses:
+        "200":
+          description: Listing with coverage. Available to both access classes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraSessionsOut"
+        "401":
+          $ref: "#/components/responses/KoraUnauthorized"
+    post:
+      operationId: createKoraSession
+      tags: [kora-slice3]
+      summary: Start a NEW session from the phone (slice 3, first relay scenario).
+      description: |
+        Spawns a headless harness on the store-owner host via the relay
+        (`--resume` continuation is the SECOND scenario; this route always
+        starts fresh). The created session is relay-origin by construction —
+        provenance gates do not apply to it, it is steerable from birth.
+
+        Requires an active step-up PIN (403 `step_up_required` otherwise).
+        The initial prompt rides the same in-memory relay queue with honest
+        delivery semantics as message sends.
+      security:
+        - ownerCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KoraSessionCreate"
+      responses:
+        "201":
+          description: Session registered (relay origin) with delivery state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraSessionCreatedOut"
+        "400":
+          description: Validation (code `validation`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+        "401":
+          $ref: "#/components/responses/KoraUnauthorized"
+        "403":
+          description: >-
+            Step-up required (code `step_up_required`) or mnd_ wall
+            (code `metadata_only`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+        "409":
+          description: Host conflict (code `host_conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+
+  /kora/sessions/{session_id}/transcript:
+    get:
+      operationId: getKoraSessionTranscript
+      tags: [kora-slice2]
+      summary: Read-only transcript tail by seq cursor (slice 2).
+      description: |
+        The ONE transcript-serving path (chat v1 reads the same route):
+        authenticated GET, `after_seq` cursor, per-page limit. Items are
+        ordered by `seq` ascending; `seq` is assigned by the harness store
+        order (per-session, monotonically increasing) and is never
+        renumbered.
+
+        Every response re-validates the session (registry lookup) and every
+        content field passes the redaction choke-point. Each call emits the
+        `session.transcript_viewed` audit record (device class / network
+        path / session host) — full reads and live tails alike.
+
+        mnd_ class: 403 with an explanatory body (the wall explains why
+        transcripts are forbidden and what to do instead) — never a bare 403.
+      parameters:
+        - $ref: "#/components/parameters/KoraSessionId"
+        - name: after_seq
+          in: query
+          required: false
+          description: >-
+            Return items with seq strictly greater than this cursor. 0
+            (default) starts from the beginning of the session.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          description: Page size cap (server clamps to the maximum).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Transcript page. Content is redacted via the choke-point.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraTranscriptOut"
+        "401":
+          $ref: "#/components/responses/KoraUnauthorized"
+        "403":
+          description: >-
+            mnd_ metadata-only wall (code `metadata_only`) — body carries
+            the explanation, not just the status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+        "404":
+          description: Unknown session (code `session_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+
+  /kora/sessions/{session_id}/messages:
+    post:
+      operationId: sendKoraSessionMessage
+      tags: [kora-slice3]
+      summary: Send a prompt into a session via the relay (slice 3).
+      description: |
+        A relay COMMAND, not a store write: the relay unit-process queues
+        the prompt in-memory and the harness itself appends to its store
+        (NO-DRIFT). The browser then observes the effect by re-reading the
+        transcript tail (`session.updated` is the dictionary signal).
+
+        Provenance gate: only relay-origin or adopted (typed-confirm)
+        sessions are steerable; a foreign triple resolves as 404
+        (`session_not_found`), enforced server-side — never hidden in the UI.
+        Steering requires the step-up PIN to be active; otherwise 403 with
+        code `step_up_required`.
+
+        Delivery is honest: the relay queue is in-memory, a failed delivery
+        is reported as `failed` (retryable) with the «не доставлено —
+        повторите» semantics — nothing is silently dropped or spurged.
+        Confirm-mode is the default; `confirm_required=false` only for
+        sessions explicitly opted into yolo (audited).
+      security:
+        - ownerCookie: []
+      parameters:
+        - $ref: "#/components/parameters/KoraSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KoraMessageCreate"
+      responses:
+        "202":
+          description: >-
+            Accepted into the relay queue. Delivery status is carried in
+            the body — accepted ≠ delivered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraMessageAcceptedOut"
+        "401":
+          $ref: "#/components/responses/KoraUnauthorized"
+        "403":
+          description: >-
+            Step-up required (code `step_up_required`) or mnd_ wall
+            (code `metadata_only`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+        "404":
+          description: >-
+            Foreign triple / not steerable — resolved as absent, server-side
+            enforcement (code `session_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+        "409":
+          description: >-
+            Executor host conflict surfaced loudly by the send path
+            (code `host_conflict`) — resolution lives here, never blocks
+            visibility.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+
+  /kora/steering/step-up:
+    post:
+      operationId: enableKoraSteeringStepUp
+      tags: [kora-slice3]
+      summary: Enable steering with the step-up PIN (slice 3).
+      description: |
+        Unlocks steering (message sends + new relay sessions) for the
+        owner-session cookie. TTL ≤ 15 minutes, sliding per grant; steering
+        is OFF by default — reading never requires step-up. The PIN value is
+        never logged (hash + length only, same hygiene as prompt logging).
+      security:
+        - ownerCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KoraStepUpIn"
+      responses:
+        "200":
+          description: Step-up granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraStepUpOut"
+        "401":
+          $ref: "#/components/responses/KoraUnauthorized"
+        "403":
+          description: Wrong PIN (code `step_up_denied`); mnd_ cannot step up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraErrorOut"
+    get:
+      operationId: getKoraSteeringStepUpStatus
+      tags: [kora-slice3]
+      summary: Step-up status (active / remaining TTL).
+      security:
+        - ownerCookie: []
+      responses:
+        "200":
+          description: Current step-up state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KoraStepUpStatusOut"
+        "401":
+          $ref: "#/components/responses/KoraUnauthorized"
+    delete:
+      operationId: revokeKoraSteeringStepUp
+      tags: [kora-slice3]
+      summary: Revoke the step-up grant immediately.
+      description: The one-command kill switch for the steering window.
+      security:
+        - ownerCookie: []
+      responses:
+        "204":
+          description: Revoked (no body).
+        "401":
+          $ref: "#/components/responses/KoraUnauthorized"
+
+components:
+  securitySchemes:
+    ownerCookie:
+      type: apiKey
+      in: cookie
+      name: vesmaro_session
+      description: >-
+        Owner-session cookie (ADR 0014) — the `ui` access class. Phone
+        lifetime is the owner-ratified 7-day sliding window («stay on this
+        device», revocable by one button). Transcripts + steering.
+    deviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: mnd_
+      description: >-
+        Device token (ADR 0012) — the `mnd_` access class: METADATA-ONLY.
+        Session lists yes; transcripts are forbidden (403 wall with an
+        explanation); steering is forbidden.
+
+  parameters:
+    KoraSessionId:
+      name: session_id
+      in: path
+      required: true
+      description: >-
+        Opaque board-side session handle. Derived from the registry PK
+        (executor_id, native_id); clients treat it as opaque and stable
+        across listings. Not a harness store id.
+      schema:
+        type: string
+        minLength: 1
+    KoraHarnessFilter:
+      name: harness
+      in: query
+      required: false
+      description: Filter by harness family.
+      schema:
+        $ref: "#/components/schemas/KoraHarness"
+    KoraStateFilter:
+      name: state
+      in: query
+      required: false
+      description: Filter by session state.
+      schema:
+        $ref: "#/components/schemas/KoraSessionState"
+
+  responses:
+    KoraUnauthorized:
+      description: No owner session / device token (code `unauthorized`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/KoraErrorOut"
+
+  schemas:
+    KoraHarness:
+      type: string
+      enum: [zcode, vscode, pi]
+      description: >-
+        Harness families wired in phase 1. hermes is a KNOWN GAP until T004
+        (absent from the enum by design; the coverage block says so loudly).
+
+    KoraSessionState:
+      type: string
+      enum: [live, idle, dead]
+      description: >-
+        Session liveness (presence ≠ liveness — executor presence is a
+        separate concept). `dead` = the process was marked dead (recovery
+        semantics): the SESSION stays in the registry and remains visible;
+        relay sessions survive executor restarts.
+
+    KoraOrigin:
+      type: string
+      enum: [relay, local]
+      description: >-
+        `relay` = born via the Kora relay (steerable from birth);
+        `local` = started outside Kora (steerable only after typed-confirm
+        adoption).
+
+    KoraSessionOut:
+      type: object
+      additionalProperties: false
+      required: [id, executor_id, native_id, harness, state, origin,
+                 steerable, age_seconds]
+      description: One session row of the derived registry (PK fields exposed).
+      properties:
+        id:
+          type: string
+          description: Opaque board-side handle (see KoraSessionId).
+        executor_id:
+          type: string
+          description: Enrolled executor owning the host store (registry PK part 1).
+        native_id:
+          type: string
+          description: Harness-native session id inside that store (registry PK part 2).
+        harness:
+          $ref: "#/components/schemas/KoraHarness"
+        project:
+          type: [string, "null"]
+          description: Project name as the harness reports it (null when unknown).
+        cwd:
+          type: [string, "null"]
+          description: Working directory of the session (null when unknown).
+        state:
+          $ref: "#/components/schemas/KoraSessionState"
+        origin:
+          $ref: "#/components/schemas/KoraOrigin"
+        steerable:
+          type: boolean
+          description: >-
+            Server-computed: relay origin OR adopted via typed-confirm. The
+            UI renders the honest «чужая сессия — только чтение» plate when
+            false; the send path still enforces it server-side.
+        started_at:
+          type: [string, "null"]
+          format: date-time
+          description: Session start (RFC 3339; null when the harness lacks it).
+        last_activity_at:
+          type: [string, "null"]
+          format: date-time
+          description: Last store activity (RFC 3339; null when unknown).
+        age_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Age snapshot at listing time (derived from started_at).
+        last_line_preview:
+          type: [string, "null"]
+          maxLength: 160
+          description: >-
+            Clamped last-line preview — ≤ 160 chars, then redacted by the
+            single choke-point (x-kora-redaction). Nullable.
+          x-kora-redacted: true
+
+    KoraCoverageHarness:
+      type: object
+      additionalProperties: false
+      required: [harness, support]
+      properties:
+        harness:
+          type: string
+          description: Harness family (may name families outside the enum, e.g. hermes).
+        support:
+          type: string
+          enum: [full, lists-only, metadata-only, absent]
+          description: >-
+            Visibility level: `full` = lists + transcripts; `lists-only` =
+            metadata + previews (vscode in slice 2: full transcript is a
+            known gap, kind:1); `metadata-only`; `absent` = not scanned
+            (hermes until T004).
+        note:
+          type: [string, "null"]
+          description: Human explanation of the support level (shown on the coverage screen).
+
+    KoraCoverageOut:
+      type: object
+      additionalProperties: false
+      required: [harnesses, gaps]
+      description: >-
+        Data for the «что вижу / чего нет» screen: the honest per-harness
+        visibility statement plus explicit gaps. Rendered from slice 1.
+      properties:
+        harnesses:
+          type: array
+          items:
+            $ref: "#/components/schemas/KoraCoverageHarness"
+        gaps:
+          type: array
+          items:
+            type: string
+          description: >-
+            Explicit gap strings (e.g. remote hosts pending the W4
+            loopback-ingress schedule; hermes → T004; vscode full
+            transcripts kind:1). Honest visibility, no silent holes.
+
+    KoraSessionsOut:
+      type: object
+      additionalProperties: false
+      required: [ok, count, items, coverage, meta]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        count:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/KoraSessionOut"
+        coverage:
+          $ref: "#/components/schemas/KoraCoverageOut"
+        meta:
+          type: object
+          additionalProperties: false
+          required: [generated_at]
+          properties:
+            generated_at:
+              type: string
+              format: date-time
+
+    KoraTranscriptItemOut:
+      type: object
+      additionalProperties: false
+      required: [seq, role, ts, content, redaction_applied]
+      description: One transcript entry, content redacted by the choke-point.
+      properties:
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Per-session monotonic cursor position (harness store order).
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        kind:
+          type: [string, "null"]
+          description: Optional harness-specific entry kind (e.g. vscode kind tag).
+        ts:
+          type: [string, "null"]
+          format: date-time
+          description: Entry timestamp (null when the harness lacks it).
+        content:
+          type: string
+          description: Redacted entry body (single choke-point — see x-kora-redaction).
+          x-kora-redacted: true
+        redaction_applied:
+          type: boolean
+          description: Honest signal that the choke-point masked something in this entry.
+
+    KoraTranscriptOut:
+      type: object
+      additionalProperties: false
+      required: [session_id, items, next_after_seq, has_more]
+      properties:
+        session_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/KoraTranscriptItemOut"
+        next_after_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Cursor for the next page (last returned seq; unchanged from the
+            request's after_seq when the page is empty).
+        has_more:
+          type: boolean
+          description: More items exist beyond this page (same cursor path).
+
+    KoraDeliveryOut:
+      type: object
+      additionalProperties: false
+      required: [status]
+      description: >-
+        Honest relay delivery state. The queue is in-memory by design
+        (rev.2 #3); `failed` is retryable and rendered as «не доставлено —
+        повторите», never silently dropped.
+      properties:
+        status:
+          type: string
+          enum: [queued, delivered, failed]
+        queued_at:
+          type: [string, "null"]
+          format: date-time
+        delivered_at:
+          type: [string, "null"]
+          format: date-time
+        retryable:
+          type: boolean
+          description: True when a retry makes sense (default true for failed).
+        error:
+          type: [string, "null"]
+          description: Human-readable failure reason (no secrets, no raw prompt).
+
+    KoraSessionCreate:
+      type: object
+      additionalProperties: false
+      required: [executor_id, project, prompt]
+      description: New relay session from the phone (executor + project + prompt).
+      properties:
+        executor_id:
+          type: string
+          minLength: 1
+          description: Enrolled executor to spawn the headless harness on.
+        project:
+          type: string
+          minLength: 1
+          description: Project to open the session in.
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32000
+          description: >-
+            Initial prompt. Transported stdin/JSON or app-server — NEVER
+            argv (leaks into /proc/*/cmdline). Logs carry hash + length only.
+          x-kora-redacted: true
+
+    KoraSessionCreatedOut:
+      type: object
+      additionalProperties: false
+      required: [ok, session, delivery]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        session:
+          $ref: "#/components/schemas/KoraSessionOut"
+        delivery:
+          $ref: "#/components/schemas/KoraDeliveryOut"
+
+    KoraMessageCreate:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 32000
+          description: Prompt text (same transport + logging hygiene as the initial prompt).
+          x-kora-redacted: true
+
+    KoraMessageAcceptedOut:
+      type: object
+      additionalProperties: false
+      required: [ok, session_id, delivery, confirm_required]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        session_id:
+          type: string
+        delivery:
+          $ref: "#/components/schemas/KoraDeliveryOut"
+        confirm_required:
+          type: boolean
+          description: >-
+            True in the default confirm-mode (the relay confirms host-side
+            before the harness runs). False ONLY for sessions explicitly
+            opted into yolo (audited, never default).
+
+    KoraStepUpIn:
+      type: object
+      additionalProperties: false
+      required: [pin]
+      properties:
+        pin:
+          type: string
+          minLength: 4
+          maxLength: 64
+          writeOnly: true
+          description: Step-up PIN. Never logged (hash + length only).
+
+    KoraStepUpOut:
+      type: object
+      additionalProperties: false
+      required: [ok, granted_until, ttl_seconds]
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+        granted_until:
+          type: string
+          format: date-time
+        ttl_seconds:
+          type: integer
+          minimum: 1
+          maximum: 900
+          description: Grant window — ≤ 900s (15 min) by contract.
+
+    KoraStepUpStatusOut:
+      type: object
+      additionalProperties: false
+      required: [active]
+      properties:
+        active:
+          type: boolean
+        granted_until:
+          type: [string, "null"]
+          format: date-time
+        ttl_remaining_seconds:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 900
+
+    KoraErrorOut:
+      type: object
+      additionalProperties: false
+      required: [ok, code, message]
+      description: >-
+        Honest error body. The mnd_ wall carries an EXPLANATION (why
+        transcripts are forbidden and what to do), not a bare status.
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+        code:
+          type: string
+          enum: [unauthorized, metadata_only, step_up_required, step_up_denied,
+                 session_not_found, host_conflict, validation]
+        message:
+          type: string
+          description: Human-readable explanation (RU-first UI copy source).
+
+    # --- SSE dictionary (additive-only, metadata-only) --------------------------
+    KoraSessionListedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, session_id, executor_id, native_id, harness, at]
+      description: >-
+        A scanner discovered a session new to the registry. METADATA ONLY —
+        no preview text, no content (vocabulary is additive-only).
+      properties:
+        event:
+          type: string
+          enum: [session.listed]
+        session_id:
+          type: string
+        executor_id:
+          type: string
+        native_id:
+          type: string
+        harness:
+          $ref: "#/components/schemas/KoraHarness"
+        project:
+          type: [string, "null"]
+        at:
+          type: string
+          format: date-time
+
+    KoraSessionUpdatedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, session_id, at]
+      description: >-
+        The session store changed (accepted only from the executor owning
+        the session — ingest binding, security gate 1). This is the chat-v1
+        SIGNAL: the browser pulls the tail via the authenticated transcript
+        GET. METADATA ONLY — never content.
+      properties:
+        event:
+          type: string
+          enum: [session.updated]
+        session_id:
+          type: string
+        last_seq:
+          type: [integer, "null"]
+          format: int64
+          description: Latest known seq (a hint for the cursor; the GET is authoritative).
+        at:
+          type: string
+          format: date-time
+
+    KoraSessionClosedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, session_id, at]
+      description: Session ended (process exit / registry close-out). METADATA ONLY.
+      properties:
+        event:
+          type: string
+          enum: [session.closed]
+        session_id:
+          type: string
+        at:
+          type: string
+          format: date-time

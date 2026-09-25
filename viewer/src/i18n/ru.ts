@@ -17,6 +17,7 @@ export const ru = {
   "nav.pulse": "Пульс",
   "nav.tasks": "Задачи",
   "nav.agents": "Агенты",
+  "nav.kora": "Кора",
   "nav.stores": "Хранилища",
   "nav.system": "Система",
   "nav.soon": "скоро",
@@ -496,7 +497,8 @@ export const ru = {
   "tasks.inboxFullTextFailed": "Не удалось загрузить запись из памяти",
   "tasks.inboxEditLabel": "Править",
   "tasks.inboxEditTitle": "Правка записи до принятия в борд",
-  "tasks.inboxEditHint": "Правки поедут в задачу и синхронизируются в память при принятии.",
+  "tasks.inboxEditHint":
+    "Правки поедут в задачу и синхронизируются в память при принятии.",
   "tasks.inboxEdit.titleLabel": "Заголовок",
   "tasks.inboxEdit.summaryLabel": "Описание (spec)",
   "tasks.inboxEdit.priorityLabel": "Приоритет",
@@ -840,8 +842,7 @@ export const ru = {
   "agents.connect.label": "Как подключить внешнего агента",
   "agents.connect.step1":
     "Нажмите «Добавить исполнителя», заполните имя и харнес — свой харнес можно добавить прямо в списке.",
-  "agents.connect.step2":
-    "Создайте токен и скопируйте ОДНУ команду с экрана.",
+  "agents.connect.step2": "Создайте токен и скопируйте ОДНУ команду с экрана.",
   "agents.connect.step3":
     "Выполните её на внешней машине (VPS) — она сама установит зависимости, агента и службу.",
   "agents.connect.step4":
@@ -993,12 +994,15 @@ export const ru = {
   "agents.harness.invalid":
     "Строчные латиница/цифры, затем точки, дефисы, подчёркивания (до 60 знаков).",
 
-  "agents.enrollment.oneLinerHint": "Внешний -k безопасен: текст установщика публичен и без секретов — всё внутри ездит на запинненном CA. --url должен быть адресом, который резолвится С ЭТОЙ машины (адрес VPN-оверлея может отличаться от LAN).",
-  "agents.enrollment.tokenInCopyNote": "При копировании полный токен попадает в буфер обмена.",
+  "agents.enrollment.oneLinerHint":
+    "Внешний -k безопасен: текст установщика публичен и без секретов — всё внутри ездит на запинненном CA. --url должен быть адресом, который резолвится С ЭТОЙ машины (адрес VPN-оверлея может отличаться от LAN).",
+  "agents.enrollment.tokenInCopyNote":
+    "При копировании полный токен попадает в буфер обмена.",
   "agents.enrollment.quotaCount": "Живых токенов: {{count}} из 3",
   "agents.enrollment.quotaFull":
     "Достигнут лимит живых токенов (3) — отзовите лишний или дождитесь TTL.",
-  "agents.enrollment.manualToggle": "Ручной путь — диагностика / изолированные (air-gapped) установки",
+  "agents.enrollment.manualToggle":
+    "Ручной путь — диагностика / изолированные (air-gapped) установки",
 
   // --- AGW-11: the connect card (SSH provisioner, wave 4) -------------------
 
@@ -1069,13 +1073,11 @@ export const ru = {
   "agents.provision.knownHostsHint":
     "Ключ машины не совпал с закреплённым. Если машину ПЕРЕУСТАНАВЛИВАЛИ намеренно — на борде выполняется отдельная процедура re-pin (POST /api/executors/provision/host/{host}/repin). Вслепую повторять не надо: несовпадение может означать подмену (MITM).",
   "agents.provision.retry": "Повторить",
-  "agents.provision.doneTitle":
-    "Исполнитель «{{name}}» ждёт вашего одобрения",
+  "agents.provision.doneTitle": "Исполнитель «{{name}}» ждёт вашего одобрения",
   "agents.provision.doneLoadingRow": "Ждём появления строки в реестре…",
   "agents.provision.approvedAlready":
     "«{{name}}» уже одобрен — включите маршрутизацию в реестре",
-  "agents.provision.approveIntro":
-    "Проверьте ключ машины и подтвердите подключение.",
+  "agents.provision.approveIntro": "Проверьте ключ машины и подтвердите подключение.",
   "agents.provision.pasteBackLabel":
     "Последние 8 hex-символов отпечатка С САМОЙ машины",
   "agents.provision.pasteBackHint":
@@ -1105,8 +1107,7 @@ export const ru = {
     "Борд перезапустился во время установки — секреты живут только в памяти задания. Запустите подключение заново.",
   "agents.provision.hint.pinInvalidated":
     "Закреплённый ключ машины изменили (re-pin) — задание остановлено.",
-  "agents.provision.hint.generic":
-    "Установка не удалась — техническая деталь ниже.",
+  "agents.provision.hint.generic": "Установка не удалась — техническая деталь ниже.",
 
   "agents.enrollment.listTitle": "Токены подключения",
   "agents.enrollment.listHint": "живые + история",
@@ -1148,7 +1149,8 @@ export const ru = {
   "automation.settings.engineOffNote":
     "Движок пока не работает (S1): настройка сохранит решение и заработает вместе с движком.",
   "automation.settings.capLabel": "Лимит авто-запусков в день",
-  "automation.settings.capHint": "От 1 до 1000; сегодня использовано {{used}} из {{cap}}.",
+  "automation.settings.capHint":
+    "От 1 до 1000; сегодня использовано {{used}} из {{cap}}.",
   "automation.settings.capError": "Введите целое число от 1 до 1000.",
   "automation.settings.save": "Сохранить",
   "automation.settings.saving": "Сохраняем…",
@@ -1525,6 +1527,74 @@ export const ru = {
   "pair.err429": "Слишком много попыток",
   "pair.err503": "Пейринг отключён на сервере",
   "pair.errGeneric": "Подключить не удалось",
+
+  // --- Кора (ADR 0019 rev.2 — week-0 contract mocks) -----------------------------
+  "kora.title": "Кора — сессии всех хостов",
+  "kora.week0Badge": "Неделя 0 · контракт-моки",
+  "kora.week0Note":
+    "Экран работает на мок-данных: серверных эндпоинтов Коры ещё нет — контракт срезов 1–3 заморожен в docs/kora/openapi.yaml, реализация придёт со срезами.",
+  "kora.coverage.title": "Что вижу / чего нет",
+  "kora.coverage.support.full": "полностью",
+  "kora.coverage.support.lists-only": "только списки",
+  "kora.coverage.support.metadata-only": "только метаданные",
+  "kora.coverage.support.absent": "не сканируется",
+  "kora.coverage.gaps": "Известные пробелы",
+  "kora.onboarding.title": "Зачем Кора",
+  "kora.onboarding.case1.title": "Видеть всё",
+  "kora.onboarding.case1.body":
+    "Все сессии zcode, vscode и pi на подключённых хостах — одним списком, без прыжков по консолям.",
+  "kora.onboarding.case2.title": "Досмотреть",
+  "kora.onboarding.case2.body":
+    "Read-only транскрипт любой сессии: что происходило и на чём остановились, ничего не меняя.",
+  "kora.onboarding.case3.title": "Порулить с телефона",
+  "kora.onboarding.case3.body":
+    "Новая сессия или промпт в свою — через реле; телефон видит тот же интерфейс, что и рабочий стол.",
+  "kora.list.title": "Сессии",
+  "kora.list.loading": "Загружаем сессии",
+  "kora.list.loadFailed": "Не удалось загрузить список сессий",
+  "kora.list.empty": "Сессий пока нет",
+  "kora.list.emptyMessage":
+    "Подключите исполнителя — его сессии появятся сами: реестр производный, отдельных церемоний регистрации нет.",
+  "kora.session.age": "возраст: {{age}}",
+  "kora.session.noPreview": "Нет превью последней строки",
+  "kora.session.steerable": "можно рулить",
+  "kora.session.origin.relay": "реле",
+  "kora.session.origin.local": "локальная",
+  "kora.session.state.live": "живая",
+  "kora.session.state.idle": "ожидает",
+  "kora.session.state.dead": "процесс мёртв",
+  "kora.session.noId": "В маршруте нет id сессии",
+  "kora.session.notFound": "Сессия не найдена",
+  "kora.session.notFoundMessage": "Сессии «{{id}}» нет в реестре Коры.",
+  "kora.session.backToList": "К списку сессий",
+  "kora.session.readonlyPlate": "Чужая сессия — только чтение",
+  "kora.session.readonlyPlateNote":
+    "Продолжение доступно только для сессий relay-происхождения или после явного усыновления.",
+  "kora.transcript.title": "Транскрипт (только чтение)",
+  "kora.transcript.loading": "Загружаем транскрипт",
+  "kora.transcript.loadFailed": "Не удалось загрузить транскрипт",
+  "kora.transcript.empty": "Записей нет",
+  "kora.transcript.emptyMessage":
+    "Сессия в реестре, но записей в сторе нет — или ридер ещё не дошёл до неё.",
+  "kora.transcript.redacted": "маскировано",
+  "kora.transcript.redactedNote":
+    "Часть строки скрыта единым redaction-модулем при выдаче",
+  "kora.chat.title": "Чат (срез 3)",
+  "kora.chat.placeholder": "Промпт в сессию…",
+  "kora.chat.send": "Отправить",
+  "kora.chat.confirmMode": "Confirm-режим: промпт подтверждается на хосте",
+  "kora.chat.delivery.ok": "Доставлено в реле",
+  "kora.chat.delivery.failed": "Не доставлено — повторите",
+  "kora.chat.freshness": "Свежесть: хвост стора перечитывается, цель ≤60 с",
+  "kora.chat.unavailable":
+    "Руление недоступно: сессия локальная. Только чтение — инвариант NO-DRIFT.",
+  "kora.chat.stepUp.label": "PIN руления",
+  "kora.chat.stepUp.enable": "Включить руление",
+  "kora.chat.stepUp.active": "Руление активно (TTL ≤ 15 минут)",
+  "kora.chat.stepUp.required": "Руление заблокировано — сначала введите PIN",
+  "kora.chat.stepUp.failed": "Не удалось включить руление",
+  "kora.chat.stepUp.note":
+    "Чтение — без PIN; руление — после короткого PIN-ритуала (step-up, TTL ≤ 15 минут).",
 } as const;
 
 export type TranslationKey = keyof typeof ru;

@@ -18,6 +18,7 @@ import {
   Users,
   Layers,
   Bot,
+  BrainCircuit,
   Smartphone,
   Workflow,
 } from "lucide-react";
@@ -115,6 +116,16 @@ export const NAV_DOMAINS: readonly NavDomain[] = [
       },
     ],
   },
+  // Кора domain (ADR 0019 rev.2): live from week 0 — the domain root IS the
+  // session list (slice 1); the transcript mock sits at /kora/:sessionId.
+  // Week 0 renders mock data (the route page says so honestly); no
+  // soon-slot — the section is the early-UI-contact deliverable itself.
+  {
+    to: "/kora",
+    key: "nav.kora",
+    icon: BrainCircuit,
+    end: false,
+  },
   // Документация domain (ADR 0015): live — one section per docs category.
   // The domain tree itself lives in features/docs/docsNav.ts (pure data).
   DOCS_DOMAIN,
@@ -175,6 +186,7 @@ const MEMORY_CRUMB: Crumb = { to: "/memory", key: "nav.memory" };
 const SYSTEM_CRUMB: Crumb = { to: "/system", key: "nav.system" };
 const TASKS_CRUMB: Crumb = { to: "/tasks", key: "nav.tasks" };
 const AGENTS_CRUMB: Crumb = { to: "/agents", key: "nav.agents" };
+const KORA_CRUMB: Crumb = { to: "/kora", key: "nav.kora" };
 
 /**
  * Breadcrumb trail for a pathname (level 2–3 pages; the root has none).
@@ -187,6 +199,9 @@ export function crumbsFor(pathname: string): Crumb[] {
     return docsCrumbsFor(pathname);
   }
   switch (pathname) {
+    case "/kora":
+      // The domain root IS the page (slice-1 list): one non-link crumb.
+      return [{ key: "nav.kora" }];
     case "/memory":
       return [MEMORY_CRUMB, { key: "nav.records" }];
     case "/memory/search":
@@ -223,6 +238,10 @@ export function crumbsFor(pathname: string): Crumb[] {
   if (pathname.startsWith("/memory/")) {
     // Detail scroll (`/memory/:id`) sits under the records list.
     return [MEMORY_CRUMB, { to: "/memory", key: "nav.records" }, { key: "nav.record" }];
+  }
+  if (pathname.startsWith("/kora/")) {
+    // Kora session (`/kora/:sessionId`) sits under the section root.
+    return [KORA_CRUMB, { key: "nav.session" }];
   }
   if (pathname.startsWith("/system/sessions/")) {
     return [
