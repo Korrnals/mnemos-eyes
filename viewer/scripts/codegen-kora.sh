@@ -21,4 +21,8 @@ if [[ ! -f "$ARTIFACT" ]]; then
 fi
 
 npx openapi-typescript "$ARTIFACT" --output "$OUT" --immutable
+# P4-3: normalize formatting — the artifact is frozen and the generated
+# file is COMMITTED; openapi-typescript output is byte-stable across runs
+# only when formatted deterministically (prettier = the repo formatter).
+npx prettier --write "$OUT"
 echo "codegen-kora: wrote $OUT ($(wc -l < "$OUT") lines). Review the diff — the file is committed and CI guards schema drift."
