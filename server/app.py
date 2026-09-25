@@ -785,6 +785,11 @@ _DEVICE_READ_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/archive"),
     ("GET", "/api/notifications"),
     ("GET", "/api/assignments"),
+    # Kora slice-1 listing (owner decision on the slice-1 review): the
+    # LIST is metadata for devices too — previews already pass the
+    # redaction choke-point (archcom position); transcripts (slice 2)
+    # will NOT ride this table.
+    ("GET", "/api/kora/sessions"),
 )
 
 # The old control scope, decomposed into per-device granules (§A.7). Each
@@ -3944,6 +3949,47 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _guard_kora_read(request: Request) -> None:
+    """Kora LISTING read guard (owner decision on the slice-1 review, the
+    ADR 0019 access-class split applied early): the listing is readable
+    by the ui class (owner session — header or cookie leg, ADR 0014
+    determinism) and by the mnd_ device class (metadata tier: the LIST
+    is metadata, previews already pass the redaction choke-point — the
+    archcom position; transcript reads stay ui-only from slice 2).
+
+    Deliberately NOT open: Kora surfaces the owner's PERSONAL harness
+    sessions — unlike the cluster-internal listing GETs (board,
+    executors), this is a владельческая надстройка, and the owner-session
+    login exists exactly for this. A machine bearer is NOT a listing
+    class either (the scanner writes its own ingest route; the board
+    token opens no owner surfaces).
+
+    Legs (ORDER MATTERS — a device request CARRIES its mnd_ bearer in the
+    Authorization header, so the device state is consulted FIRST):
+    - a VALID device session (request.state.device — the scope middleware
+      already authenticated it and matched the route table) passes; an
+      INVALID mnd_ never reaches here (the middleware answers 401 first).
+    - Authorization header present → the ui-class bearer ONLY (constant
+      time); a mismatch is 401 with the class-mismatch detail.
+    - header absent → the vesmaro_ui cookie leg (owner session, ADR 0014
+      Ф2); with neither, an honest 401 that names the login door."""
+    if getattr(request.state, "device", None) is not None:
+        return
+    auth = request.headers.get("Authorization", "")
+    if auth:
+        ui_token = _token_classes().get("ui", "")
+        if (ui_token and hmac.compare_digest(
+                auth.encode("utf-8"), f"Bearer {ui_token}".encode("utf-8"))):
+            return
+        raise HTTPException(
+            401, _token_mismatch_detail(auth, _token_classes(), ("ui",)))
+    if _cookie_ui_ok(request):
+        return
+    raise HTTPException(
+        401, "owner session or device token required — the Kora session "
+             "list is owner-only (login at /api/auth/ui-token, ADR 0014)")
+
+
 class KoraSessionIn(BaseModel):
     """One scanner row (ingest body item). Validation mirrors the store's
     kora_sessions CHECK constraints — unknown enum values 422 here."""
@@ -4022,10 +4068,13 @@ def _kora_coverage() -> KoraCoverageOut:
     hermes is a known gap until T004. Computed per request — no caching,
     the board sees single-digit rps."""
     harnesses = [
+        # P5 (slice-1 review): `full` LIED — slice 1 serves LISTS only;
+        # zcode transcripts land in slice 2. The honest level today is
+        # lists-only (metadata + redacted previews over the scanner).
         KoraCoverageHarnessOut(
-            harness="zcode", support="full",
-            note="Списки и полные транскрипты (mode=ro + "
-                 "WAL-snapshot-fallback); сканер среза 1 активен"),
+            harness="zcode", support="lists-only",
+            note="Списки сессий с превью (read-only сканер, mode=ro + "
+                 "WAL-snapshot-fallback); полные транскрипты — срез 2"),
         KoraCoverageHarnessOut(
             harness="vscode", support="absent",
             note="Сканер vscode — срез 2 (списки и превью)"),
@@ -4037,6 +4086,7 @@ def _kora_coverage() -> KoraCoverageOut:
             note="Не сканируется до T004 (известный пробел)"),
     ]
     gaps = [
+        "Полные транскрипты zcode — срез 2 (сейчас только списки и превью)",
         "Срез 1 видит только zcode-сессии; vscode/pi — срез 2",
         "Удалённые хосты ждут расписания W4 loopback-ingress",
         "hermes-сессии не видны до T004",
@@ -4089,11 +4139,14 @@ def _kora_session_public(row: dict[str, Any]) -> KoraSessionOut:
 async def list_kora_sessions(request: Request,
                              harness: str = "",
                              state: str = "") -> KoraSessionsOut:
-    """Slice 1 listing (frozen contract GET /kora/sessions). Readable by
-    BOTH access classes: the ui class (owner cookie/header) and mnd_
-    devices — the LIST is metadata; the mnd_ wall guards transcripts
-    (slice 2, 403 metadata_only with an explanation). Filters must be
-    dictionary values (422, same validation grammar as assignments)."""
+    """Slice 1 listing (frozen contract GET /kora/sessions). AUTHED read
+    (owner decision on the slice-1 review): the ui class (owner session —
+    header or cookie leg) and the mnd_ device class (metadata tier; the
+    LIST is metadata, previews already pass the redaction choke-point —
+    the archcom position). Anonymous → 401; transcripts (slice 2) will be
+    ui-only. Filters must be dictionary values (422, the same validation
+    grammar as assignments)."""
+    _guard_kora_read(request)
     if harness and harness not in _KORA_HARNESSES:
         raise HTTPException(422, f"invalid harness: {harness}")
     if state and state not in _KORA_STATES:
@@ -4143,11 +4196,25 @@ async def ingest_kora_scan(executor_id: str, body: KoraScanIn,
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     store.touch_executor_last_seen(executor_id)
-    if result["listed"]:
-        _broadcast({"kind": "kora.sessions.listed",
-                    "executor_id": executor_id,
-                    "listed": result["listed"]})
-    return KoraScanOut(scanned=len(rows), **result)
+    # P4 (slice-1 review): the SSE dictionary is the FROZEN grammar —
+    # per-session ``session.listed`` events (KoraSessionListedEvent:
+    # event/session_id/executor_id/native_id/harness/project/at),
+    # metadata only, NOT a grouped aggregate with a foreign ``kind``.
+    # The browser re-reads the listing via the authenticated GET; these
+    # frames only say WHAT to look for.
+    at = _now_iso()
+    for new in result["new_rows"]:
+        _broadcast({
+            "event": "session.listed",
+            "session_id": f"{new['executor_id']}:{new['native_id']}",
+            "executor_id": new["executor_id"],
+            "native_id": new["native_id"],
+            "harness": new["harness"],
+            "project": new.get("project"),
+            "at": at,
+        })
+    return KoraScanOut(scanned=len(rows), upserted=result["upserted"],
+                       listed=result["listed"], dropped=result["dropped"])
 
 
 # ----------------------------------------- harness dictionary (wave 3C)

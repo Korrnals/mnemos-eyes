@@ -91,16 +91,24 @@ class ZcodeScanResult:
     via_fallback: bool
 
 
-def _connect_ro(db_path: Path) -> tuple[sqlite3.Connection, bool]:
+def _connect_ro(db_path: Path) -> tuple[sqlite3.Connection, str | None]:
     """Open the store read-only; on the cold-start WAL failure fall back
-    to a tmp snapshot copy. Returns (connection, via_fallback). The
-    caller closes the connection; a fallback copy is removed on close."""
+    to a tmp snapshot copy. Returns (connection, tmpdir): tmpdir is None
+    on a direct ro-open, the snapshot directory on the fallback path.
+
+    The slice-1 review P3 lesson lives here: sqlite3.Connection supports
+    NEITHER __dict__ NOR weak references — both the con-attribute stash
+    and a weakref.finalize cleanup are impossible on it. The tmpdir
+    therefore rides the RETURN VALUE and the caller owns the pair;
+    scan_zcode_store closes it in a finally. close_ro(con, tmpdir) is
+    the ONE explicit cleanup path.
+    """
     if not db_path.is_file():
         raise StoreNotFoundError(f"zcode store not found: {db_path}")
     try:
         con = sqlite3.connect(_ro_uri(db_path), uri=True, timeout=5.0)
         con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
-        return con, False
+        return con, None
     except sqlite3.Error as exc:
         # Cold start (no -shm) or any other ro-open failure → snapshot.
         log.info("ro open failed (%s); falling back to WAL snapshot "
@@ -115,25 +123,25 @@ def _connect_ro(db_path: Path) -> tuple[sqlite3.Connection, bool]:
             # A -shm of the ORIGINAL must never ride along: the snapshot
             # builds its own shared memory from db+wal.
     except OSError as exc:
+        shutil.rmtree(tmpdir, ignore_errors=True)
         raise StoreUnreadableError(
             f"cannot snapshot the zcode store: {exc}") from exc
     try:
         con = sqlite3.connect(_ro_uri(copy), uri=True, timeout=5.0)
         con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
     except sqlite3.Error as exc:
-        con.close() if "con" in dir() else None
+        con.close()
         shutil.rmtree(tmpdir, ignore_errors=True)
         raise StoreUnreadableError(
             f"zcode store unreadable even via snapshot: {exc}") from exc
-    # The connection owns its tmpdir now: remove on close. sqlite3 has no
-    # close hook, so the caller MUST call close_snapshot(con, tmpdir).
-    con._kora_tmpdir = tmpdir  # type: ignore[attr-defined]
-    return con, True
+    return con, tmpdir
 
 
-def close_ro(con: sqlite3.Connection) -> None:
-    """Close a reader connection; removes the fallback tmpdir if any."""
-    tmpdir = getattr(con, "_kora_tmpdir", None)
+def close_ro(con: sqlite3.Connection,
+             tmpdir: str | None = None) -> None:
+    """Close a reader connection; removes the fallback tmpdir when the
+    caller holds it (the (con, tmpdir) pair from _connect_ro)."""
+    tmpdir = tmpdir or getattr(con, "_kora_tmpdir", None)  # legacy attr
     con.close()
     if tmpdir:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -178,7 +186,7 @@ def scan_zcode_store(db_path: str | Path = DEFAULT_DB_PATH,
     archived history from the slice-1 list.
     """
     path = Path(os.path.expanduser(str(db_path)))
-    con, via_fallback = _connect_ro(path)
+    con, tmpdir = _connect_ro(path)
     try:
         now = now if now is not None else datetime.now(timezone.utc).timestamp()
         rows: list[dict[str, Any]] = []
@@ -213,6 +221,6 @@ def scan_zcode_store(db_path: str | Path = DEFAULT_DB_PATH,
             scanned_at=datetime.now(timezone.utc).isoformat(
                 timespec="seconds"),
             store_path=str(path),
-            via_fallback=via_fallback)
+            via_fallback=tmpdir is not None)
     finally:
-        close_ro(con)
+        close_ro(con, tmpdir)

@@ -51,6 +51,30 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Bearer tokens — last so a quoted "Bearer <x>" in prose still masks
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"),
      "Bearer <redacted>"),
+    # --- STRADDLE SCRUB (slice-1 review P1) ------------------------------
+    # The preview clamp can cut a secret mid-token: the surviving tail
+    # escapes the {16,} minimums above AND may sit glued to ordinary
+    # text with no word boundary (…xxxghp_AbCdEf…). Long specific
+    # prefixes (ghp_/AKIA/eyJ/mnd_/mnk_/mne_) anchor the pattern with no
+    # \b at all — any occurrence scrubs (a stray "ghp_" in prose is
+    # negligible collateral). The SHORT sk- prefix would false-positive
+    # on words like "task-1", so it takes a lookbehind: the prefix must
+    # not ride inside a longer word. Honest asymmetry: a GLUED sk-/
+    # sk-ant- fragment shorter than the {16,} key minimum is
+    # indistinguishable from an ordinary hyphenated word ("task-ant-1")
+    # and carries no usable secret material — the lookbehind keeps
+    # prose intact. A clamp-cut credential tail must never reach a
+    # client.
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{1,}"), "gh*_<redacted>"),
+    (re.compile(r"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_\-]{1,}"),
+     "sk-ant-<redacted>"),
+    (re.compile(r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_\-]{1,}"),
+     "sk-<redacted>"),
+    (re.compile(r"AKIA[0-9A-Z]{1,}"), "AKIA<redacted>"),
+    (re.compile(r"eyJ[A-Za-z0-9_\-]{1,}"), "eyJ<redacted>"),
+    (re.compile(r"mnd_[A-Za-z0-9._\-]{1,}"), "mnd_<redacted>"),
+    (re.compile(r"mnk_[A-Za-z0-9._\-]{1,}"), "mnk_<redacted>"),
+    (re.compile(r"mne_[A-Za-z0-9._\-]{1,}"), "mne_<redacted>"),
 )
 
 
@@ -75,7 +99,11 @@ def redact(text: str) -> tuple[str, bool]:
 
 def redact_preview(text: str | None, *, clamp: int = PREVIEW_MAX_CHARS,
                    max_chars: int | None = None) -> tuple[str | None, bool]:
-    """List-preview choke-point: clamp BEFORE redaction (contract order).
+    """List-preview choke-point: clamp BEFORE redaction (contract order),
+    then clamp AGAIN after it (slice-1 review P2 — masking EXPANDS the
+    string: a marker is longer than the token it replaces, so a single
+    pre-clamp lets a 160-char input grow past the contract bound; the
+    honest invariant is len(out) <= clamp on BOTH sides of redaction).
 
     ``None``/empty in → ``None`` out (the contract's nullable preview).
     ``max_chars`` overrides the clamp cap for tests; production callers
@@ -86,7 +114,7 @@ def redact_preview(text: str | None, *, clamp: int = PREVIEW_MAX_CHARS,
     limit = max_chars if max_chars is not None else clamp
     clamped = text[:limit]
     masked, applied = redact(clamped)
-    return masked, applied
+    return masked[:limit], applied
 
 
 def redact_body(text: str) -> tuple[str, bool]:

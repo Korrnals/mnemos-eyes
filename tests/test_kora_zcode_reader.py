@@ -27,6 +27,7 @@ import pytest
 
 from server.kora.zcode_reader import (
     LIVE_WINDOW_SECONDS,
+    _ro_uri,
     StoreNotFoundError,
     close_ro,
     scan_zcode_store,
@@ -158,22 +159,67 @@ class TestScan:
         with pytest.raises(StoreNotFoundError):
             scan_zcode_store(tmp_path / "nope.sqlite")
 
-    def test_cold_start_wal_fallback(self, store: Path, tmp_path: Path):
-        """No -shm in the directory (cold start): the mode=ro open of a
-        WAL database cannot init shared memory — the reader falls back to
-        the snapshot copy and STILL returns the listing."""
-        for side in (tmp_path / "db.sqlite-shm",):
-            if side.exists():
-                side.unlink()
-        # Force the cold-start shape: no -shm sibling of the store.
-        # (sqlite removes -shm on clean close; the fixture's close already
-        # left none, so this test pins the fallback path directly: open
-        # the reader's private helper against a no-shm store.)
-        result = scan_zcode_store(store, now=time.time())
-        assert len(result.sessions) == 3
-        # via_fallback depends on the runtime's shm presence — the test
-        # asserts the listing, not the mechanism:
-        assert isinstance(result.via_fallback, bool)
+    def test_cold_start_wal_fallback_forced(self, store: Path,
+                                            tmp_path: Path):
+        """P3 (slice-1 review): the fallback path must be FORCED, not
+        hoped for. The true cold start (ADR: SQL_READONLY_CANTINIT) =
+        a -wal tail, NO -shm, and a directory the reader cannot write —
+        a direct mode=ro open then fails and the snapshot copy resolves
+        the listing. Asserts: tmpdir RETURNED by _connect_ro (the
+        con-attribute path is dead — sqlite3.Connection has no
+        __dict__), the snapshot carries db+wal, close_ro removes it."""
+        import os
+        import shutil as _sh
+        from server.kora.zcode_reader import _connect_ro, close_ro
+        # Build the cold shape in a fresh dir: db + wal, NO shm, 0555.
+        cold = tmp_path / "cold"
+        cold.mkdir()
+        writer = sqlite3.connect(store)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("INSERT INTO session VALUES "
+                       "('sess_wal_tail', NULL, '/proj/w', 'w', 1, 1, NULL)")
+        writer.commit()
+        _sh.copyfile(store, cold / store.name)
+        wal_src = store.parent / (store.name + "-wal")
+        assert wal_src.is_file(), "open writer must keep the -wal alive"
+        _sh.copyfile(wal_src, cold / wal_src.name)
+        writer.close()
+        cold_db = cold / store.name
+        os.chmod(cold, 0o555)
+        try:
+            # direct ro open MUST fail here (no shm, unwritable dir)
+            probe = sqlite3.connect(_ro_uri(cold_db), uri=True)
+            probe.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+            probe.close()
+            raise AssertionError("cold shape did not force CANTINIT — "
+                                 "the fixture lost its forcing power")
+        except sqlite3.OperationalError:
+            pass  # the expected failure — now the reader's turn
+        con, tmpdir = _connect_ro(cold_db)
+        assert tmpdir is not None, (
+            "forced snapshot path — tmpdir must be returned")
+        try:
+            rows = con.execute(
+                "SELECT COUNT(*) FROM session").fetchone()[0]
+            assert rows == 5  # fixture 4 + the wal_tail row
+            snap = Path(tmpdir)
+            assert (snap / store.name).is_file()
+            assert (snap / wal_src.name).is_file()
+        finally:
+            close_ro(con, tmpdir)
+        assert not Path(tmpdir).exists(), (
+            "close_ro must remove the snapshot tmpdir")
+
+    def test_direct_path_returns_none_tmpdir(self, store: Path):
+        """P3 contract, direct leg: a healthy store (shm live) opens
+        without the fallback — tmpdir MUST be None and close_ro with
+        None is a plain close (the caller's finally always runs)."""
+        from server.kora.zcode_reader import _connect_ro, close_ro
+        con, tmpdir = _connect_ro(store)
+        try:
+            assert tmpdir is None, "healthy store must not snapshot"
+        finally:
+            close_ro(con, tmpdir)
 
 
 class TestAntiWrite:
@@ -182,7 +228,7 @@ class TestAntiWrite:
         connection must FAIL (sqlite: 'attempt to write a readonly
         database'). The reader never opens the store for write."""
         from server.kora.zcode_reader import _connect_ro
-        con, _fallback = _connect_ro(store)
+        con, _tmpdir = _connect_ro(store)
         try:
             with pytest.raises(sqlite3.OperationalError):
                 con.execute(
@@ -195,7 +241,7 @@ class TestAntiWrite:
                 con.execute(
                     "CREATE TABLE evil (id TEXT)")
         finally:
-            close_ro(con)
+            close_ro(con, _tmpdir)
 
     def test_scan_does_not_mutate_store(self, store: Path):
         before = store.read_bytes()

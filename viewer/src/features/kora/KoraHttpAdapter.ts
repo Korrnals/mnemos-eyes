@@ -34,6 +34,7 @@ import type { KoraErrorCode } from "./koraTypes";
 import { ApiError } from "@/lib/errors";
 import { DEFAULT_TIMEOUT_MS, buildUrl } from "@/gateway/http";
 import { getUiToken } from "@/gateway/uiToken";
+import { getDeviceToken } from "@/gateway/deviceToken";
 
 export interface KoraHttpAdapterOptions {
   /** Board API base URL. Default "/api" (same-origin; Vite dev-proxy). */
@@ -44,6 +45,8 @@ export interface KoraHttpAdapterOptions {
   timeoutMs?: number;
   /** Test seam for the ui-token source (BoardAdapter parity). */
   getUiTokenFn?: () => string;
+  /** Test seam for the device-identity source (BoardAdapter parity). */
+  getDeviceTokenFn?: () => string;
 }
 
 interface KoraWireError {
@@ -57,12 +60,29 @@ export class KoraHttpAdapter implements KoraGateway {
   private readonly fetchImpl?: typeof fetch;
   private readonly timeoutMs: number;
   private readonly getUiTokenFn: () => string;
+  private readonly getDeviceTokenFn: () => string;
 
   constructor(options: KoraHttpAdapterOptions = {}) {
     this.baseUrl = options.baseUrl ?? "/api";
     this.fetchImpl = options.fetchImpl;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.getUiTokenFn = options.getUiTokenFn ?? getUiToken;
+    this.getDeviceTokenFn = options.getDeviceTokenFn ?? getDeviceToken;
+  }
+
+  /**
+   * READ identity (owner decision on the slice-1 review): the listing is
+   * owner-only now — a browser with an owner session speaks through the
+   * SAME-ORIGIN COOKIE (reads never carry Authorization while the session
+   * lives, BoardAdapter «reads never carry Authorization» rule); a paired
+   * device without an owner session rides its mnd_ bearer (metadata tier,
+   * previews already masked server-side). With neither identity the
+   * request ships bare and the server answers 401 → the login panel.
+   */
+  private readIdentityToken(): string {
+    return this.getUiTokenFn().length > 0
+      ? ""
+      : this.getDeviceTokenFn();
   }
 
   async listSessions(signal?: AbortSignal): Promise<KoraSessionsList> {
@@ -160,6 +180,9 @@ export class KoraHttpAdapter implements KoraGateway {
     const headers: Record<string, string> = {};
     if (config.auth) {
       const token = this.getUiTokenFn();
+      if (token) headers.Authorization = `Bearer ${token}`;
+    } else {
+      const token = this.readIdentityToken();
       if (token) headers.Authorization = `Bearer ${token}`;
     }
     if (config.body !== undefined) {

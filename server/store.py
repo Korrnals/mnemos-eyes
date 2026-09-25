@@ -3138,6 +3138,7 @@ class Store:
         """
         now = _now()
         seen: set[tuple[str, str]] = set()
+        new_rows: list[dict[str, Any]] = []
         upserted = listed = 0
         with self._lock, self._conn() as db:
             for row in rows:
@@ -3191,6 +3192,12 @@ class Store:
                 upserted += 1
                 if existing is None:
                     listed += 1
+                    new_rows.append({
+                        "executor_id": executor_id,
+                        "native_id": native_id,
+                        "harness": harness,
+                        "project": str(row.get("project") or "")[:300] or None,
+                    })
             dropped = 0
             if drop_missing:
                 placeholders = ",".join("?" for _ in seen)
@@ -3212,7 +3219,8 @@ class Store:
                     "upserted": upserted, "listed": listed,
                     "dropped": dropped,
                 })
-        return {"upserted": upserted, "listed": listed, "dropped": dropped}
+        return {"upserted": upserted, "listed": listed,
+                "dropped": dropped, "new_rows": new_rows}
 
     def kora_sessions(self, harness: str | None = None,
                       state: str | None = None) -> list[dict[str, Any]]:

@@ -20,8 +20,8 @@ export const KORA_FIXTURE_COVERAGE: components["schemas"]["KoraCoverageOut"] = {
   harnesses: [
     {
       harness: "zcode",
-      support: "full",
-      note: "Списки и полные транскрипты (mode=ro + WAL-snapshot-fallback)",
+      support: "lists-only",
+      note: "Списки сессий с превью (read-only сканер); полные транскрипты — срез 2",
     },
     {
       harness: "vscode",
