@@ -71,23 +71,36 @@
     edges = [];
     byId = {};
     var rnd = mulberry32(20260925);
-    var mems = D.memories.slice(0, 60); // hard cap: well under the 300 limit
+    var src = D.wellNodes || D.memories;
+    var mems = src.slice(0, 70); // hard cap: well under the 300 limit
     var W = hero.clientWidth || 900;
     var H = hero.clientHeight || 280;
+
+    // 4 project clusters in a row (jittered): reads as a tissue of colonies
+    var k = 4;
+    var centers = [];
+    for (var c = 0; c < k; c++) {
+      centers.push({
+        x: W * ((c + 0.5) / k) + (rnd() - 0.5) * W * 0.05,
+        y: H * 0.5 + (rnd() - 0.5) * H * 0.3,
+      });
+    }
+
     mems.forEach(function (m, i) {
-      // loose ring + jitter: reads as a colony, not a grid
-      var ang = (i / mems.length) * Math.PI * 2 + rnd() * 0.6;
-      var rad = (0.18 + rnd() * 0.32) * Math.min(W, H * 2.2);
-      var x = W / 2 + Math.cos(ang) * rad * 1.35;
-      var y = H / 2 + Math.sin(ang) * rad * 0.62;
+      var ci = (m.cluster != null ? m.cluster : i) % centers.length;
+      var cl = centers[ci];
+      var ang = rnd() * Math.PI * 2;
+      var rad = Math.pow(rnd(), 0.65); // плотнее к центру кластера
+      var spread = Math.min(W * 0.09, H * 0.34);
       var age = m.age || 24;
-      var r = Math.max(2, Math.min(4, 4 - (age / 288) * 2));
+      var r0 = Math.max(2, Math.min(4, 4 - (age / 288) * 2));
       var n = {
         id: m.id,
         m: m,
-        x: Math.max(24, Math.min(W - 24, x)),
-        y: Math.max(18, Math.min(H - 18, y)),
-        r: r,
+        cluster: ci,
+        x: Math.max(24, Math.min(W - 24, cl.x + Math.cos(ang) * rad * spread)),
+        y: Math.max(16, Math.min(H - 16, cl.y + Math.sin(ang) * rad * spread * 0.8)),
+        r: r0,
         phase: i * 0.7,
         vx: (rnd() - 0.5) * 2, // px per second (≤4)
         vy: (rnd() - 0.5) * 2,
@@ -95,22 +108,32 @@
       nodes.push(n);
       byId[m.id] = n;
     });
-    // edges: shared tags, ≤3 per node, deduped
+
+    // edges: short, mostly intra-cluster + a few nearest bridges (no long chords)
+    var maxD = W * 0.28; // acceptance cap: ~28% canvas width
+    var deg = nodes.map(function () { return 0; });
+    var pairs = [];
+    nodes.forEach(function (a, i) {
+      for (var j = i + 1; j < nodes.length; j++) {
+        var b = nodes[j];
+        var d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (d < maxD) pairs.push({ i: i, j: j, d: d, same: a.cluster === b.cluster });
+      }
+    });
+    pairs.sort(function (p, q) { return p.d - q.d; });
+    var bridges = 0;
     var seen = {};
-    nodes.forEach(function (n, i) {
-      var links = 0;
-      nodes.forEach(function (o, j) {
-        if (i === j || links >= 3 || edges.length > 90) return;
-        var shared = (n.m.tags || []).filter(function (t) {
-          return (o.m.tags || []).indexOf(t) >= 0;
-        });
-        var key = i < j ? n.id + "|" + o.id : o.id + "|" + n.id;
-        if (shared.length && !seen[key] && Math.abs(n.x - o.x) + Math.abs(n.y - o.y) < Math.max(W, H)) {
-          seen[key] = 1;
-          edges.push([i, j]);
-          links++;
-        }
-      });
+    pairs.forEach(function (p) {
+      if (edges.length > 110 || deg[p.i] >= 4 || deg[p.j] >= 4) return;
+      var key = p.i < p.j ? p.i + "|" + p.j : p.j + "|" + p.i;
+      if (seen[key]) return;
+      if (p.same || (p.d < W * 0.12 && bridges < 6)) {
+        if (!p.same) bridges++;
+        seen[key] = 1;
+        edges.push([p.i, p.j]);
+        deg[p.i]++;
+        deg[p.j]++;
+      }
     });
   }
 
@@ -367,20 +390,29 @@
       ctx.lineWidth = 0.5;
     }
 
-    // nodes: iris cores; breath 5s ±0.06 (skipped in reduced — static alpha)
+    // nodes: light pre-rendered halo per node + iris cores; breath 5s ±0.06
     var breathT = now || 0;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    var halo = sprite(COL.iris);
     nodes.forEach(function (n, i) {
       var dimmed = focusNode && n !== focusNode && !adj[i];
       var alpha = dimmed ? 0.4 : 1;
       var breath = reduced ? 1 : 1 + 0.06 * Math.sin((breathT / 5000) * Math.PI * 2 + n.phase);
+      var hs = n.r * 10;
+      ctx.globalAlpha = (dimmed ? 0.05 : 0.12) * breath;
+      ctx.drawImage(halo, n.x - hs / 2, n.y - hs / 2, hs, hs);
       if (n === focusNode && glowOn) {
-        ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        var sp = sprite(COL.irisBright);
         ctx.globalAlpha = 0.8 * breath;
+        var sp = sprite(COL.irisBright);
         ctx.drawImage(sp, n.x - n.r * 6, n.y - n.r * 6, n.r * 12, n.r * 12);
-        ctx.restore();
       }
+    });
+    ctx.restore();
+    nodes.forEach(function (n, i) {
+      var dimmed = focusNode && n !== focusNode && !adj[i];
+      var alpha = dimmed ? 0.4 : 1;
+      var breath = reduced ? 1 : 1 + 0.06 * Math.sin((breathT / 5000) * Math.PI * 2 + n.phase);
       ctx.globalAlpha = Math.min(1, alpha * breath);
       ctx.fillStyle = n === focusNode ? COL.irisBright : COL.iris;
       ctx.beginPath();

@@ -190,6 +190,12 @@ button.chip:hover {
 .conf-point.low::before {
   background: var(--color-confidence-dim);
 }
+.mem-chips {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  flex: none;
+}
 
 /* ── Status pills (spec 05 §2.4): tint 12% bg + status-colored text, never color-only ── */
 .pill {
@@ -257,11 +263,13 @@ button.chip:hover {
   background: none;
   border: 1.5px solid var(--color-warning);
 }
-.pill.terminal {
+/* «терминальная» (done/failed/expired) — суффикс .ended: имя .terminal
+   collides with the terminal-panel component (min-height 240px) */
+.pill.ended {
   background: var(--color-bg-elevated);
   color: var(--color-text-muted);
 }
-.pill.terminal .dot {
+.pill.ended .dot {
   background: repeating-linear-gradient(
     45deg,
     var(--color-text-muted),
@@ -414,11 +422,19 @@ button.chip:hover {
 .mem-list {
   display: flex;
   flex-direction: column;
+  container-type: inline-size; /* row layout adapts to the list column width */
 }
+/* Two-floor row by default (title+id on top, conf+chips+prov below — spec 04 ASCII);
+   single-floor on wide containers via the @container query below. */
 .mem-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 24px 64px minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-areas:
+    "cb id title title title"
+    "cb .  conf  chips prov";
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
   align-items: center;
-  gap: var(--space-3);
   width: 100%;
   min-height: 56px;
   padding: var(--space-2) var(--space-3);
@@ -428,6 +444,59 @@ button.chip:hover {
   color: inherit;
   transition: background var(--duration-instant) var(--ease-enter);
 }
+@container (min-width: 880px) {
+  .mem-row {
+    grid-template-columns: 24px 64px minmax(220px, 1fr) 76px minmax(0, 220px) minmax(0, 150px);
+    grid-template-areas: "cb id title conf chips prov";
+    row-gap: 0;
+  }
+}
+.mem-row .checkbox {
+  grid-area: cb;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-iris);
+  flex: none;
+}
+.mem-row .m-id {
+  grid-area: id;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  align-self: center;
+}
+.mem-row .mem-title {
+  grid-area: title;
+  font-size: var(--text-body);
+  color: var(--color-text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  align-self: center;
+}
+.mem-row .m-conf {
+  grid-area: conf;
+  justify-self: start;
+}
+.mem-row .m-tags {
+  grid-area: chips;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+.mem-row .m-prov {
+  grid-area: prov;
+  justify-self: end;
+  font-family: var(--font-mono);
+  font-variant-numeric: var(--numeric-tnum);
+  font-size: var(--text-caps);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
 .mem-row:hover {
   background: color-mix(in srgb, var(--myelin-hairline) 100%, var(--color-bg-well));
 }
@@ -435,40 +504,12 @@ button.chip:hover {
   box-shadow: inset 2px 0 0 var(--color-iris);
   background: var(--strata-memory);
 }
-.mem-row .mem-title {
-  font-size: var(--text-body);
-  color: var(--color-text-primary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mem-row .mem-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-  flex: none;
-}
-.mem-row .prov {
-  font-family: var(--font-mono);
-  font-variant-numeric: var(--numeric-tnum);
-  font-size: var(--text-caps);
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
 .mem-row.stale {
   opacity: 0.6;
 }
 .mem-row .stale-note {
   font-size: var(--text-caps);
   color: var(--color-text-muted);
-}
-.mem-chips {
-  display: flex;
-  gap: var(--space-1);
-  align-items: center;
-  flex: none;
 }
 .mem-row.error-row {
   color: var(--color-error);
@@ -635,6 +676,9 @@ button.chip:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.wait-row .btn {
+  flex: none;
 }
 .agent-session {
   display: flex;
@@ -811,6 +855,10 @@ button.chip:hover {
 }
 
 /* ── Empty / error states ────────────────────────────────────────────── */
+.empty-state[hidden],
+.error-state[hidden] {
+  display: none; /* author display:grid must not defeat the hidden attribute */
+}
 .empty-state {
   display: grid;
   justify-items: center;
@@ -975,6 +1023,7 @@ button.chip:hover {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  min-height: 15rem; /* equalized height: CTA pinned to the bottom, no dead void */
 }
 .hub-card h2 {
   font-family: var(--font-scroll);

@@ -68,7 +68,7 @@
   position: relative;
   width: clamp(320px, 34vw, 480px);
 }
-.topsearch .field-icon {
+.topsearch > svg {
   position: absolute;
   left: var(--space-3);
   top: 50%;

@@ -364,8 +364,90 @@
     { ev: "write", mem: "M-128", text: "запись agb: черновик к T-128 «UI-10 проводник»" },
   ];
 
+  /* Well graph: 68 nodes in 4 project clusters (mnemos-eyes / gcw / sealbox / core).
+   * First 12 = the real fixture memories (feed event ids point at them); the rest
+   * are plausible demo records of the same memory organism. */
+  function w(id, title, conf, age, cluster, tags, prov) {
+    return { id: id, title: title, conf: conf, age: age, kind: "заметка", tags: tags, prov: prov, cluster: cluster, content: [] };
+  }
+  const wellNodes = [
+    // ── реальные фикстуры (совпадают с feedPool/палитрой) ──
+    w("T-128", "UI-10 проводник", 0.92, 2, 0, ["ui", "agents"], "agb · mnemos-01"),
+    w("T-121", "Пейринг QR", 0.74, 24, 2, ["pairing"], "owner · abyss"),
+    w("M-204", "Решение по пейрингу: QR вместо ручного ввода", 0.88, 3, 2, ["pairing", "security"], "owner · abyss"),
+    w("M-189", "Почему борд задач заморожен", 0.81, 26, 1, ["tasks", "process"], "owner · abyss"),
+    w("M-215", "Heartbeat-контракт агентов", 0.95, 5, 1, ["agents", "contract"], "core · mnemos-01"),
+    w("M-177", "Выбор шрифтов: Inter, Lora, JetBrains Mono", 0.9, 144, 0, ["ui", "design"], "owner · abyss"),
+    w("M-156", "Лестница страт коры: пять уровней глубины", 0.86, 168, 0, ["ui", "design"], "owner · abyss"),
+    w("M-201", "SSE-лента: контракт переподключения", 0.93, 8, 0, ["sync", "contract"], "core · mnemos-01"),
+    w("M-148", "Мнемос-ID в отчётах: сноски вместо тела", 0.79, 288, 1, ["process", "reporting"], "owner · abyss"),
+    w("M-233", "Схема провенанса: кто · где · когда", 0.91, 1, 3, ["memory", "contract"], "agb · mnemos-01"),
+    w("M-219", "Словарь импульсов: событие → цвет → место", 0.94, 1, 0, ["design", "motion"], "owner · abyss"),
+    w("M-241", "Теги памяти: первая сотня", 0.68, 72, 3, ["memory", "tags"], "agb · mnemos-02"),
+    // ── кластер mnemos-eyes ──
+    w("M-301", "Свиток: переносы строк в Lora", 0.87, 12, 0, ["ui"], "agb · mnemos-01"),
+    w("M-302", "Палитра Ctrl+K: скелетон-состояние", 0.82, 9, 0, ["ui", "motion"], "agb · mnemos-01"),
+    w("M-303", "Хоткей «[»: сворачивание сайдбара", 0.9, 20, 0, ["ui"], "owner · abyss"),
+    w("M-304", "Тосты: канал обратной связи", 0.85, 30, 0, ["ui"], "agb · mnemos-01"),
+    w("M-305", "Скелетоны: shimmer без blur", 0.78, 40, 0, ["ui", "motion"], "agb · mnemos-02"),
+    w("M-306", "Skip-link: первый таб-стоп", 0.92, 50, 0, ["ui", "a11y"], "owner · abyss"),
+    w("M-307", "Крошки: обрезка по середине", 0.8, 60, 0, ["ui"], "agb · mnemos-01"),
+    w("M-308", "Пилюля live: glow 16px", 0.83, 70, 0, ["ui", "motion"], "agb · mnemos-01"),
+    w("M-309", "DPR cap 2 для канваса", 0.88, 80, 0, ["ui", "perf"], "core · mnemos-01"),
+    w("M-310", "Idle-ребро: миелин 0.5px", 0.76, 90, 0, ["ui", "design"], "owner · abyss"),
+    w("M-311", "Focus-ринг на sticky-панелях", 0.91, 100, 0, ["ui", "a11y"], "owner · abyss"),
+    w("M-312", "Сегмент-контрол режимов поиска", 0.84, 110, 0, ["ui"], "agb · mnemos-01"),
+    w("M-313", "Сырой вид записи: raw ▾", 0.72, 120, 0, ["ui"], "agb · mnemos-02"),
+    w("M-314", "Пустой колодец: 3 узла-семени", 0.69, 130, 0, ["ui", "design"], "owner · abyss"),
+    w("M-315", "Мобильный топбар: меню «⋮»", 0.75, 140, 0, ["ui"], "agb · mnemos-01"),
+    w("M-316", "Плотность: компакт 32px строки", 0.86, 150, 0, ["ui"], "owner · abyss"),
+    w("M-317", "Bento: против одинаковых плиток", 0.89, 160, 0, ["ui", "design"], "owner · abyss"),
+    w("M-318", "Иконки: lucide-стиль, stroke 1.5", 0.93, 170, 0, ["ui", "design"], "owner · abyss"),
+    w("M-319", "Галерея: витрина канона", 0.81, 180, 0, ["ui", "design"], "agb · mnemos-01"),
+    // ── кластер gcw ──
+    w("M-320", "Роли: границы и hard denials", 0.94, 55, 1, ["process"], "owner · abyss"),
+    w("M-321", "Гейт ревью: veto-правила", 0.9, 65, 1, ["process", "review"], "owner · abyss"),
+    w("M-322", "Отчёт волны: checkpoint board", 0.87, 75, 1, ["process", "reporting"], "owner · abyss"),
+    w("M-323", "Мнемос-гейты G1–G4", 0.96, 85, 1, ["process", "memory"], "owner · abyss"),
+    w("M-324", "Delegation: параллельные лейны", 0.83, 95, 1, ["process"], "owner · abyss"),
+    w("M-325", "Блок «Ждут владельца»: формат", 0.88, 105, 1, ["process", "reporting"], "owner · abyss"),
+    w("M-326", "Slice report: что/где/как проверено", 0.85, 115, 1, ["process"], "owner · abyss"),
+    w("M-327", "Коммит-стиль: type(scope)", 0.92, 125, 1, ["process"], "owner · abyss"),
+    w("M-328", "A2A: таблица маршрутизации", 0.8, 135, 1, ["process"], "owner · abyss"),
+    w("M-329", "Канонизация: очередь для архитектора", 0.77, 145, 1, ["process"], "owner · abyss"),
+    w("M-330", "Прогресс: living roadmap по волнам", 0.86, 155, 1, ["process"], "owner · abyss"),
+    w("M-331", "Токен-экономика: recall перед чтением", 0.91, 165, 1, ["process", "memory"], "owner · abyss"),
+    w("M-332", "Архком: реальные позиции и споры", 0.84, 175, 1, ["process"], "owner · abyss"),
+    w("M-333", "Финальный отчёт: пять пунктов", 0.79, 185, 1, ["process", "reporting"], "owner · abyss"),
+    w("M-334", "Чекпоинт в мнемос: каждые 5 ходов", 0.9, 195, 1, ["process", "memory"], "owner · abyss"),
+    w("M-335", "Owner-mandate: приоритеты и эскалация", 0.93, 205, 1, ["process"], "owner · abyss"),
+    // ── кластер sealbox ──
+    w("M-340", "QR-пейринг: окно 90 секунд", 0.89, 15, 2, ["security", "pairing"], "owner · seal-vault"),
+    w("M-341", "Одноразовый токен устройства", 0.92, 25, 2, ["security"], "owner · seal-vault"),
+    w("M-342", "Маскирование секретов в логах", 0.95, 35, 2, ["security"], "owner · seal-vault"),
+    w("M-343", "env:/file: ссылки вместо секретов", 0.9, 45, 2, ["security"], "owner · seal-vault"),
+    w("M-344", "Vault: доступ по решению владельца", 0.97, 55, 2, ["security"], "owner · seal-vault"),
+    w("M-345", "Ротация ключей сессии", 0.82, 65, 2, ["security"], "owner · seal-vault"),
+    w("M-346", "Подпись отчёта: seal", 0.76, 75, 2, ["security"], "owner · seal-vault"),
+    w("M-347", "Backup-ключи: оффлайн-хранение", 0.84, 85, 2, ["security"], "owner · seal-vault"),
+    w("M-348", "Аудит доступа: журнал событий", 0.87, 95, 2, ["security"], "owner · seal-vault"),
+    w("M-349", "Пин-пейринг: fallback без камеры", 0.71, 105, 2, ["security", "pairing"], "owner · seal-vault"),
+    // ── кластер core (ядро памяти) ──
+    w("M-350", "Индекс: инкрементальная дозапись", 0.93, 18, 3, ["memory", "sync"], "core · mnemos-02"),
+    w("M-351", "Confidence: пересчёт при правке", 0.88, 28, 3, ["memory"], "core · mnemos-02"),
+    w("M-352", "Сжатие старых сессий", 0.8, 38, 3, ["memory"], "core · mnemos-02"),
+    w("M-353", "Синонимы тегов: алиасы", 0.74, 48, 3, ["memory", "tags"], "core · mnemos-02"),
+    w("M-354", "Дедупликация записей", 0.85, 58, 3, ["memory"], "core · mnemos-02"),
+    w("M-355", "SSE: переподключение 30 секунд", 0.94, 68, 3, ["sync"], "core · mnemos-02"),
+    w("M-356", "Лента: окно дозагрузки пропущенного", 0.89, 78, 3, ["sync"], "core · mnemos-02"),
+    w("M-357", "Снапшот графа: nightly", 0.83, 88, 3, ["memory"], "core · mnemos-02"),
+    w("M-358", "Теги: счётчики использования", 0.78, 98, 3, ["memory", "tags"], "core · mnemos-02"),
+    w("M-359", "Связи записей: синапсы по тегам", 0.86, 108, 3, ["memory"], "core · mnemos-02"),
+  ];
+
   window.STAND = {
     memories,
+    wellNodes,
     servers,
     counters,
     waiting,

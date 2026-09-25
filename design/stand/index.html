@@ -187,9 +187,10 @@
         <div class="bento-block">
           <h2>Счётчики</h2>
           <div class="bento-num">12 483</div>
-          <p class="bento-sub"><a href="memories.html">записи памяти →</a></p>
+          <p class="bento-sub"><a href="memories.html">Записи памяти →</a></p>
           <div class="bento-num" style="margin-top: var(--space-3)">342</div>
-          <p class="bento-sub"><a href="memories.html" data-demo-action="«Теги» — раздел вне стенда; в продукте клик ведёт в «Память / Теги»">тега — вне стенда</a></p>
+          <p class="bento-sub">активных тега</p>
+          <p class="bento-sub" style="margin-top: var(--space-2)"><a href="memories.html" data-demo-action="Раздел «Теги» — вне стенда; ссылка — заглушка">Открыть теги →</a></p>
         </div>
         <div class="bento-block">
           <h2>Ждут владельца</h2>
@@ -282,6 +283,7 @@
       var t = document.createElement("span");
       t.className = "wait-title";
       t.textContent = w.title;
+      t.title = w.title;
       var b = document.createElement("button");
       b.className = "btn ghost sm";
       b.type = "button";

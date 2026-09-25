@@ -216,8 +216,7 @@
         <section class="md-detail" aria-label="Свиток выбранной записи">
           <div class="empty-state" id="detail-empty">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
-            <p class="es-title">Выберите запись слева — покажем её целиком</p>
-            <p>Свиток читается в Lora на «пергаменте»; провенанс и теги идут при записи.</p>
+            <p class="es-title">Выберите запись — свиток откроется здесь: полный текст, теги, confidence и провенанс</p>
           </div>
           <article class="scroll-card" id="detail-card" hidden aria-label="Свиток записи">
             <div class="scroll-head">
@@ -348,35 +347,34 @@
         cb.className = "checkbox";
         cb.setAttribute("aria-label", "Выбрать запись " + m.id);
         var id = document.createElement("span");
-        id.className = "mono";
-        id.style.fontSize = "var(--text-sm)";
+        id.className = "m-id";
         id.textContent = m.id;
         var t = document.createElement("span");
         t.className = "mem-title";
         t.textContent = m.title;
-        var meta = document.createElement("span");
-        meta.className = "mem-meta";
+        t.title = m.id + " · " + m.title;
         var conf = document.createElement("span");
-        conf.className = "conf-point" + (m.conf < 0.7 ? " low" : "");
+        conf.className = "m-conf conf-point" + (m.conf < 0.7 ? " low" : "");
         conf.textContent = m.conf.toFixed(2);
-        meta.appendChild(conf);
         var chips = document.createElement("span");
-        chips.className = "mem-chips";
+        chips.className = "m-tags";
         m.tags.slice(0, 2).forEach(function (tg) {
           var c = document.createElement("span");
           c.className = "chip";
           c.textContent = "#" + tg;
           chips.appendChild(c);
         });
-        meta.appendChild(chips);
         var prov = document.createElement("span");
-        prov.className = "prov";
-        prov.textContent = m.prov;
-        meta.appendChild(prov);
+        prov.className = "m-prov prov";
+        var pp = m.prov.split(" · ");
+        prov.textContent = pp.length >= 3 ? pp[0] + " · " + pp[2] : m.prov; // короткий: кто · когда (сервер — в свитке)
+        prov.title = m.prov;
         row.appendChild(cb);
         row.appendChild(id);
         row.appendChild(t);
-        row.appendChild(meta);
+        row.appendChild(conf);
+        row.appendChild(chips);
+        row.appendChild(prov);
         listEl.appendChild(row);
         cb.addEventListener("change", updateBulk);
         row.addEventListener("click", function (e) {
