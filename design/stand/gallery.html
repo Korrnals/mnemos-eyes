@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Галерея — vesmaro-eyes · стенд «Живая кора»</title>
+  <link rel="stylesheet" href="styles/tokens.css">
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/shell.css">
+  <link rel="stylesheet" href="styles/components.css">
+</head>
+<body>
+<a class="skip-link" href="#main">К содержимому</a>
+<div class="app">
+
+  <header class="topbar">
+    <button class="iconbtn side-toggle" type="button" data-sidebar-toggle aria-expanded="false" aria-label="Открыть разделы">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+    </button>
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>
+      vesmaro-eyes
+    </a>
+    <div class="topsearch">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input type="search" placeholder="Поиск по памяти и задачам…" aria-label="Глобальный поиск по памяти и задачам">
+      <span class="kbd-hint" aria-hidden="true"><kbd class="kbd">/</kbd></span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-status">
+      <button class="iconbtn search-expand" type="button" data-search-expand aria-label="Открыть поиск"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
+      <span class="pill live" title="Живое соединение с демо-лентой стенда"><span class="dot" aria-hidden="true"></span>live</span>
+      <a class="iconbtn" href="agents.html" aria-label="Активные исполнения: 2 — открыть «Исполнение»">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
+        <span class="badge-dot" aria-hidden="true">2</span>
+      </a>
+      <button class="iconbtn" type="button" data-bell aria-label="Уведомления: лента не подключена в стенде">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </button>
+      <div class="langtoggle" role="group" aria-label="Язык интерфейса">
+        <button type="button" aria-pressed="true" data-lang-demo>RU</button>
+        <button type="button" data-lang-demo>EN</button>
+      </div>
+      <button class="iconbtn" type="button" data-theme-toggle aria-pressed="false" aria-label="Сменить тему: сейчас тёмная">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <aside class="sidebar" aria-label="Разделы">
+    <nav class="side-nav" aria-label="Домены">
+      <a class="side-link" href="index.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>
+        <span class="side-label">Обзор</span>
+      </a>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+          <span class="side-label">Память</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <a class="side-section" href="memories.html">Записи</a>
+          <a class="side-section" href="search.html">Поиск</a>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Пульс» — раздел вне стенда">Пульс</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Теги» — раздел вне стенда">Теги</button>
+        </div></div>
+      </div>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
+          <span class="side-label">Задачи</span><span class="side-count">3</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Канбан» — раздел вне стенда">Канбан</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Список» — раздел вне стенда">Список</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Входящие» — раздел вне стенда">Входящие</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Архив» — раздел вне стенда">Архив</button>
+        </div></div>
+      </div>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          <span class="side-label">Агенты</span><span class="side-count">2</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <a class="side-section" href="agents.html">Исполнение</a>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Подключение» — раздел вне стенда">Подключение</button>
+        </div></div>
+      </div>
+      <a class="side-link" href="docs.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+        <span class="side-label">Документы</span>
+      </a>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+          <span class="side-label">Рабочий стол</span><span class="badge-exp">эксп</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <a class="side-section" href="desktop.html">Терминал</a>
+          <a class="side-section" href="explorer.html">Проводник</a>
+        </div></div>
+      </div>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span class="side-label">Настройки</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Статус» — раздел вне стенда">Статус</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Автоматизация» — раздел вне стенда">Автоматизация</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Устройства» — раздел вне стенда">Устройства</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Сессии» — раздел вне стенда">Сессии</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Трассировки» — раздел вне стенда">Трассировки</button>
+        </div></div>
+      </div>
+    </nav>
+    <div class="side-foot">
+      <button class="side-link" type="button" data-palette-open>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>
+        <span class="side-label">Палитра</span>
+        <span class="side-count">Ctrl K</span>
+      </button>
+      <button class="side-link" type="button" data-cheatsheet-open>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/></svg>
+        <span class="side-label">Шпаргалка</span>
+        <span class="side-count">?</span>
+      </button>
+      <a class="side-link" href="gallery.html" aria-current="page">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+        <span class="side-label">Галерея</span>
+        <span class="badge-stand">стенд</span>
+      </a>
+      <button class="side-link" type="button" data-sidebar-toggle aria-expanded="true">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+        <span class="side-label">Свернуть</span>
+        <span class="side-count">[</span>
+      </button>
+      <p class="stand-note">Стенд дизайна · демо-данные</p>
+    </div>
+  </aside>
+
+  <div class="main">
+
+    <nav class="crumbs" aria-label="Хлебные крошки">
+      <span class="gprefix" aria-hidden="true">g→</span>
+      <ol>
+        <li><a href="index.html">Обзор</a></li>
+        <li><span aria-current="page">Галерея</span></li>
+      </ol>
+      <span class="crumbs-spacer"></span>
+      <button class="btn ghost sm" type="button" data-palette-open>
+        <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd> Палитра
+      </button>
+    </nav>
+
+    <main class="content" id="main">
+
+      <div class="page-head">
+        <div>
+          <h1 tabindex="-1">Галерея <span class="badge-stand" style="vertical-align:middle">стенд</span></h1>
+          <p class="page-sub">Живая витрина канона: палитра, слово, плотность, состояния, импульсы</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn secondary sm" type="button" data-theme-toggle aria-pressed="false">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+            Светлая тема (береста)
+          </button>
+        </div>
+      </div>
+
+      <div class="gallery-grid">
+        <nav class="gal-nav" aria-label="Секции галереи">
+          <a href="#kora">Кора</a>
+          <a href="#iris">Ирис</a>
+          <a href="#slovo">Слово</a>
+          <a href="#plotnost">Плотность</a>
+          <a href="#sostoyaniya">Состояния</a>
+          <a href="#ikonki">Иконки</a>
+          <a href="#impulsy">Импульсы</a>
+        </nav>
+
+        <div>
+          <section class="gal-section" id="kora" aria-label="Кора: страты и нейтралы">
+            <h2>Кора</h2>
+            <p class="gal-intro">Лестница глубины: чем глубже поверхность, тем темнее слой. Чистый #000 запрещён; в светлой теме лестница инвертируется по свету.</p>
+            <div class="swatches" id="strata-sw"></div>
+          </section>
+
+          <section class="gal-section" id="iris" aria-label="Ирис: смысловые цвета">
+            <h2>Ирис</h2>
+            <p class="gal-intro">Пять смысловых цветов. Свет = данные: свечение законно только у активного узла, фокуса-зрачка и live-пилюли — не больше двух источников в кадре.</p>
+            <div class="swatches" id="semantic-sw"></div>
+            <div class="state-row" style="margin-top:var(--space-4)">
+              <span class="st-name">свет = данные</span>
+              <span class="pill live"><span class="dot" aria-hidden="true"></span>live</span>
+              <span class="state-cell">
+                <span aria-hidden="true" style="width:16px;height:16px;border-radius:50%;background:var(--color-iris-bright);box-shadow:var(--glow-iris)"></span>
+                <span class="st-label">активный узел</span>
+              </span>
+              <input class="input sim-focus" style="width:200px" placeholder="фокус-зрачок" aria-label="Пример фокуса-зрачка (демо)">
+            </div>
+          </section>
+
+          <section class="gal-section" id="slovo" aria-label="Слово: типографика">
+            <h2>Слово</h2>
+            <p class="gal-intro">Inter — интерфейс, Lora — свиток, JetBrains Mono — числа и id. Имена токенов шкалы заморожены.</p>
+            <div id="type-spec"></div>
+          </section>
+
+          <section class="gal-section" id="plotnost" aria-label="Плотность">
+            <h2>Плотность</h2>
+            <p class="gal-intro">Операционная (32px строка) и созерцательная (56px). Переключатель двигает реальные строки.</p>
+            <div class="density-demo">
+              <div class="segment" role="group" aria-label="Плотность списка">
+                <button type="button" data-density-set="compact">операционная</button>
+                <button type="button" data-density-set="comfortable" aria-pressed="true">созерцательная</button>
+              </div>
+              <div class="density-list">
+                <div class="demo-row"><span class="result-id">M-219</span><span>Словарь импульсов</span><span class="conf-point" style="margin-left:auto">0.94</span></div>
+                <div class="demo-row"><span class="result-id">M-215</span><span>Heartbeat-контракт</span><span class="conf-point" style="margin-left:auto">0.95</span></div>
+                <div class="demo-row"><span class="result-id">M-204</span><span>Решение по пейрингу</span><span class="conf-point" style="margin-left:auto">0.88</span></div>
+                <div class="demo-row" style="border-bottom:none"><span class="result-id">M-177</span><span>Выбор шрифтов</span><span class="conf-point" style="margin-left:auto">0.90</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="gal-section" id="sostoyaniya" aria-label="Состояния">
+            <h2>Состояния</h2>
+            <p class="gal-intro">Матрица спеки 05: каждый интерактив несёт hover / focus / active / disabled / loading / error / empty. Информация никогда не только цветом.</p>
+            <div class="state-matrix" id="matrix"></div>
+          </section>
+
+          <section class="gal-section" id="ikonki" aria-label="Иконки">
+            <h2>Иконки</h2>
+            <p class="gal-intro">Lucide-стиль: stroke 1.5px, размеры 16 / 20 / 24. Запреты — с пояснением.</p>
+            <div class="state-row" id="icons-ok">
+              <span class="st-name">канон</span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span></span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg></span></span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span></span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span></span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg></span></span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span></span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span></span><span class="state-cell"><span style="display:inline-flex;gap:var(--space-1);align-items:center"><svg width="16" height="16" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg><svg width="24" height="24" viewBox="0 0 24 24" style="stroke:currentColor;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;color:var(--color-text-secondary)" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></span></span>
+            </div>
+            <div class="forbidden" style="margin-top:var(--space-4)">
+              <figure><span class="fx" aria-hidden="true">🤖</span><figcaption>emoji вместо иконки — нельзя</figcaption></figure>
+              <figure><span class="fx" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><path d="M12 21s-7-4.6-9.5-9C.7 8.6 2.6 5 6 5c2 0 3.2 1 4 2.2C10.8 6 12 5 14 5c3.4 0 5.3 3.6 3.5 7-2.5 4.4-9.5 9-9.5 9z"/></svg></span><figcaption>заливная иконка — нельзя</figcaption></figure>
+              <figure><span class="fx" aria-hidden="true" style="box-shadow:0 0 18px 6px var(--color-iris-glow)">✦</span><figcaption>glow на всём — нельзя (≤2 источников)</figcaption></figure>
+            </div>
+          </section>
+
+          <section class="gal-section" id="impulsy" aria-label="Импульсы">
+            <h2>Импульсы</h2>
+            <p class="gal-intro">Словарь синапс-импульсов: импульс бежит по ребру только на реальное событие, затухание ≤240 мс. Цвет дублируется текстом в ленте.</p>
+            <div class="motion-stage">
+              <svg viewBox="0 0 480 120" aria-hidden="true">
+                <line class="motion-edge" id="demo-edge" x1="40" y1="60" x2="440" y2="60"/>
+                <circle class="motion-node" cx="40" cy="60" r="4"/>
+                <circle class="motion-node" cx="440" cy="60" r="4"/>
+                <circle class="motion-pulse" id="demo-pulse" r="5" cx="40" cy="60" opacity="0"/>
+              </svg>
+              <div class="page-actions">
+                <button class="btn secondary sm" type="button" data-pulse="recall">Проиграть recall</button>
+                <button class="btn secondary sm" type="button" data-pulse="write">Проиграть запись</button>
+                <button class="btn secondary sm" type="button" data-pulse="error">Проиграть ошибку</button>
+                <button class="btn ghost sm" type="button" data-motion-toggle aria-pressed="false">reduced-motion</button>
+              </div>
+              <p class="bento-sub" style="margin:0">Ниже ленты — строка-дубль события (канон: цвет импульса всегда дублируется текстом).</p>
+              <div class="feed" id="demo-feed" style="width:min(480px,100%)" aria-live="polite"></div>
+            </div>
+          </section>
+
+          <p class="gal-warning">Это витрина стенда. Продуктовые токены — в tokens.css, имена заморожены (ADR 0006).</p>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+
+<div class="overlay" id="palette" hidden role="dialog" aria-modal="true" aria-label="Командная палитра">
+  <div class="palette">
+    <div class="palette-input-wrap">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input class="palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" aria-label="Командная палитра" placeholder="Куда идём? Попробуйте: «задачи», «T-128», «новая задача»">
+    </div>
+    <div class="palette-results" id="palette-results" role="listbox" aria-label="Результаты"></div>
+    <div class="palette-foot">
+      <span><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd> перемещение</span>
+      <span><kbd class="kbd">Enter</kbd> выполнить</span>
+      <span><kbd class="kbd">Esc</kbd> закрыть</span>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="cheatsheet" hidden role="dialog" aria-modal="true" aria-labelledby="cheatsheet-title">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="cheatsheet-title">Хоткеи</h2>
+      <button class="iconbtn" type="button" data-modal-close aria-label="Закрыть шпаргалку">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <table class="hotkeys-table">
+        <thead><tr><th scope="col">Клавиши</th><th scope="col">Действие</th></tr></thead>
+        <tbody>
+          <tr><td><kbd class="kbd">/</kbd></td><td>фокус глобального поиска</td></tr>
+          <tr><td><kbd class="kbd">Ctrl</kbd> <kbd class="kbd">K</kbd></td><td>палитра команд</td></tr>
+          <tr><td><kbd class="kbd">?</kbd></td><td>эта шпаргалка</td></tr>
+          <tr><td><kbd class="kbd">g</kbd> → <kbd class="kbd">o</kbd> / <kbd class="kbd">m</kbd> / <kbd class="kbd">a</kbd> / <kbd class="kbd">d</kbd> / <kbd class="kbd">w</kbd></td><td>Обзор / Память / Агенты / Документы / Рабочий стол</td></tr>
+          <tr><td><kbd class="kbd">g</kbd> → <kbd class="kbd">t</kbd> / <kbd class="kbd">b</kbd> / <kbd class="kbd">p</kbd> / <kbd class="kbd">e</kbd> / <kbd class="kbd">s</kbd></td><td>Задачи / Канбан / Пульс / Исполнение / Проводник — разделы без стенда честно отвечают тостом</td></tr>
+          <tr><td><kbd class="kbd">j</kbd> / <kbd class="kbd">k</kbd></td><td>вниз / вверх по списку (в продуктовой версии)</td></tr>
+          <tr><td><kbd class="kbd">x</kbd></td><td>выделить строку (bulk, в продукте)</td></tr>
+          <tr><td><kbd class="kbd">Esc</kbd></td><td>закрыть верхний оверлей</td></tr>
+          <tr><td><kbd class="kbd">[</kbd></td><td>свернуть / развернуть сайдбар</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/shell.js"></script>
+<script>
+
+  (function () {
+    /* swatches */
+    var strata = [
+      ["--color-well-canvas", "#090B0F", "дно колодца"],
+      ["--color-bg-base", "#0D0F14", "фон страницы"],
+      ["--color-bg-well", "#12161D", "панели"],
+      ["--color-bg-elevated", "#161B23", "инпуты"],
+      ["--color-bg-overlay", "#1C222C", "модалки"],
+      ["--color-scroll-bg", "#151A22", "пергамент"]
+    ];
+    var semantic = [
+      ["--color-iris-bright", "#4FC2CE", "интерактив · 9.1:1 AA+"],
+      ["--color-iris", "#1A8A96", "бренд-графика · текст только на base (4.7:1)"],
+      ["--color-confidence", "#C9933A", "уверенность · запись агента · 7.0:1"],
+      ["--color-success", "#3FBF7F", "live · 8.2:1"],
+      ["--color-warning", "#D9A03F", "деградация · 8.3:1"],
+      ["--color-error", "#E0655C", "ошибка · 5.6:1"],
+      ["--color-text-primary", "#E6EDF3", "чтение · 16.2:1"],
+      ["--color-text-secondary", "#9AA7B4", "лейблы · 7.8:1"],
+      ["--color-text-muted", "#7C8894", "капс/метаданные · 5.3:1 (4.8 worst)"],
+      ["--color-border", "#5E687E", "функциональный край ≥3:1"]
+    ];
+    function sw(host, data) {
+      data.forEach(function (s) {
+        var el = document.createElement("div");
+        el.className = "swatch";
+        var c = document.createElement("div");
+        c.className = "swatch-color";
+        c.style.background = "var(" + s[0] + ")";
+        c.setAttribute("role", "img");
+        c.setAttribute("aria-label", "Свотч " + s[0] + " " + s[1]);
+        var m = document.createElement("div");
+        m.className = "swatch-meta";
+        m.innerHTML = '<span class="sw-name">' + s[0] + " · " + s[1] + "</span>" + s[2];
+        el.appendChild(c);
+        el.appendChild(m);
+        host.appendChild(el);
+      });
+    }
+    sw(document.getElementById("strata-sw"), strata);
+    sw(document.getElementById("semantic-sw"), semantic);
+
+    /* type specimens */
+    var rows = [
+      ["--text-2xl", "2rem", "Заголовок свитка — Lora", 'font-family:var(--font-scroll)'],
+      ["--text-xl", "1.5rem", "Заголовок страницы"],
+      ["--text-body", "1.0625rem", "Комфортный текст списков"],
+      ["--text-ui", "0.9375rem", "Базовый UI-текст"],
+      ["--text-data", "0.8125rem", "Плотные операционные данные"],
+      ["--text-caps", "0.6875rem", "КАПС-ЛЕЙБЛ + ТРЕКИНГ", 'letter-spacing:var(--tracking-caps);text-transform:uppercase;color:var(--color-text-muted)'],
+      ["mono/tnum", "", "счётчик 12 483 · 0123456789", 'font-family:var(--font-mono);font-variant-numeric:var(--numeric-tnum)']
+    ];
+    var host = document.getElementById("type-spec");
+    rows.forEach(function (r) {
+      var div = document.createElement("div");
+      div.className = "spec-row";
+      var t = document.createElement("span");
+      t.className = "sp-token";
+      t.textContent = r[0] + (r[1] ? " · " + r[1] : "");
+      var s = document.createElement("span");
+      s.style.cssText = r[3] || "";
+      s.style.fontSize = r[0] === "mono/tnum" ? "var(--text-ui)" : "var(" + r[0] + ")";
+      s.textContent = r[2];
+      div.appendChild(t);
+      div.appendChild(s);
+      host.appendChild(div);
+    });
+
+    /* density buttons */
+    document.querySelectorAll("[data-density-set]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        document.documentElement.setAttribute("data-density", b.dataset.densitySet);
+        document.querySelectorAll("[data-density-set]").forEach(function (o) {
+          o.setAttribute("aria-pressed", o === b ? "true" : "false");
+        });
+        window.standToast(b.dataset.densitySet === "compact" ? "Плотность: операционная (32px строки)" : "Плотность: созерцательная (56px строки)", "info");
+      });
+    });
+
+    /* state matrix */
+    var M = document.getElementById("matrix");
+    function row(name, cells) {
+      var r = document.createElement("div");
+      r.className = "state-row";
+      var n = document.createElement("span");
+      n.className = "st-name";
+      n.textContent = name;
+      r.appendChild(n);
+      cells.forEach(function (c) {
+        var wrap = document.createElement("span");
+        wrap.className = "state-cell";
+        wrap.appendChild(c[0]);
+        var l = document.createElement("span");
+        l.className = "st-label";
+        l.textContent = c[1];
+        wrap.appendChild(l);
+        r.appendChild(wrap);
+      });
+      M.appendChild(r);
+    }
+    function btn(cls, label, extra) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn sm " + cls + (extra ? " " + extra : "");
+      b.textContent = label;
+      return b;
+    }
+    row("Кнопка", [
+      [btn("primary", "Назначить"), "default"],
+      [btn("primary", "Назначить", "sim-hover"), "hover"],
+      [btn("secondary", "Назначить"), "secondary"],
+      [btn("danger", "Удалить"), "danger"],
+      [(function () { var b = btn("primary", "Назначить"); b.setAttribute("disabled", ""); b.title = "Нет активного агента — назначение недоступно"; return b; })(), "disabled + пояснение"],
+      [(function () { var b = btn("primary", "Назначаем…"); b.classList.add("loading"); var s = document.createElement("span"); s.className = "spinner"; b.prepend(s); return b; })(), "loading"]
+    ]);
+    function chipEl(label, extra, press) {
+      var c = document.createElement("button");
+      c.type = "button";
+      c.className = "chip" + (extra ? " " + extra : "");
+      if (press !== undefined) c.setAttribute("aria-pressed", press);
+      c.textContent = label;
+      return c;
+    }
+    row("Чип", [
+      [chipEl("#ui"), "default"],
+      [chipEl("#ui", "sim-hover"), "hover"],
+      [chipEl("#ui", "", "true"), "выбран ✓"],
+      [chipEl("#ui"), "removable ×"],
+      [chipEl("#pairing", "confidence"), "0.74"],
+      [(function () { var c = chipEl("#архив"); c.setAttribute("aria-disabled", "true"); c.title = "Фильтр недоступен здесь"; return c; })(), "disabled + пояснение"]
+    ]);
+    function pillEl(kind, label, title) {
+      var p = document.createElement("span");
+      p.className = "pill " + kind;
+      p.innerHTML = '<span class="dot" aria-hidden="true"></span>' + label;
+      if (title) p.title = title;
+      return p;
+    }
+    row("Пилюля", [
+      [pillEl("live", "live"), "SSE"],
+      [pillEl("reconnecting", "подключаемся…"), "reconnect"],
+      [pillEl("broken", "нет связи"), "SSE-разрыв"],
+      [pillEl("busy", "▸2 running"), "heartbeat свежий"],
+      [pillEl("queued", "в очереди 4 мин"), "честно"],
+      [pillEl("stagnant", "12 мин"), "поллер молчит"],
+      [pillEl("terminal", "failed", "Причина: конфликт записи"), "терминальная"]
+    ]);
+    function inputEl(extra, ph) {
+      var i = document.createElement("input");
+      i.className = "input" + (extra ? " " + extra : "");
+      i.style.width = "170px";
+      i.placeholder = ph || "";
+      i.setAttribute("aria-label", "Демо-поле: " + (ph || "ввод"));
+      return i;
+    }
+    row("Поле", [
+      [inputEl("", "введите…"), "default"],
+      [inputEl("sim-focus", "введите…"), "фокус-зрачок"],
+      [(function () {
+        var w = document.createElement("span");
+        w.className = "state-cell";
+        var i = inputEl("", "env:TOKEN");
+        i.setAttribute("aria-invalid", "true");
+        var e = document.createElement("span");
+        e.className = "field-error";
+        e.style.fontSize = "var(--text-caps)";
+        e.textContent = "Ошибка: нужен префикс env:|file:";
+        w.appendChild(i);
+        w.appendChild(e);
+        return w;
+      })(), "error + текст"],
+      [(function () { var i = inputEl("", "недоступно"); i.setAttribute("disabled", ""); i.title = "Поле отключено: нет прав на запись"; return i; })(), "disabled + пояснение"],
+      [(function () { var i = inputEl("", "только чтение"); i.setAttribute("readonly", ""); i.title = "Только чтение"; return i; })(), "readonly"]
+    ]);
+    row("Карточка", [
+      [(function () { var d = document.createElement("span"); d.className = "mem-row"; d.style.minHeight = "40px"; d.innerHTML = '<span class="mem-title">T-128 UI-10</span><span class="conf-point">0.92</span>'; return d; })(), "default"],
+      [(function () { var d = document.createElement("span"); d.className = "mem-row sim-hover"; d.style.minHeight = "40px"; d.innerHTML = '<span class="mem-title">T-128 UI-10</span><span class="conf-point">0.92</span>'; return d; })(), "hover"],
+      [(function () { var d = document.createElement("span"); d.className = "mem-row selected"; d.style.minHeight = "40px"; d.innerHTML = '<span class="mem-title">T-128 UI-10</span><span class="conf-point">0.92</span>'; return d; })(), "selected"],
+      [(function () { var d = document.createElement("span"); d.className = "mem-row stale"; d.style.minHeight = "40px"; d.innerHTML = '<span class="mem-title">T-99 источник исчез</span><span class="stale-note">stale</span>'; return d; })(), "stale"]
+    ]);
+    row("Терминал", [
+      [(function () { var s = document.createElement("span"); s.className = "mono"; s.style.fontSize = "var(--text-sm)"; s.innerHTML = '<span style="color:var(--color-iris-bright)">mnemos@well:~$</span> <span style="color:var(--color-text-primary)">status</span>'; return s; })(), "команда"],
+      [(function () { var s = document.createElement("span"); s.className = "term-err mono"; s.style.fontSize = "var(--text-sm)"; s.textContent = "bash: xyz: команда не найдена; введите help"; return s; })(), "ошибка строкой"]
+    ]);
+
+    /* motion demo */
+    var pulse = document.getElementById("demo-pulse");
+    var edge = document.getElementById("demo-edge");
+    var feed = document.getElementById("demo-feed");
+    var anim = null;
+    var reduced = function () {
+      return window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+        document.documentElement.getAttribute("data-motion") === "reduced";
+    };
+    var COLS = {
+      recall: getComputedStyle(document.documentElement).getPropertyValue("--synapse-recall").trim(),
+      write: getComputedStyle(document.documentElement).getPropertyValue("--synapse-write").trim(),
+      error: getComputedStyle(document.documentElement).getPropertyValue("--synapse-error").trim()
+    };
+    var TEXTS = {
+      recall: "recall: M-219 «Словарь импульсов» — попадание",
+      write: "запись агента agb: правка M-233 «Схема провенанса»",
+      error: "ошибка: mnemos-02 не ответил на дозапрос ленты"
+    };
+    function feedRow(kind) {
+      var r = document.createElement("div");
+      r.className = "feed-row fresh";
+      r.dataset.ev = kind;
+      var dot = document.createElement("span");
+      dot.className = "ev-dot";
+      dot.setAttribute("aria-hidden", "true");
+      var t = document.createElement("span");
+      t.textContent = TEXTS[kind];
+      r.appendChild(dot);
+      r.appendChild(t);
+      feed.prepend(r);
+      while (feed.children.length > 3) feed.lastElementChild.remove();
+    }
+    function play(kind) {
+      var color = COLS[kind];
+      pulse.style.setProperty("--pulse-color", color);
+      feedRow(kind);
+      if (reduced()) {
+        /* статический тинт ребра на 1.5s — не движение */
+        edge.style.stroke = color;
+        edge.style.strokeWidth = "1.5";
+        setTimeout(function () {
+          edge.style.stroke = "";
+          edge.style.strokeWidth = "";
+        }, 1500);
+        return;
+      }
+      if (anim) cancelAnimationFrame(anim);
+      var t0 = performance.now();
+      (function step(now) {
+        var k = Math.min(1, (now - t0) / 240);
+        pulse.setAttribute("cx", String(40 + 400 * k));
+        pulse.setAttribute("opacity", String(0.9 * (1 - k)));
+        if (k < 1) anim = requestAnimationFrame(step);
+        else pulse.setAttribute("opacity", "0");
+      })(t0);
+    }
+    document.querySelectorAll("[data-pulse]").forEach(function (b) {
+      b.addEventListener("click", function () { play(b.dataset.pulse); });
+    });
+  })();
+
+</script>
+</body>
+</html>

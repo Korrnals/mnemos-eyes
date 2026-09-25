@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Поиск — vesmaro-eyes · стенд «Живая кора»</title>
+  <link rel="stylesheet" href="styles/tokens.css">
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/shell.css">
+  <link rel="stylesheet" href="styles/components.css">
+</head>
+<body>
+<a class="skip-link" href="#main">К содержимому</a>
+<div class="app">
+
+  <header class="topbar">
+    <button class="iconbtn side-toggle" type="button" data-sidebar-toggle aria-expanded="false" aria-label="Открыть разделы">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+    </button>
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>
+      vesmaro-eyes
+    </a>
+    <div class="topsearch">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input type="search" placeholder="Поиск по памяти и задачам…" aria-label="Глобальный поиск по памяти и задачам">
+      <span class="kbd-hint" aria-hidden="true"><kbd class="kbd">/</kbd></span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-status">
+      <button class="iconbtn search-expand" type="button" data-search-expand aria-label="Открыть поиск"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
+      <span class="pill live" title="Живое соединение с демо-лентой стенда"><span class="dot" aria-hidden="true"></span>live</span>
+      <a class="iconbtn" href="agents.html" aria-label="Активные исполнения: 2 — открыть «Исполнение»">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
+        <span class="badge-dot" aria-hidden="true">2</span>
+      </a>
+      <button class="iconbtn" type="button" data-bell aria-label="Уведомления: лента не подключена в стенде">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </button>
+      <div class="langtoggle" role="group" aria-label="Язык интерфейса">
+        <button type="button" aria-pressed="true" data-lang-demo>RU</button>
+        <button type="button" data-lang-demo>EN</button>
+      </div>
+      <button class="iconbtn" type="button" data-theme-toggle aria-pressed="false" aria-label="Сменить тему: сейчас тёмная">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <aside class="sidebar" aria-label="Разделы">
+    <nav class="side-nav" aria-label="Домены">
+      <a class="side-link" href="index.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>
+        <span class="side-label">Обзор</span>
+      </a>
+      <div class="side-group" data-open>
+        <button type="button" aria-current="true" class="side-link side-domain domain-current" aria-expanded="true">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>
+          <span class="side-label">Память</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <a class="side-section" href="memories.html">Записи</a>
+          <a class="side-section" href="search.html" aria-current="page">Поиск</a>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Пульс» — раздел вне стенда">Пульс</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Теги» — раздел вне стенда">Теги</button>
+        </div></div>
+      </div>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
+          <span class="side-label">Задачи</span><span class="side-count">3</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Канбан» — раздел вне стенда">Канбан</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Список» — раздел вне стенда">Список</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Входящие» — раздел вне стенда">Входящие</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Архив» — раздел вне стенда">Архив</button>
+        </div></div>
+      </div>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          <span class="side-label">Агенты</span><span class="side-count">2</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <a class="side-section" href="agents.html">Исполнение</a>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Подключение» — раздел вне стенда">Подключение</button>
+        </div></div>
+      </div>
+      <a class="side-link" href="docs.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+        <span class="side-label">Документы</span>
+      </a>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+          <span class="side-label">Рабочий стол</span><span class="badge-exp">эксп</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <a class="side-section" href="desktop.html">Терминал</a>
+          <a class="side-section" href="explorer.html">Проводник</a>
+        </div></div>
+      </div>
+      <div class="side-group">
+        <button type="button" class="side-link side-domain" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span class="side-label">Настройки</span>
+          <svg class="side-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <div class="side-sections"><div>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Статус» — раздел вне стенда">Статус</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Автоматизация» — раздел вне стенда">Автоматизация</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Устройства» — раздел вне стенда">Устройства</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Сессии» — раздел вне стенда">Сессии</button>
+          <button class="side-section disabled" type="button" aria-disabled="true" data-demo-action="«Трассировки» — раздел вне стенда">Трассировки</button>
+        </div></div>
+      </div>
+    </nav>
+    <div class="side-foot">
+      <button class="side-link" type="button" data-palette-open>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>
+        <span class="side-label">Палитра</span>
+        <span class="side-count">Ctrl K</span>
+      </button>
+      <button class="side-link" type="button" data-cheatsheet-open>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/></svg>
+        <span class="side-label">Шпаргалка</span>
+        <span class="side-count">?</span>
+      </button>
+      <a class="side-link" href="gallery.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+        <span class="side-label">Галерея</span>
+        <span class="badge-stand">стенд</span>
+      </a>
+      <button class="side-link" type="button" data-sidebar-toggle aria-expanded="true">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+        <span class="side-label">Свернуть</span>
+        <span class="side-count">[</span>
+      </button>
+      <p class="stand-note">Стенд дизайна · демо-данные</p>
+    </div>
+  </aside>
+
+  <div class="main">
+
+    <nav class="crumbs" aria-label="Хлебные крошки">
+      <span class="gprefix" aria-hidden="true">g→</span>
+      <ol>
+        <li><a href="index.html">Обзор</a></li>
+        <li><a href="memories.html">Память</a></li>
+        <li><span aria-current="page">Поиск</span></li>
+      </ol>
+      <span class="crumbs-spacer"></span>
+      <button class="btn ghost sm" type="button" data-palette-open>
+        <kbd class="kbd">Ctrl</kbd><kbd class="kbd">K</kbd> Палитра
+      </button>
+    </nav>
+
+    <main class="content" id="main">
+
+      <h1 class="sr-only" tabindex="-1">Поиск по памяти</h1>
+      <div class="search-stage">
+        <div class="pupil">
+          <div class="input-wrap">
+            <input id="q" class="input" style="height:56px;border-radius:var(--radius-xl);font-size:var(--text-lg);padding:0 var(--space-5)" type="search" placeholder="Спросите память…" aria-label="Поисковый запрос к памяти">
+          </div>
+          <div class="pupil-mode">
+            <div class="segment" role="group" aria-label="Режим поиска">
+              <button type="button" aria-pressed="true" data-mode="fts">полный текст</button>
+              <button type="button" aria-pressed="false" data-mode="semantic">смысл</button>
+              <button type="button" aria-pressed="false" data-mode="hybrid">гибрид</button>
+            </div>
+          </div>
+        </div>
+        <div class="search-examples" role="group" aria-label="Примеры запросов — нажмите, чтобы выполнить">
+          <button class="chip" type="button" data-ex="решение по пейрингу">решение по пейрингу</button>
+          <button class="chip" type="button" data-ex="почему борд заморожен">почему борд заморожен</button>
+          <button class="chip" type="button" data-ex="теги про агентов">теги про агентов</button>
+        </div>
+        <div class="results spotlight" id="results" aria-live="polite" aria-label="Результаты поиска"></div>
+        <p class="search-note" id="note"></p>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+
+<div class="overlay" id="palette" hidden role="dialog" aria-modal="true" aria-label="Командная палитра">
+  <div class="palette">
+    <div class="palette-input-wrap">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input class="palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" aria-label="Командная палитра" placeholder="Куда идём? Попробуйте: «задачи», «T-128», «новая задача»">
+    </div>
+    <div class="palette-results" id="palette-results" role="listbox" aria-label="Результаты"></div>
+    <div class="palette-foot">
+      <span><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd> перемещение</span>
+      <span><kbd class="kbd">Enter</kbd> выполнить</span>
+      <span><kbd class="kbd">Esc</kbd> закрыть</span>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="cheatsheet" hidden role="dialog" aria-modal="true" aria-labelledby="cheatsheet-title">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="cheatsheet-title">Хоткеи</h2>
+      <button class="iconbtn" type="button" data-modal-close aria-label="Закрыть шпаргалку">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <table class="hotkeys-table">
+        <thead><tr><th scope="col">Клавиши</th><th scope="col">Действие</th></tr></thead>
+        <tbody>
+          <tr><td><kbd class="kbd">/</kbd></td><td>фокус глобального поиска</td></tr>
+          <tr><td><kbd class="kbd">Ctrl</kbd> <kbd class="kbd">K</kbd></td><td>палитра команд</td></tr>
+          <tr><td><kbd class="kbd">?</kbd></td><td>эта шпаргалка</td></tr>
+          <tr><td><kbd class="kbd">g</kbd> → <kbd class="kbd">o</kbd> / <kbd class="kbd">m</kbd> / <kbd class="kbd">a</kbd> / <kbd class="kbd">d</kbd> / <kbd class="kbd">w</kbd></td><td>Обзор / Память / Агенты / Документы / Рабочий стол</td></tr>
+          <tr><td><kbd class="kbd">g</kbd> → <kbd class="kbd">t</kbd> / <kbd class="kbd">b</kbd> / <kbd class="kbd">p</kbd> / <kbd class="kbd">e</kbd> / <kbd class="kbd">s</kbd></td><td>Задачи / Канбан / Пульс / Исполнение / Проводник — разделы без стенда честно отвечают тостом</td></tr>
+          <tr><td><kbd class="kbd">j</kbd> / <kbd class="kbd">k</kbd></td><td>вниз / вверх по списку (в продуктовой версии)</td></tr>
+          <tr><td><kbd class="kbd">x</kbd></td><td>выделить строку (bulk, в продукте)</td></tr>
+          <tr><td><kbd class="kbd">Esc</kbd></td><td>закрыть верхний оверлей</td></tr>
+          <tr><td><kbd class="kbd">[</kbd></td><td>свернуть / развернуть сайдбар</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/shell.js"></script>
+<script>
+
+  (function () {
+    var D = window.STAND;
+    var q = document.getElementById("q");
+    var res = document.getElementById("results");
+    var note = document.getElementById("note");
+    var mode = "fts";
+    var timer = null;
+
+    function esc(s) {
+      return s.replace(/[&<>"]/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+      });
+    }
+    function hl(text, words) {
+      var out = esc(text);
+      words.forEach(function (w) {
+        if (w.length < 3) return;
+        var re = new RegExp("(" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
+        out = out.replace(re, "<mark>$1</mark>");
+      });
+      return out;
+    }
+    function tokens(str) {
+      return str.toLowerCase().split(/[^a-zа-яё0-9]+/i).filter(function (w) { return w.length >= 3; });
+    }
+    function search(query, m) {
+      var ql = query.toLowerCase();
+      var words = tokens(query);
+      return D.memories.filter(function (mem) {
+        var hay = (mem.title + " " + mem.content.join(" ") + " " + mem.tags.map(function (t) { return "#" + t; }).join(" ")).toLowerCase();
+        if (m === "fts") return ql && hay.indexOf(ql) >= 0;
+        if (m === "semantic") {
+          if (!words.length) return false;
+          return words.some(function (w) { return hay.indexOf(w) >= 0; }) ||
+            mem.tags.some(function (t) { return words.some(function (w) { return t.indexOf(w.slice(0, Math.max(4, w.length - 2))) >= 0; }); });
+        }
+        return (ql && hay.indexOf(ql) >= 0) || (words.length && words.some(function (w) { return hay.indexOf(w) >= 0; }));
+      });
+    }
+    var MODE_LABEL = { fts: "полный текст", semantic: "смысл", hybrid: "гибрид" };
+
+    function skeleton() {
+      res.textContent = "";
+      for (var i = 0; i < 3; i++) {
+        var c = document.createElement("div");
+        c.className = "result-card";
+        c.style.animationDelay = (i * 40) + "ms";
+        var s1 = document.createElement("div");
+        s1.className = "skel";
+        s1.style.height = "18px";
+        s1.style.width = "40%";
+        var s2 = document.createElement("div");
+        s2.className = "skel";
+        s2.style.height = "14px";
+        s2.style.marginTop = "10px";
+        c.appendChild(s1);
+        c.appendChild(s2);
+        res.appendChild(c);
+      }
+      note.textContent = "";
+    }
+
+    function run(query) {
+      res.textContent = "";
+      if (!query.trim()) {
+        note.textContent = "Спросите память — она отвечает сниппетами и провенансом. Примеры — чипы выше.";
+        return;
+      }
+      var found = search(query.trim(), mode);
+      var words = tokens(query);
+      if (!found.length) {
+        res.innerHTML =
+          '<div class="empty-state"><p class="es-title">Ничего. Смягчите запрос</p>' +
+          (mode !== "semantic"
+            ? '<p>или смените режим на «смысл» — память ищет и по значению.</p><button class="btn secondary sm" type="button" data-to-semantic>Сменить на «смысл»</button>'
+            : "<p>Попробуйте режим «полный текст» — ищет по точной подстроке.</p>") +
+          "</div>";
+        var sw = res.querySelector("[data-to-semantic]");
+        if (sw) sw.addEventListener("click", function () { setMode("semantic"); q.value = query; run(query); });
+        note.textContent = "";
+        return;
+      }
+      note.textContent = mode === "hybrid"
+        ? "Смысловой индекс неполон — часть памяти ищется только по словам."
+        : "Найдено: " + found.length + " · режим: " + MODE_LABEL[mode];
+      found.slice(0, 8).forEach(function (mem, i) {
+        var card = document.createElement("a");
+        card.className = "result-card";
+        card.href = "memories.html?id=" + mem.id;
+        card.style.setProperty("--i", i);
+        var head = document.createElement("div");
+        head.className = "result-head";
+        var id = document.createElement("span");
+        id.className = "result-id";
+        id.textContent = mem.id;
+        var ttl = document.createElement("span");
+        ttl.className = "result-title";
+        ttl.innerHTML = hl(mem.title, words);
+        var pill = document.createElement("span");
+        pill.className = "pill queued";
+        pill.textContent = MODE_LABEL[mode];
+        head.appendChild(id);
+        head.appendChild(ttl);
+        head.appendChild(pill);
+        var snip = document.createElement("p");
+        snip.className = "result-snippet";
+        var frag = mem.content.join(" ");
+        var pos = frag.toLowerCase().indexOf(query.trim().toLowerCase());
+        if (pos > 60) frag = "…" + frag.slice(Math.max(0, pos - 60));
+        snip.innerHTML = hl(frag.slice(0, 220), words);
+        var prov = document.createElement("p");
+        prov.className = "result-prov";
+        prov.textContent = mem.prov + " · " + mem.kind;
+        card.appendChild(head);
+        card.appendChild(snip);
+        card.appendChild(prov);
+        res.appendChild(card);
+      });
+      if (found.length > 8) {
+        var more = document.createElement("p");
+        more.className = "search-note";
+        more.textContent = "и ещё " + (found.length - 8) + " — в продуктовой версии с пагинацией";
+        res.appendChild(more);
+      }
+    }
+
+    function setMode(m) {
+      mode = m;
+      document.querySelectorAll("[data-mode]").forEach(function (b) {
+        b.setAttribute("aria-pressed", b.dataset.mode === m ? "true" : "false");
+      });
+    }
+    document.querySelectorAll("[data-mode]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        setMode(b.dataset.mode);
+        run(q.value);
+      });
+    });
+    q.addEventListener("input", function () {
+      clearTimeout(timer);
+      if (!q.value.trim()) {
+        res.textContent = "";
+        note.textContent = "Спросите память — она отвечает сниппетами и провенансом. Примеры — чипы выше.";
+        return;
+      }
+      skeleton(); // typing: debounce 300ms — не мигаем спиннером на каждый символ
+      timer = setTimeout(function () { run(q.value); }, 300);
+    });
+    document.querySelectorAll("[data-ex]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        q.value = b.dataset.ex;
+        run(q.value);
+        q.focus();
+      });
+    });
+    var initial = new URLSearchParams(location.search).get("q");
+    if (initial) {
+      q.value = initial;
+      run(initial);
+    } else {
+      note.textContent = "Спросите память — она отвечает сниппетами и провенансом. Примеры — чипы выше.";
+    }
+    q.focus();
+  })();
+
+</script>
+</body>
+</html>
