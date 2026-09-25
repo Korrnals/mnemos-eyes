@@ -47,7 +47,7 @@ describe("Kora slice-1 list screen snapshots", () => {
   it("pins the Russian screen (coverage + onboarding + rows)", () => {
     const html = renderKoraPage("ru");
     // The honest week-0 plate is part of the contract.
-    expect(html).toContain("Неделя 0 · контракт-моки");
+    expect(html).toContain("Кора · срез 1");
     expect(html).toContain("Что вижу / чего нет");
     expect(html).toContain("Зачем Кора");
     expect(html).toMatchSnapshot();
@@ -55,7 +55,7 @@ describe("Kora slice-1 list screen snapshots", () => {
 
   it("pins the English screen", () => {
     const html = renderKoraPage("en");
-    expect(html).toContain("Week 0 · contract mocks");
+    expect(html).toContain("Kora · slice 1");
     expect(html).toMatchSnapshot();
   });
 

@@ -1504,9 +1504,9 @@ export const en: Record<TranslationKey, string> = {
 
   // --- Kora (ADR 0019 rev.2 — week-0 contract mocks) -----------------------------
   "kora.title": "Kora — sessions across all hosts",
-  "kora.week0Badge": "Week 0 · contract mocks",
+  "kora.week0Badge": "Kora · slice 1",
   "kora.week0Note":
-    "This screen runs on mock data: no Kora server endpoints exist yet — the slice 1–3 contract is frozen in docs/kora/openapi.yaml, implementation arrives with the slices.",
+    "Live zcode session list from the laptop store (read-only scanner, registry on the board). Transcripts and steering arrive with slices 2–3; the contract stays frozen in docs/kora/openapi.yaml.",
   "kora.coverage.title": "What I see / what I don't",
   "kora.coverage.support.full": "full",
   "kora.coverage.support.lists-only": "lists only",

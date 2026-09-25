@@ -1530,9 +1530,9 @@ export const ru = {
 
   // --- Кора (ADR 0019 rev.2 — week-0 contract mocks) -----------------------------
   "kora.title": "Кора — сессии всех хостов",
-  "kora.week0Badge": "Неделя 0 · контракт-моки",
+  "kora.week0Badge": "Кора · срез 1",
   "kora.week0Note":
-    "Экран работает на мок-данных: серверных эндпоинтов Коры ещё нет — контракт срезов 1–3 заморожен в docs/kora/openapi.yaml, реализация придёт со срезами.",
+    "Живой список zcode-сессий с ноут-стора (read-only сканер, реестр на борде). Транскрипты и руление — срезы 2–3; контракт заморожен в docs/kora/openapi.yaml.",
   "kora.coverage.title": "Что вижу / чего нет",
   "kora.coverage.support.full": "полностью",
   "kora.coverage.support.lists-only": "только списки",
