@@ -26,3 +26,4 @@ one decision. The authoritative summary lives in [`../CHARTER.md`](../CHARTER.md
 | [0018](0018-connectivity-installation-release-discipline.md) | External-agent connectivity, installation trust anchor and release discipline | Accepted |
 | [0019](0019-kora-workspace-phase1.md) | Kora (Кора) Workspace — фаза 1: read-only агрегация сессий + relay-продолжение | **Accepted — owner ratification 2026-09-24** |
 | [0020](0020-unified-text-engine.md) | Единый текстовый движок — слои приёма/рендера, профили доверия, конвергенция Ф0–Ф3 | Accepted by committee — pending owner ratification |
+| [0021](0021-agent-intake-contract.md) | Native intake contract for agent v2 — dual-mode loopback, Canon reports, attribution and backpressure | Accepted |
